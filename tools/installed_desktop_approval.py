@@ -5,9 +5,11 @@ its approval capability. This module never reads that capability or grants OS
 permissions, and refuses all capture requests.
 """
 
+from __future__ import annotations
+
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Literal
 import math
 import hashlib
 import json
@@ -242,6 +244,7 @@ class InstalledDesktop:
             raise ValueError("GUI timeout must be finite and positive")
         self.timeout: float = timeout
         self.process: subprocess.Popen[bytes] | None = None
+        self._launcher_origin: tuple[Path, bytes] | None = None
         self.log: BinaryIO | None = None
         self.accessibility: LinuxAccessibilitySession | None = None
         self._closed = False
@@ -314,44 +317,90 @@ class InstalledDesktop:
 
         return self.process
 
-    def _owned_launcher(self):
+    def _launcher_state(self) -> Literal["owned", "incomplete", "unrelated"]:
         # The product wrapper execs the native GUI in the same owned PID. A
         # pending wrapper may only be observed/cleaned up, never approve a call.
         if sys.platform != "linux" or self.process is None:
-            return False
+            return "unrelated"
         interpreters = {Path("/usr/bin/env").resolve(), Path("/usr/bin/bash").resolve()}
         try:
             for _ in range(3):
                 image = process_path(self.process.pid)
-                if image not in interpreters:
-                    return False
-                arguments = (
-                    Path(f"/proc/{self.process.pid}/cmdline").read_bytes().split(b"\0")
-                )
+                origin = self._launcher_origin
+                if image not in interpreters and (origin is None or image != origin[0]):
+                    return "unrelated"
+                command_line = Path(f"/proc/{self.process.pid}/cmdline").read_bytes()
+                if len(command_line) > 8192:
+                    return "unrelated"
+                arguments = command_line.split(b"\0")
                 uid = Path(f"/proc/{self.process.pid}").stat().st_uid
                 current_image = process_path(self.process.pid)
                 self.evidence["launcher_observation"] = {
                     "image": str(image),
                     "current_image": str(current_image),
                     "uid": uid,
-                    "argv": [os.fsdecode(arg) for arg in arguments[:4]],
+                    # A transient pre-exec image can expose the parent's argv.
+                    # Compare the private snapshot without persisting its values.
+                    **(
+                        {"origin_argv_matches": command_line == origin[1]}
+                        if origin is not None and image == origin[0]
+                        else {"argv": [os.fsdecode(arg) for arg in arguments[:4]]}
+                    ),
                 }
                 # /proc image and argv are separate reads. Retry a real exec
                 # transition instead of combining observations from two images.
                 if current_image != image:
                     continue
                 if uid != os.geteuid() or arguments[-1] != b"":
-                    return False
+                    return "unrelated"
+                if origin is not None and image == origin[0]:
+                    return "incomplete" if command_line == origin[1] else "unrelated"
+                # Linux can expose an empty cmdline even when both executable
+                # observations already name the new interpreter. This permits
+                # only another bounded startup observation, never cleanup or UI.
+                if arguments == [b""]:
+                    return "incomplete"
                 arguments.pop()
                 if image == Path("/usr/bin/env").resolve():
                     if len(arguments) != 3 or arguments[1] != b"bash":
-                        return False
+                        return "unrelated"
                 elif len(arguments) != 2:
-                    return False
-                return Path(os.fsdecode(arguments[-1])).resolve() == self.launcher
-            return False
+                    return "unrelated"
+                return (
+                    "owned"
+                    if Path(os.fsdecode(arguments[-1])).resolve() == self.launcher
+                    else "unrelated"
+                )
+            return "unrelated"
         except OSError:
-            return False
+            return "unrelated"
+
+    def _owned_launcher(self) -> bool:
+        return self._launcher_state() == "owned"
+
+    def _capture_launcher_origin(self) -> tuple[Path, bytes] | None:
+        try:
+            with Path("/proc/self/cmdline").open("rb") as stream:
+                arguments = stream.read(8193)
+            if not arguments or len(arguments) > 8192 or not arguments.endswith(b"\0"):
+                return None
+            return Path(sys.executable).resolve(strict=True), arguments
+        except OSError:
+            return None
+
+    def _wait_for_native_exec(self, deadline: float) -> None:
+        process = self.process
+        if process is None:
+            raise RuntimeError("Installed desktop has not started")
+        while process_path(process.pid) != self.executable:
+            if process.poll() is not None or self._launcher_state() not in (
+                "owned",
+                "incomplete",
+            ):
+                self._identity()
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Installed launcher did not exec its native GUI")
+            time.sleep(0.01)
 
     def _ui(self, button="", *, reveal=False, expected_snapshot=None):
         process = self._identity()
@@ -438,6 +487,7 @@ class InstalledDesktop:
                 )
                 self.evidence["accessibility"] = self.accessibility.evidence
                 self.environment = self.accessibility.start()
+                self._launcher_origin = self._capture_launcher_origin()
             self.process = subprocess.Popen(
                 [str(self.launcher)],
                 cwd="/",
@@ -448,14 +498,7 @@ class InstalledDesktop:
             self.evidence["pid"] = self.process.pid
             deadline = time.monotonic() + self.timeout
             if sys.platform == "linux":
-                while process_path(self.process.pid) != self.executable:
-                    if self.process.poll() is not None or not self._owned_launcher():
-                        self._identity()
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError(
-                            "Installed launcher did not exec its native GUI"
-                        )
-                    time.sleep(0.01)
+                self._wait_for_native_exec(deadline)
             while not (self.profile / "run/commands.sock").exists():
                 self._identity()
                 if time.monotonic() >= deadline:

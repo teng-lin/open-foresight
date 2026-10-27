@@ -1,3 +1,5 @@
+import 'sql_support_test_bootstrap.dart';
+import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:grpc/grpc.dart';
@@ -5,6 +7,7 @@ import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/google_auth.dart';
 import 'package:foresight_test_support/google_connections.dart';
 import 'package:foresight_test_support/delayed_index_service.dart';
+import 'package:foresight_test_support/transcript_index_service.dart';
 import 'package:foresight_test_support/test_recording.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:test/test.dart';
@@ -19,7 +22,6 @@ class PausingDomain extends Domain {
   int waits = 0;
   int? pauseAt;
   final paused = Completer<void>();
-  Completer<void>? indexEntered, indexRelease;
   @override
   Future<void> waitForSourceWork({bool Function()? current}) {
     waits++;
@@ -29,18 +31,114 @@ class PausingDomain extends Domain {
     }
     return super.waitForSourceWork(current: current);
   }
+}
 
+class HeldStopRecording extends TestRecording {
+  final entered = Completer<void>(), release = Completer<void>();
   @override
-  Future<void> index(String id, {bool Function()? current}) async {
-    if (indexEntered != null && !indexEntered!.isCompleted) {
-      indexEntered!.complete();
-    }
-    await indexRelease?.future;
-    await super.index(id, current: current);
+  Future<void> stop() async {
+    if (!entered.isCompleted) entered.complete();
+    await release.future;
+    await super.stop();
+  }
+}
+
+class CloseQueueService extends DelayedIndexService {
+  int deletions = 0;
+  @override
+  Future<DeleteResponse> deleteDocument(
+    ServiceCall call,
+    DeleteRequest request,
+  ) async {
+    deletions++;
+    return DeleteResponse(success: true);
   }
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
+  test(
+    'close refuses queued deletes before RPC and joins held index cancellation',
+    () async {
+      final temporary = createTestTempDirectorySync('closed-queue-');
+      final peer = CloseQueueService();
+      final server = Server.create(services: [peer]);
+      final socket = '${temporary.path}/h.sock';
+      await server.serve(
+        address: InternetAddress(socket, type: InternetAddressType.unix),
+        port: 0,
+      );
+      final helper = Helper(
+        socket,
+        '${temporary.path}/helper',
+        manageProcess: false,
+      );
+      final store = Store('${temporary.path}/app.db');
+      final domain = Domain(store, helper);
+      addTearDown(() async {
+        if (!peer.release.isCompleted) peer.release.complete();
+        domain.close();
+        await domain.drain();
+        await helper.close();
+        await server.shutdown();
+        store.close();
+        temporary.deleteSync(recursive: true);
+      });
+      final first = store.importText(
+        'Held index',
+        'body',
+        'text/plain',
+        'fixture',
+      );
+      final deleted = store.importText(
+        'Queued delete',
+        'body',
+        'text/plain',
+        'fixture',
+      );
+      store.db.execute('INSERT INTO pending_helper_deletes VALUES(?,?)', [
+        'older-purge',
+        1,
+      ]);
+      final indexing = expectLater(
+        domain.index(first),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
+      await peer.started.future.timeout(const Duration(seconds: 5));
+      final deletion = expectLater(
+        domain.delete(deleted),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
+      final retry = expectLater(
+        domain.retryPendingHelperDeletes(),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
+      domain.close();
+      await domain.drain().timeout(const Duration(seconds: 5));
+      await Future.wait([indexing, deletion, retry]);
+      expect(peer.calls, 1);
+      expect(peer.deletions, 0);
+      expect(
+        store.sourceById(deleted, includeDeleted: true).single['deleted'],
+        1,
+      );
+      expect(
+        store.rows('SELECT * FROM pending_helper_deletes WHERE document_id=?', [
+          'older-purge',
+        ]),
+        hasLength(1),
+      );
+      expect(domain.mutating, 0);
+      expect(domain.cancellationWatchCount, 0);
+    },
+  );
+
   test(
     'cancelled parked index settles and leaves durable pending source',
     () async {
@@ -226,11 +324,17 @@ void main() {
     expect(domain.cancellationWatchCount, 0);
   });
   test(
-    'one cancelled recording-stop waiter leaves the shared finalizer and other waiter intact',
+    'one cancelled Stop waiter leaves capture drain shared and indexing separate',
     () async {
       final temporary = createTestTempDirectorySync('stop-cancel-');
       final rag = DelayedIndexService()..release.complete();
-      final server = Server.create(services: [rag]);
+      final indexEntered = Completer<void>(), indexRelease = Completer<void>();
+      final incremental = ControlledTranscriptIndex()
+        ..beforeApply = (call, request) async {
+          if (!indexEntered.isCompleted) indexEntered.complete();
+          await indexRelease.future;
+        };
+      final server = Server.create(services: [rag, incremental]);
       final socket = '${temporary.path}/h.sock';
       await server.serve(
         address: InternetAddress(socket, type: InternetAddressType.unix),
@@ -238,13 +342,11 @@ void main() {
       );
       final helper = Helper(socket, '${temporary.path}/helper');
       final store = Store('${temporary.path}/app.db');
-      final domain = PausingDomain(store, helper)
-        ..indexEntered = Completer<void>()
-        ..indexRelease = Completer<void>();
+      final domain = PausingDomain(store, helper);
       final app = Application(domain);
       addTearDown(() async {
         domain.resumeSources();
-        if (!domain.indexRelease!.isCompleted) domain.indexRelease!.complete();
+        if (!indexRelease.isCompleted) indexRelease.complete();
         await app.close();
         domain.close();
         await helper.close();
@@ -253,8 +355,12 @@ void main() {
       });
       final meeting = store.meeting('Shared finalizer');
       store.transcript(meeting, 'Captured speech', true, 0, 1000, 'microphone');
-      app.recording = TestRecording();
+      final recording = HeldStopRecording();
+      app.recording = recording;
       app.recordingMeeting = meeting;
+      addTearDown(() {
+        if (!recording.release.isCompleted) recording.release.complete();
+      });
       var current = true;
       final first = app.call('meetings.stop', {}, current: () => current);
       final cancelled = expectLater(
@@ -268,17 +374,33 @@ void main() {
         secondDone = true;
         return v;
       });
-      await domain.indexEntered!.future;
+      await recording.entered.future;
       domain.pauseSources();
-      domain.indexRelease!.complete();
       await eventually(() => domain.cancellationWatchCount >= 2);
       current = false;
       domain.checkCancellations();
       await cancelled;
       expect(secondDone, false);
-      expect(app.recording, isNotNull);
-      domain.resumeSources();
+      expect(app.recording, same(recording));
+      recording.release.complete();
       await second;
+      expect(app.recording, isNull);
+      expect(app.backgroundBusy, true);
+      expect(
+        incremental.requests,
+        isEmpty,
+        reason:
+            'Paused durable indexing retains intent without helper admission',
+      );
+      domain.resumeSources();
+      await indexEntered.future;
+      expect(
+        indexRelease.isCompleted,
+        false,
+        reason: 'Indexing no longer owns capture finalization',
+      );
+      indexRelease.complete();
+      await app.indexMeeting(meeting);
       expect(
         store.rows('SELECT state FROM meetings WHERE id=?', [
           meeting,

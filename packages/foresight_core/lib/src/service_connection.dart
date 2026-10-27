@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'client_diagnostics.dart';
 import 'profile_paths.dart';
 import 'rpc_error.dart';
 import 'service_client.dart';
@@ -21,7 +22,9 @@ class ServiceConnection {
   final _retired = <ServiceClient>{};
   Future<ServiceClient>? _connecting;
   bool _closed = false;
-  ServiceConnection(this.profile);
+  ServiceDiagnosticEmitter? _diagnostics;
+  ServiceConnection(this.profile)
+    : _diagnostics = captureServiceDiagnosticEmitter();
   Future<ServiceClient> connect() async {
     if (_closed) throw StateError('Client closed');
     final current = _client;
@@ -30,7 +33,10 @@ class ServiceConnection {
   }
 
   Future<ServiceClient> _open() async {
-    final client = await ensureService(profile);
+    final client = await runWithServiceDiagnosticEmitter(
+      _diagnostics,
+      () => ensureService(profile),
+    );
     if (_closed) {
       await client.close();
       throw StateError('Client closed');
@@ -49,22 +55,30 @@ class ServiceConnection {
     late final StreamController<Object?> output;
     StreamSubscription<Object?>? request;
     var cancelled = false;
+    ClientDiagnosticCall? diagnostic;
+    var observationAttempted = false;
     Future<void> send({required bool resent}) async {
       final ServiceClient client;
       try {
         client = await connect();
       } catch (error, stack) {
         if (!cancelled) {
+          diagnostic?.unwritten(error, resent ? 2 : 1);
+          diagnostic?.release();
           output.addError(error, stack);
           unawaited(output.close());
         }
         return;
       }
       if (cancelled) return;
+      if (!observationAttempted) {
+        observationAttempted = true;
+        diagnostic = ClientDiagnosticCall.begin(method, emitter: _diagnostics);
+      }
       var received = false;
       var handedOff = false;
       request = client
-          .stream(method, args)
+          .streamAttempt(method, args, diagnostic, resent ? 2 : 1)
           .listen(
             (value) {
               received = true;
@@ -76,9 +90,6 @@ class ServiceConnection {
                   error is RpcError &&
                   _resendable(error)) {
                 handedOff = true;
-                traceServiceTransport(
-                  () => 'connection resends $method: $error',
-                );
                 // New requests go to the next owner. The closing owner
                 // answers this connection's other requests itself, so it is
                 // retired rather than closed: closing it would report them
@@ -91,17 +102,27 @@ class ServiceConnection {
               output.addError(error, stack);
             },
             onDone: () {
-              if (!handedOff) unawaited(output.close());
+              if (!handedOff) {
+                diagnostic?.release();
+                diagnostic = null;
+                unawaited(output.close());
+              }
             },
           );
     }
 
     output = StreamController<Object?>(
-      onListen: () => unawaited(send(resent: false)),
+      onListen: () {
+        observationAttempted = _diagnostics != null;
+        diagnostic = ClientDiagnosticCall.begin(method, emitter: _diagnostics);
+        unawaited(send(resent: false));
+      },
       onPause: () => request?.pause(),
       onResume: () => request?.resume(),
       onCancel: () {
         cancelled = true;
+        diagnostic?.cancel();
+        diagnostic = null;
         return request?.cancel();
       },
     );
@@ -117,9 +138,13 @@ class ServiceConnection {
   /// Close the connection and any replaced one still waiting for answers.
   Future<void> close() async {
     _closed = true;
-    for (final retired in _retired.toList()) {
-      await retired.close();
+    try {
+      for (final retired in _retired.toList()) {
+        await retired.close();
+      }
+      await _client?.close();
+    } finally {
+      _diagnostics = null;
     }
-    await _client?.close();
   }
 }

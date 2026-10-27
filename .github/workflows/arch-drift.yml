@@ -15,7 +15,8 @@ concurrency:
   cancel-in-progress: false
 env:
   FORESIGHT_FLUTTER_EXECUTABLE: /opt/foresight-flutter/bin/flutter
-  FORESIGHT_PARALLEL_GATES: '1'
+  # Keep Core's child-VM deadlines independent of Desktop's compiler load.
+  FORESIGHT_PARALLEL_GATES: '0'
   FORESIGHT_REQUIRE_DART_GATES: '1'
   FORESIGHT_BUILD_JOBS: '2'
   FORESIGHT_COVERAGE: '1'
@@ -30,7 +31,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Install the rolling Arch application toolchain
-        run: pacman -Syu --needed --noconfirm git cmake ninja gcc grpc protobuf nlohmann-json sqlite python python-pip clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which github-cli
+        run: pacman -Syu --needed --noconfirm git cmake ninja gcc grpc protobuf nlohmann-json sqlite python python-pip uv clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which github-cli
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
@@ -38,6 +39,16 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Trust only the checked-out workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # Descriptor audits use the reviewed compiler; C++ bindings still use
+      # protobuf::protoc paired with the rolling system Protobuf library.
+      - name: Install pinned descriptor compiler
+        run: |
+          task_protoc="$RUNNER_TEMP/descriptor-protoc"
+          curl --fail --location --retry 3 --max-time 120 -o "$task_protoc.zip" https://github.com/protocolbuffers/protobuf/releases/download/v35.1/protoc-35.1-linux-x86_64.zip
+          printf '%s  %s\n' '6930ebf62bd4ea607b98fff052596c6ee564b9835b4ce172c75a3f53ae9d91b7' "$task_protoc.zip" | sha256sum --check
+          unzip -q "$task_protoc.zip" -d "$task_protoc"
+          test "$("$task_protoc/bin/protoc" --version)" = 'libprotoc 35.1'
+          echo "$task_protoc/bin" >> "$GITHUB_PATH"
       - name: Record the actual compiler and package drift before building
         run: |
           mkdir -p test-results/arch
@@ -49,8 +60,14 @@ jobs:
             echo 'The package inventory and compiler identity are retained with this run.'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Install hash-verified Python test tools
+        env:
+          UV_PYTHON_INSTALL_DIR: /opt/foresight-python
         run: |
-          python -m venv .venv
+          # Keep tooling on required Python 3.13 while Arch's compiler rolls.
+          uv python install 3.13
+          task_python=$(uv python find --managed-python 3.13)
+          "$task_python" -m venv .venv
+          .venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3, 13), sys.version'
           .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
@@ -61,6 +78,10 @@ jobs:
             flutter-linux-x64-3.35.7-v1
             flutter-linux-x64-3.35.7-
       - name: Verify the pinned Flutter SDK
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: safe.directory
+          GIT_CONFIG_VALUE_0: /opt/foresight-flutter
         run: |
           if [[ ! -x /opt/foresight-flutter/bin/flutter ]]; then
             git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git /opt/foresight-flutter
@@ -87,7 +108,9 @@ jobs:
           .venv/bin/python tools/ci_native_work.py --own-pr "$OWN_PR" \
             --output test-results/arch/native-work.json -- -G Ninja
       - name: Build and test with the current Arch toolchain
-        run: xvfb-run -a dbus-run-session -- bash tools/build.sh --platform linux -G Ninja
+        env:
+          FORESIGHT_CORE_TEST_CONCURRENCY: '2'
+        run: .venv/bin/python tools/run_ci_user.py --workspace "$GITHUB_WORKSPACE" -- xvfb-run -a dbus-run-session -- bash tools/build.sh --platform linux -G Ninja
       - name: Record actual scheduled retained Arch closure after validation
         if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
         run: .venv/bin/python -m tools.ci_rollout --source "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --producer-job arch --output build/qualification/qualification.json

@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/poll.dart';
@@ -51,6 +52,7 @@ class UnwritableSocket implements Socket {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   // The production grace, for tests that need the shutdown to happen.
   const shortGrace = Duration(seconds: 1);
   // Long enough that no reconnect or reservation has to race the shutdown.

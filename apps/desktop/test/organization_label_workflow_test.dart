@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -48,7 +49,7 @@ void main() {
   );
   testWidgets(
     'global label creation uses all documents despite active search and deletion requires confirmation',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final dir = createTestTempDirectorySync('foresight-label-workflow-');
       addTearDown(() {
         if (dir.existsSync()) dir.deleteSync(recursive: true);
@@ -120,6 +121,6 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await helper.close();
       dir.deleteSync(recursive: true);
-    },
+    }),
   );
 }

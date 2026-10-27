@@ -110,7 +110,7 @@ def test_macos_offline_contracts_run_after_the_pinned_sdk_protoc_is_available():
         'echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"'
     )
     workflow = parse_workflow((ROOT / ".github/workflows/macos.yml").read_text())
-    native = workflow["jobs"]["macos"]["steps"]
+    native = workflow["jobs"]["macos-checks"]["steps"]
     setup_index = next(
         i
         for i, step in enumerate(native)
@@ -122,5 +122,9 @@ def test_macos_offline_contracts_run_after_the_pinned_sdk_protoc_is_available():
         if "tools/platform_python_tests.py --platform macos" in step.get("run", "")
     )
     assert setup_index < tests_index
+    assert native[tests_index]["if"] == "matrix.stage == 'contracts'"
+    assert (
+        "contracts" in workflow["jobs"]["macos-checks"]["strategy"]["matrix"]["stage"]
+    )
     install = next(step for step in steps if step.get("name") == "Install build tools")
     assert "protobuf" not in install["run"]

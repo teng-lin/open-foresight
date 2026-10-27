@@ -25,7 +25,10 @@ on:
       - 'tests/test_ci_sanitizer_artifacts.py'
       - 'tools/build_sanitizer_sdk.py'
       - 'tools/sanitizer_runtime.py'
+      - 'tools/sanitizer_settings.py'
+      - 'tools/lsan-cpython.supp'
       - 'tests/test_sanitizer_runtime.py'
+      - 'tests/test_native_leak_sanitizer.py'
       - 'tools/build_macos_sdk.py'
       - 'packaging/minimal-grpc.cmake'
       - 'packaging/sanitizer-grpc.cmake'
@@ -54,7 +57,10 @@ on:
       - 'tests/test_ci_sanitizer_artifacts.py'
       - 'tools/build_sanitizer_sdk.py'
       - 'tools/sanitizer_runtime.py'
+      - 'tools/sanitizer_settings.py'
+      - 'tools/lsan-cpython.supp'
       - 'tests/test_sanitizer_runtime.py'
+      - 'tests/test_native_leak_sanitizer.py'
       - 'tools/build_macos_sdk.py'
       - 'packaging/minimal-grpc.cmake'
       - 'packaging/sanitizer-grpc.cmake'
@@ -112,7 +118,7 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
-          .venv/bin/python -m pytest tests/test_sanitizer_runtime.py -q
+          .venv/bin/python -m pytest tests/test_sanitizer_runtime.py tests/test_native_leak_sanitizer.py -q
       - name: Identify the compiler for the instrumented SDK cache
         id: compiler
         run: |
@@ -166,6 +172,8 @@ jobs:
           retention-days: 30
           if-no-files-found: error
           compression-level: 0
+      # Leak detection stays off only for build-time tools; every test and
+      # probe below gets LeakSanitizer from tools/sanitizer_settings.py.
       - name: Configure and build instrumented native code and tests
         env:
           ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
@@ -177,9 +185,9 @@ jobs:
             -DCMAKE_PREFIX_PATH="$PWD/build/sanitizer-sdk" \
             -DPython3_EXECUTABLE="$PWD/.venv/bin/python"
           cmake --build build/sanitizers --parallel 2
-      - name: Prove both sanitizer runtimes detect real faults
-        run: python tools/verify_native_sanitizers.py --compiler clang++ --output test-results/sanitizer-probes
-      - name: Run every native test with fatal ASan and UBSan reports
+      - name: Prove ASan, UBSan and LSan detect real faults through the gate settings
+        run: python tools/verify_native_sanitizers.py --compiler clang++ --python "$PWD/.venv/bin/python" --output test-results/sanitizer-probes
+      - name: Run every native test with fatal ASan, LSan and UBSan reports
         run: tools/run_native_sanitizers.sh build/sanitizers test-results/sanitizers
       - name: Retain sanitizer diagnostics and native test evidence
         if: always()

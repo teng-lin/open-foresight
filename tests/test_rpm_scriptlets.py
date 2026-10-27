@@ -43,7 +43,7 @@ class RpmScriptletsTest(unittest.TestCase):
         identity = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:24]
         directory = root_path / f"of-install-{os.getuid()}-{identity}"
         directory.mkdir(mode=0o700)
-        for section, following in (("pre", "preun"), ("preun", "prep")):
+        for section, following in (("pre", "preun"), ("preun", "posttrans")):
             script = expanded.split(f"%{section}\n", 1)[1].split(f"%{following}\n", 1)[
                 0
             ]
@@ -52,6 +52,9 @@ class RpmScriptletsTest(unittest.TestCase):
                 "/tmp/of-install-*", str(root_path / "of-install-*")
             )
             with (directory / "lock").open("w+") as lock:
+                # Match the released service protocol, whose private lock is
+                # mode0600 even when the test runner has a permissive umask.
+                os.fchmod(lock.fileno(), 0o600)
                 for held in (False, True, False):
                     fcntl.lockf(lock, fcntl.LOCK_SH if held else fcntl.LOCK_UN)
                     result = subprocess.run(

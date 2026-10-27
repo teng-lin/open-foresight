@@ -134,6 +134,7 @@ jobs:
         env:
           FORESIGHT_COVERAGE: ${{ inputs.core_coverage_benchmark && '1' || '0' }}
           FORESIGHT_CORE_COVERAGE_MIN: '90'
+          FORESIGHT_CORE_TEST_CONCURRENCY: '2'
           GH_TOKEN: ${{ github.token }}
           STAGE_EVENT: ${{ inputs.event }}
           OWN_PR: ${{ inputs.own_pr }}
@@ -142,7 +143,8 @@ jobs:
         run: |
           args=()
           if [[ "$RELEASE_VALIDATION" == true ]]; then args+=(--release); fi
-          xvfb-run -a dbus-run-session -- .venv/bin/python tools/run_ci_stage.py \
+          .venv/bin/python tools/run_ci_user.py --workspace "$GITHUB_WORKSPACE" -- \
+            xvfb-run -a dbus-run-session -- .venv/bin/python tools/run_ci_stage.py \
             --platform linux --stage core --event "$STAGE_EVENT" --own-pr "$OWN_PR" \
             --parents-json "$STAGE_PARENTS" --cmake-arg=-G --cmake-arg=Ninja \
             --input native=build/ci-input/native "${args[@]}"
@@ -204,12 +206,15 @@ jobs:
         run: |
           args=()
           if [[ "$RELEASE_VALIDATION" == true ]]; then args+=(--release); fi
-          xvfb-run -a dbus-run-session -- .venv/bin/python tools/run_ci_stage.py \
+          .venv/bin/python tools/run_ci_user.py --workspace "$GITHUB_WORKSPACE" -- \
+            xvfb-run -a dbus-run-session -- .venv/bin/python tools/run_ci_stage.py \
             --platform linux --stage desktop --event "$STAGE_EVENT" --own-pr "$OWN_PR" \
             --parents-json "$STAGE_PARENTS" --cmake-arg=-G --cmake-arg=Ninja \
             --input native=build/ci-input/native "${args[@]}"
       - name: Fresh fast integration against the current native prerequisite
-        run: xvfb-run -a dbus-run-session -- .venv/bin/python tools/integration_gates.py --suite fast --native build/native/libforesight_native.so --output test-results/fast-integration
+        run: |
+          export FORESIGHT_TEST_SQL_SUPPORT_LIBRARY="$GITHUB_WORKSPACE/build/native/libforesight_sql_support.so"
+          .venv/bin/python tools/run_ci_user.py --workspace "$GITHUB_WORKSPACE" -- xvfb-run -a dbus-run-session -- .venv/bin/python tools/integration_gates.py --suite fast --native build/native/libforesight_native.so --output test-results/fast-integration
       - name: Retain the independently qualified desktop stage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -235,7 +240,9 @@ jobs:
           overwrite: true
   service-linux:
     name: service-linux
-    needs: [native-linux, core-linux, desktop-linux]
+    # The stage compiles its own current-source hosts from this qualified Native
+    # input; unrelated Core/Desktop test outcomes cannot suppress service tests.
+    needs: [native-linux]
     runs-on: ubuntu-24.04
     container: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
     timeout-minutes: 90
@@ -258,11 +265,6 @@ jobs:
         with:
           name: ${{ needs.native-linux.outputs.runtime_artifact_name }}
           path: build/ci-input/native
-      - name: Download the successful core prerequisite from this run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: ${{ needs.core-linux.outputs.artifact_name }}
-          path: build/ci-input/core
       - name: Validate or restore the service stage
         id: stage
         env:
@@ -270,15 +272,15 @@ jobs:
           STAGE_EVENT: ${{ inputs.event }}
           OWN_PR: ${{ inputs.own_pr }}
           RELEASE_VALIDATION: ${{ inputs.release }}
-          STAGE_PARENTS: '{"native":"${{ needs.native-linux.outputs.identity }}","core":"${{ needs.core-linux.outputs.identity }}","desktop":"${{ needs.desktop-linux.outputs.identity }}"}'
+          STAGE_PARENTS: '{"native":"${{ needs.native-linux.outputs.identity }}"}'
         run: |
           args=()
           if [[ "$RELEASE_VALIDATION" == true ]]; then args+=(--release); fi
-          xvfb-run -a dbus-run-session -- .venv/bin/python tools/run_ci_stage.py \
+          .venv/bin/python tools/run_ci_user.py --workspace "$GITHUB_WORKSPACE" -- \
+            xvfb-run -a dbus-run-session -- .venv/bin/python tools/run_ci_stage.py \
             --platform linux --stage service --event "$STAGE_EVENT" --own-pr "$OWN_PR" \
             --parents-json "$STAGE_PARENTS" --cmake-arg=-G --cmake-arg=Ninja \
-            --input native=build/ci-input/native \
-            --input core=build/ci-input/core "${args[@]}"
+            --input native=build/ci-input/native "${args[@]}"
       - name: Retain the independently qualified service stage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

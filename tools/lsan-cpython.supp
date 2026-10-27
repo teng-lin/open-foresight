@@ -1,0 +1,45 @@
+# LeakSanitizer suppressions for the CPython ctypes test host only.
+#
+# Policy (enforced by tools/sanitizer_settings.py before any run): every rule
+# is `leak:^Symbol$` for an allowlisted CPython retained-allocation frame and has its own
+# preceding "# reason:" comment with the captured stack that justifies it.
+# Never add eval-loop, call/import dispatch, finalization, libffi, allocator,
+# ctypes call-wrapper, module-path or wildcard rules: application code runs
+# beneath those frames, so such a rule would hide real native leaks.
+#
+# tools/verify_native_sanitizers.py proves an application leak made through
+# the same CPython host and settings is still reported.
+#
+# Rules below come from captured clean-host stacks, not assumed interpreter
+# behavior. Unexpected frames remain failures requiring their own diagnosis.
+
+# reason: CPython 3.13.17 clean ctypes-host control with PYTHONMALLOC=malloc
+# reports interpreter-owned allocations below this completed startup frame
+# (python-host-clean.log); the same settings must still reject the 4243-byte
+# application leak through ctypes after startup. A 128-frame allocation trace
+# keeps recursive frozen-module reads attached to their startup owner.
+leak:^Py_InitializeFromConfig$
+
+# reason: Clean CPython 3.13.17 host retains unmarshalled constant strings from
+# r_object, after startup as well as during it; these captured allocations have
+# no application frames. This exact marshal-reader symbol is not an eval,
+# import dispatch or generic allocator frame above native ctypes calls.
+leak:^r_object$
+
+# reason: Clean-host script parsing retains name-token strings allocated below
+# this specific parser function; the real post-startup native leak has no parser
+# frame and must remain fatal with this same suppression file.
+leak:^_PyPegen_name_token$
+
+# reason: Clean-host imports retain itertools constant-name strings allocated
+# by this built-in module initializer (python-host-clean.log).
+leak:^itertoolsmodule_exec$
+
+# reason: Clean-host imports retain collections constant-name strings allocated
+# by this built-in module initializer (python-host-clean.log).
+leak:^collections_exec$
+
+# reason: Clean-host imports retain ctypes module constant-name strings while
+# _ctypes_add_objects builds the module. Actual library calls execute later via
+# different frames; the application-leak control must remain unsuppressed.
+leak:^_ctypes_add_objects$

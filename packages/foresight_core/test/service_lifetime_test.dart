@@ -1,10 +1,15 @@
+import 'sql_support_test_bootstrap.dart';
+import 'package:foresight_test_support/transcript_index_service.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:io';
 import 'package:clock/clock.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_test_support/poll.dart';
+import 'package:foresight_test_support/capture_process.dart';
 import 'package:foresight_test_support/hooked_service.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -14,6 +19,7 @@ import 'package:foresight_test_support/helper_adoption.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 import 'package:grpc/grpc.dart';
+import 'package:http2/transport.dart' show ServerTransportConnection;
 import 'application_operations_test.dart' show ArtifactGenerator;
 import 'note_transcript_cache_application_test.dart'
     show EmbeddingService, PromptRuntime;
@@ -133,6 +139,7 @@ class CleanupRuntime extends ArtifactGenerator {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late ProfilePaths profile;
   late ApplicationService service;
@@ -159,6 +166,7 @@ void main() {
     editingNotes = false;
     enhancementTimer = null;
     fireEnhancement = null;
+    print('LIFETIME_SETUP_PROGRESS phase=0');
     service = await ApplicationService.start(
       profile,
       desktopPeerVerifier: trustInProcessDesktop,
@@ -175,9 +183,12 @@ void main() {
         return timer;
       },
     );
+    print('LIFETIME_SETUP_PROGRESS phase=1');
     await service.ready;
+    print('LIFETIME_SETUP_PROGRESS phase=2');
     service.domain.store.setPreference('serviceIdleMinutes', '30');
     agent = await ServiceClient.connect('${profile.runtime}/application.sock');
+    print('LIFETIME_SETUP_PROGRESS phase=3');
     addTearDown(() async {
       await agent.close();
       await service.close();
@@ -774,7 +785,9 @@ void main() {
     'desktop departure waits for an executing serialized mutation',
     () async {
       final rag = DelayedIndexService();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -811,10 +824,12 @@ void main() {
     },
   );
   test(
-    'desktop departure waits for its cancelled leased import indexing drain',
+    'desktop departure cancels and joins leased import indexing before idle exit',
     () async {
       final rag = DelayedIndexService();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -838,20 +853,32 @@ void main() {
       await d.close();
       await disconnected;
       await departed();
+      await eventually(
+        () =>
+            rag.indexCall?.isCanceled == true &&
+            service.dispatchedCount == 0 &&
+            service.domain.mutating == 0,
+      );
       expect(service.desktopShutdownScheduled, true);
-      expect(service.dispatchedCount, 1);
+      expect(service.domain.store.sources.single['state'], 'pending');
+      // Actual request cancellation and transport cleanup retire the lease.
+      // The native helper need not send an acknowledgement to a dead client.
+      expect(rag.release.isCompleted, false);
       now = now.add(const Duration(seconds: 1));
       await lifetime();
-      expect(service.domain.mutating, 1);
-      expect(service.domain.store.sources.single['state'], 'indexing');
-      interleaveStatusTimer();
-      expectPeriodicLifetimeCheck();
-      rag.release.complete();
       await exited();
+      expect(rag.release.isCompleted, false);
       final store = Store('${profile.data}/application.db');
       try {
         expect(store.sources.single['id'], id);
-        expect(store.sources.single['state'], 'indexed');
+        expect(store.sources.single['state'], 'pending');
+        rag.release.complete();
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          store.sources.single['state'],
+          'pending',
+          reason: 'A canceled RPC cannot publish a late acknowledgement',
+        );
         expect(store.sources.single['content'], 'Committed desktop content');
       } finally {
         store.close();
@@ -1059,7 +1086,9 @@ void main() {
     'unleased model configuration holds idle exit until the helper operation settles',
     () async {
       final rag = ResumeRag();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -1090,7 +1119,9 @@ void main() {
     'unleased note enhancement and its transcript drain hold idle exit',
     () async {
       final rag = EmbeddingService()..embeddingGate = Completer<void>();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -1131,7 +1162,9 @@ void main() {
     'cancelled proactive retrieval drains without waiting for its server response',
     () async {
       final rag = ProactiveRag()..release.complete();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -1182,7 +1215,9 @@ void main() {
     'cancelled proactive generation stays busy until native cleanup settles',
     () async {
       final rag = StreamRag()..release.complete();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -1257,7 +1292,9 @@ void main() {
     'unleased meeting indexing holds idle exit only while its helper mutation executes',
     () async {
       final rag = DelayedIndexService();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -1307,7 +1344,9 @@ void main() {
       'streamed answer $mode stays dispatched until its cleanup settles',
       () async {
         final rag = StreamRag()..release.complete();
-        final server = Server.create(services: [rag]);
+        final server = Server.create(
+          services: [rag, TranscriptIndexService(rag)],
+        );
         await server.serve(
           address: InternetAddress(
             service.domain.helper.socket,
@@ -1401,38 +1440,102 @@ void main() {
         'FORESIGHT_QUERY_TERMS_URL': 'https://example.invalid/terms',
       });
       service.domain.store.setPreference(dedicatedQueryTermsKey, 'accepted');
-      final connecting = Completer<void>(), socket = Completer<Socket>();
-      socket.future.ignore();
-      addTearDown(() {
-        if (!socket.isCompleted) {
-          socket.completeError(
-            const SocketException('fixture metadata stopped'),
-          );
-        }
-      });
-      // Hold only the distribution metadata transport. This exercises the real
-      // acquisition factory without contacting the model server or downloading.
-      final work = IOOverrides.runZoned(
-        () => service.application.call('models.acquire_query', {}),
-        socketConnect:
-            (
-              host,
-              port, {
-              sourceAddress,
-              int sourcePort = 0,
-              Duration? timeout,
-            }) {
-              if (!connecting.isCompleted) connecting.complete();
-              return socket.future;
-            },
+      final metadata = await ServerSocket.bind(
+        InternetAddress(
+          '${root.path}/metadata.sock',
+          type: InternetAddressType.unix,
+        ),
+        0,
       );
+      final started = Completer<Map<String, dynamic>>();
+      final retired = Completer<void>();
+      final header = BytesBuilder(copy: false);
+      Socket? metadataPeer;
+      var accepted = 0;
+      final subscription = metadata.listen((peer) {
+        accepted++;
+        metadataPeer = peer;
+        peer.listen(
+          (chunk) {
+            if (started.isCompleted || header.length + chunk.length > 256) {
+              fail('Invalid metadata worker fixture handoff');
+            }
+            header.add(chunk);
+            if (!chunk.contains(10)) return;
+            started.complete(
+              Map<String, dynamic>.from(
+                jsonDecode(utf8.decode(header.takeBytes())) as Map,
+              ),
+            );
+          },
+          onDone: () {
+            if (!retired.isCompleted) retired.complete();
+            peer.destroy();
+          },
+          onError: (Object error) {
+            expect(error, isA<SocketException>());
+            if (!retired.isCompleted) retired.complete();
+            peer.destroy();
+          },
+        );
+      });
+      addTearDown(() async {
+        await service.application.call('models.cancel_query_acquisition', {});
+        metadataPeer?.destroy();
+        await subscription.cancel();
+        await metadata.close();
+      });
+      final python =
+          Platform.environment['FORESIGHT_PYTHON'] ?? '/usr/bin/python3';
+      expect(File(python).existsSync(), true);
+      final transport = File('${root.path}/metadata-peer')
+        ..writeAsStringSync('''#!$python
+import json, os, signal, socket, sys
+raw = sys.stdin.buffer.read(16385)
+if len(raw) > 16384:
+    sys.exit(91)
+try:
+    config = json.loads(raw)
+except Exception:
+    sys.exit(92)
+if config.get('kind') != 'metadata' or config.get('appVersion') != '1.0.0':
+    sys.exit(93)
+peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+peer.connect(${jsonEncode(metadata.address.address)})
+peer.sendall((json.dumps({'kind': 'metadata', 'version': '1.0.0', 'pid': os.getpid()}) + '\\n').encode())
+while True:
+    signal.pause()
+''');
+      final executableMode = await runCaptureProcess('/bin/chmod', [
+        '700',
+        transport.path,
+      ], timeout: const Duration(seconds: 5));
+      expect(executableMode.exitCode, 0);
+      runtimeConfiguration.environment['FORESIGHT_SERVICE'] = transport.path;
+      // Hold the actual owned metadata child after its bounded stdin handoff.
+      // This keeps the real distribution acquisition owner, without contacting
+      // the metadata service, inspecting credentials or fabricating model data.
+      final work = service.application.call('models.acquire_query', {});
       final cancelled = expectLater(
         work,
         throwsA(
           isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
         ),
       );
-      await connecting.future;
+      cancelled.ignore();
+      final handoff = await started.future.timeout(const Duration(seconds: 5));
+      expect(accepted, 1);
+      expect(handoff.keys.toSet(), {'kind', 'version', 'pid'});
+      expect(handoff['kind'], 'metadata');
+      expect(handoff['version'], '1.0.0');
+      final childPid = handoff['pid'] as int;
+      expect(childPid, greaterThan(1));
+      expect(childPid, isNot(pid));
+      final alive = await runCaptureProcess('/bin/kill', [
+        '-0',
+        '$childPid',
+      ], timeout: const Duration(seconds: 5));
+      expect(alive.exitCode, 0);
       expect(service.application.queryAcquiring, true);
       expect(service.application.backgroundBusy, true);
       await backgroundRefusal();
@@ -1440,9 +1543,19 @@ void main() {
         'models.cancel_query_acquisition',
         {},
       );
-      socket.completeError(const SocketException('fixture metadata stopped'));
-      await cancellation;
+      await cancellation.timeout(const Duration(seconds: 5));
       await cancelled;
+      await retired.future.timeout(const Duration(seconds: 2));
+      final reaped = await runCaptureProcess('/bin/kill', [
+        '-0',
+        '$childPid',
+      ], timeout: const Duration(seconds: 5));
+      expect(
+        reaped.exitCode,
+        isNot(0),
+        reason: 'owned metadata child must be reaped',
+      );
+      expect(accepted, 1);
       expect(service.application.queryAcquiring, false);
       expect((await lifetime())['busy'], false);
     },
@@ -1454,7 +1567,9 @@ void main() {
     'orphaned live transcript embedding alone refuses idle shutdown until settled',
     () async {
       final rag = EmbeddingService()..embeddingGate = Completer<void>();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,
@@ -1477,6 +1592,10 @@ void main() {
         'text': 'Captured evidence',
       });
       await rag.embeddingEntered.future;
+      service.domain.resumeSources();
+      await service.application.indexMeeting(id);
+      expect(service.domain.store.sources.single['state'], 'indexed');
+      expect(service.domain.mutating, 0);
       service.application.recording = null;
       service.application.recordingMeeting = null;
       recording.dispose();
@@ -1492,18 +1611,97 @@ void main() {
   test(
     'a notes edit schedules its production 30 second enhancement timer without busy work until it fires',
     () async {
+      print('NOTES_TIMER_PROGRESS phase=0 elapsed_us=0');
       final rag = EmbeddingService()..embeddingGate = Completer<void>();
-      final server = Server.create(services: [rag]);
-      await server.serve(
-        address: InternetAddress(
+      var phase = 0;
+      final phaseClock = Stopwatch()..start();
+      final phaseMicros = <int>[];
+      void mark(int value) {
+        phase = value;
+        phaseMicros.add(phaseClock.elapsedMicroseconds);
+        print(
+          'NOTES_TIMER_PROGRESS phase=$phase elapsed_us=${phaseMicros.last}',
+        );
+      }
+
+      addTearDown(() {
+        final diagnostics = {
+          'phase': phase,
+          'micros': phaseMicros,
+          'embedding_entered': rag.embeddingEntered.isCompleted,
+          'embedding_gate_completed': rag.embeddingGate!.isCompleted,
+          'embedding_calls': rag.texts.length,
+          'active_enhancements': service.application.activeEnhancements,
+          'mutating': service.domain.mutating,
+        };
+        print('NOTES_TIMER_PHASE ${jsonEncode(diagnostics)}');
+      });
+      mark(1);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
+      final acceptedSockets = <Socket>[];
+      final servingConnections = <Future<void>>[];
+      final listener = await ServerSocket.bind(
+        InternetAddress(
           service.domain.helper.socket,
           type: InternetAddressType.unix,
         ),
-        port: 0,
+        0,
       );
-      addTearDown(server.shutdown);
+      addTearDown(listener.close);
+      final accepts = listener.listen(
+        (socket) {
+          acceptedSockets.add(socket);
+          servingConnections.add(
+            server.serveConnection(
+              connection: ServerTransportConnection.viaSocket(socket),
+            ),
+          );
+        },
+        onError: (Object error, StackTrace stack) {
+          Zone.current.handleUncaughtError(error, stack);
+        },
+      );
+      mark(2);
+      addTearDown(() async {
+        // The body already awaits service.closed. Destroy only this fixture's
+        // accepted sockets so transport cleanup cannot wait for remote IO.
+        print(
+          'NOTES_TIMER_LISTENER phase=0 elapsed_us=${phaseClock.elapsedMicroseconds}',
+        );
+        await listener.close();
+        await accepts.cancel();
+        print(
+          'NOTES_TIMER_LISTENER phase=1 elapsed_us=${phaseClock.elapsedMicroseconds}',
+        );
+        final connections = server.handlers.keys.toList();
+        print(
+          'NOTES_TIMER_TEARDOWN phase=2 connections=${connections.length} sockets=${acceptedSockets.length} elapsed_us=${phaseClock.elapsedMicroseconds}',
+        );
+        for (final socket in acceptedSockets) {
+          socket.destroy();
+        }
+        await Future.wait([
+          ...servingConnections,
+          for (final connection in connections) connection.terminate(),
+        ]);
+        print(
+          'NOTES_TIMER_TEARDOWN phase=3 elapsed_us=${phaseClock.elapsedMicroseconds}',
+        );
+        await server.shutdown();
+        print(
+          'NOTES_TIMER_TEARDOWN phase=4 elapsed_us=${phaseClock.elapsedMicroseconds}',
+        );
+      });
       addTearDown(() {
+        print(
+          'NOTES_TIMER_TEARDOWN phase=0 elapsed_us=${phaseClock.elapsedMicroseconds}',
+        );
         if (!rag.embeddingGate!.isCompleted) rag.embeddingGate!.complete();
+        print(
+          'NOTES_TIMER_TEARDOWN phase=1 elapsed_us=${phaseClock.elapsedMicroseconds}',
+        );
       });
       service.domain.helper.snapshot = control.State(pipeline: 'ready');
       service.domain.generator = PromptRuntime();
@@ -1517,6 +1715,21 @@ void main() {
         20,
         'imported',
       );
+      // Settle this fixture's cold HTTP/2 connection before firing the timer.
+      // The five-second production embedding deadline remains unchanged.
+      final savedNotes = service.domain.store.meetingNoteRows(id);
+      final savedTranscript = service.domain.store.meetingTranscript(id);
+      mark(3);
+      final ready = await service.domain.helper.client.indexDocument(
+        IndexRequest(),
+      );
+      mark(4);
+      expect(ready.success, isTrue);
+      expect(rag.embeddingEntered.isCompleted, isFalse);
+      expect(rag.texts, isEmpty);
+      expect(service.domain.store.meetingNoteRows(id), savedNotes);
+      expect(service.domain.store.meetingTranscript(id), savedTranscript);
+      expect(service.domain.store.sources, isEmpty);
       editingNotes = true;
       await service.application.call('meetings.notes', {
         'id': id,
@@ -1526,23 +1739,30 @@ void main() {
       expect(enhancementTimer?.isActive, true);
       expect(service.application.backgroundBusy, false);
       expect((await lifetime())['busy'], false);
+      mark(5);
       enhancementTimer!.cancel();
       fireEnhancement!();
       expect(service.application.activeEnhancements, 1);
+      mark(6);
       await rag.embeddingEntered.future;
+      mark(7);
       expect(service.application.activeEnhancements, 1);
       now = now.add(const Duration(minutes: 31));
       expect((await lifetime())['exit_after'], null);
       await backgroundRefusal();
+      mark(8);
       rag.embeddingGate!.complete();
       await exited();
+      mark(9);
     },
   );
   test(
     'workspace clear leaves an orphaned enhancement producer busy until embedding settles',
     () async {
       final rag = EmbeddingService()..embeddingGate = Completer<void>();
-      final server = Server.create(services: [rag]);
+      final server = Server.create(
+        services: [rag, TranscriptIndexService(rag)],
+      );
       await server.serve(
         address: InternetAddress(
           service.domain.helper.socket,

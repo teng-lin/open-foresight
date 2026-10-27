@@ -105,18 +105,21 @@ def test_acceptance_aggregate_rejects_missing_failed_or_unexpectedly_skipped_pro
 
 
 @pytest.mark.parametrize(
-    "suite,full,packaging,gpu_failure",
+    "suite,full,packaging,gpu_failure,contract_failure",
     [
-        ("cpu", False, False, False),
-        ("audio", False, False, False),
-        ("audio", False, False, True),
-        ("deb", False, False, False),
-        ("deb", True, False, False),
-        ("deb", False, True, False),
+        ("cpu", False, False, False, None),
+        ("audio", False, False, False, None),
+        ("audio", False, False, True, None),
+        ("deb", False, False, False, None),
+        ("deb", True, False, False, None),
+        ("deb", False, True, False, None),
+        ("audio", False, False, False, "SOURCE_REVISION"),
+        ("audio", False, False, False, "AUDIO_HANDOFF_DIRECTORY"),
+        ("audio", False, False, False, "restore"),
     ],
 )
 def test_real_shell_orchestration_runs_only_the_selected_consumer(
-    tmp_path, suite, full, packaging, gpu_failure
+    tmp_path, suite, full, packaging, gpu_failure, contract_failure
 ):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -128,6 +131,10 @@ with open(os.environ['COMMAND_LOG'], 'a') as stream:
     stream.write(json.dumps([Path(sys.argv[0]).name, *sys.argv[1:]]) + '\\n')
 if sys.argv[1:] == ['context', 'show']:
     print('default')
+if sys.argv[1:] == ['volume', 'create']:
+    print('qualified-audio-source')
+if os.environ.get('RESTORE_FAILURE') == '1' and any('ci_linux_handoff.py restore' in part for part in sys.argv):
+    sys.exit(23)
 if os.environ['GPU_FAILURE'] == '1' and 'tools/accept_software_gpu.py' in sys.argv:
     sys.exit(17)
 """
@@ -144,11 +151,16 @@ if os.environ['GPU_FAILURE'] == '1' and 'tools/accept_software_gpu.py' in sys.ar
         "GPU_FAILURE": "1" if gpu_failure else "0",
         "VERSION": "0.1.2",
         "SDK_IMAGE": "verified-image",
+        "SOURCE_REVISION": SOURCE,
+        "AUDIO_HANDOFF_DIRECTORY": str(tmp_path / "qualified-handoff"),
+        "RESTORE_FAILURE": "1" if contract_failure == "restore" else "0",
         "GITHUB_REPOSITORY": "Owner/Repo",
         "SOURCE_DATE_EPOCH": "123",
         "ACCEPTANCE_FULL": str(full).lower(),
         "PACKAGING_SELECTED": str(packaging).lower(),
     }
+    if contract_failure in ("SOURCE_REVISION", "AUDIO_HANDOFF_DIRECTORY"):
+        env.pop(contract_failure)
     result = subprocess.run(
         ["/bin/bash", str(ROOT / "tools/linux_acceptance.sh"), suite],
         cwd=tmp_path,
@@ -157,11 +169,63 @@ if os.environ['GPU_FAILURE'] == '1' and 'tools/accept_software_gpu.py' in sys.ar
         text=True,
         timeout=30,
     )
-    assert result.returncode == (17 if gpu_failure else 0), (
-        result.stdout + result.stderr
+    expected = (
+        23
+        if contract_failure == "restore"
+        else 1
+        if contract_failure
+        else 17
+        if gpu_failure
+        else 0
     )
+    assert result.returncode == expected, result.stdout + result.stderr
     rows = [json.loads(line) for line in log.read_text().splitlines()]
     joined = json.dumps(rows)
+    if contract_failure:
+        assert "--suite virtual-audio" not in joined
+        assert "tools/accept_software_gpu.py" not in joined
+        if contract_failure == "restore":
+            assert ["docker", "volume", "rm", "qualified-audio-source"] in rows
+        else:
+            assert contract_failure in result.stderr
+            assert "tools/prepare_audio_handoff.py" not in joined
+        return
+    if suite == "audio":
+        prepare = next(row for row in rows if "tools/prepare_audio_handoff.py" in row)
+        assert prepare[prepare.index("--sdk-image") + 1] == "verified-image"
+        restore = next(
+            row
+            for row in rows
+            if any("ci_linux_handoff.py restore" in part for part in row)
+        )
+        gate = next(row for row in rows if "virtual-audio" in row)
+        assert rows.index(prepare) < rows.index(restore) < rows.index(gate)
+        assert restore[-4:] == ["--", SOURCE, str(os.getuid()), str(os.getgid())]
+        assert "--cap-drop" in restore and "--cap-add" in restore and "CHOWN" in restore
+        assert "qualified-audio-source:/src" in restore
+        assert str(tmp_path / "qualified-handoff") + ":/handoff:ro" in restore
+        for capability in ("CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE"):
+            assert capability in gate
+        assert gate[gate.index("--cap-drop") + 1] == "ALL"
+        assert "no-new-privileges" in gate
+        assert "qualified-audio-source:/src" in gate
+        assert (
+            str(tmp_path / "build/portable/dist/open-foresight") + ":/portable:ro"
+            in gate
+        )
+        assert gate[gate.index("--bundle") + 1] == "/portable"
+        assert (
+            gate.index("/prepare-flutter-consumer.py")
+            < gate.index("/run-ci-user.py")
+            < gate.index("dbus-run-session")
+        )
+        assert gate[gate.index("--workspace") + 1] == "/src"
+        assert "PUB_CACHE=/src/.pub-cache" in gate
+        assert gate[gate.index("--flutter-root") + 1] == "/opt/flutter"
+        assert ["docker", "volume", "rm", "qualified-audio-source"] in rows
+    else:
+        assert "tools/prepare_audio_handoff.py" not in joined
+        assert ["docker", "volume", "create"] not in rows
     assert "--cache-to" not in joined
     assert "sdk.Dockerfile" not in joined and "--target builder" not in joined
     if suite == "deb":

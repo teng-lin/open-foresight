@@ -5,14 +5,40 @@ import argparse
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+WAIT_TIMEOUT_SECONDS = 3600
+PROGRESS_INTERVAL_SECONDS = 30
 
 
-def run_gates(tasks, log_directory):
+def signal_owned_group(process, sig):
+    """Require delivery or group disappearance; bound Darwin zombie retirement."""
+    deadline = time.monotonic() + 1
+    while True:
+        try:
+            os.killpg(process.pid, sig)
+            return
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            # Reaping our leader does not reap orphaned descendants. Darwin can
+            # temporarily report EPERM while their zombie-only group retires.
+            # Never accept EPERM as success: retry only for an exited leader,
+            # requiring actual signal delivery or ESRCH within the deadline.
+            if (
+                sys.platform != "darwin"
+                or process.poll() is None
+                or time.monotonic() >= deadline
+            ):
+                raise
+            time.sleep(0.05)
+
+
+def run_gates(tasks, log_directory, *, outcomes=None):
     """Wait for every task, failing if any fails; reap process groups on abort."""
     log_directory.mkdir(parents=True, exist_ok=True)
     running = []
@@ -30,15 +56,53 @@ def run_gates(tasks, log_directory):
             running.append((name, process, path))
             print(f"Started {name} gate; log: {path}", flush=True)
         failed = False
-        for name, process, path in running:
-            code = process.wait(timeout=3600)
-            failed |= code != 0
-            print(f"::group::{name} gate (exit {code})", flush=True)
-            with path.open("rb") as stream:
-                while data := stream.read(65536):
-                    sys.stdout.buffer.write(data)
-            sys.stdout.flush()
-            print("::endgroup::", flush=True)
+        reported = set()
+
+        def report_finished():
+            nonlocal failed
+            for name, process, path in running:
+                code = process.poll()
+                if code is None or process.pid in reported:
+                    continue
+                reported.add(process.pid)
+                failed |= code != 0
+                if outcomes is not None:
+                    outcomes[name] = code
+                print(f"::group::{name} gate (exit {code})", flush=True)
+                with path.open("rb") as stream:
+                    while data := stream.read(65536):
+                        sys.stdout.buffer.write(data)
+                sys.stdout.flush()
+                print("::endgroup::", flush=True)
+
+        def report_progress():
+            states = []
+            for name, process, path in running:
+                code = process.poll()
+                state = "running" if code is None else f"exit {code}"
+                states.append(
+                    f"{name}: {state}, {path.stat().st_size} bytes, log: {path}"
+                )
+            print(
+                f"Gate progress after {time.monotonic() - started:.1f}s: "
+                + "; ".join(states),
+                flush=True,
+            )
+
+        for _, process, _ in running:
+            # Preserve the original per-wait budget. Heartbeats must not renew it.
+            deadline = time.monotonic() + WAIT_TIMEOUT_SECONDS
+            report_finished()
+            while process.poll() is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(process.args, WAIT_TIMEOUT_SECONDS)
+                try:
+                    process.wait(timeout=min(PROGRESS_INTERVAL_SECONDS, remaining))
+                except subprocess.TimeoutExpired:
+                    report_finished()
+                    report_progress()
+            report_finished()
         completed = True
         print(
             f"Parallel gates finished in {time.monotonic() - started:.1f}s", flush=True
@@ -49,30 +113,135 @@ def run_gates(tasks, log_directory):
             if not completed:
                 # Each gate owns a new session: stop its compilers/test descendants
                 # without signalling the caller or unrelated runner processes.
+                cleanup_errors: list[OSError | subprocess.TimeoutExpired] = []
+                denied = set()
                 for _, process, _ in running:
-                    # Darwin can reject signals to a zombie-only group with EPERM.
-                    # Reap finished leaders first, but still signal their group:
-                    # a descendant may remain after its leader has exited.
-                    process.poll()
                     try:
-                        os.killpg(process.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
+                        # Still signal groups whose leaders exited: descendants
+                        # can remain, including orphan zombies on Darwin.
+                        process.poll()
+                        signal_owned_group(process, signal.SIGTERM)
+                    except OSError as error:
+                        cleanup_errors.append(error)
+                        denied.add(process.pid)
                 deadline = time.monotonic() + 5
                 while time.monotonic() < deadline and any(
-                    p.poll() is None for _, p, _ in running
+                    p.poll() is None for _, p, _ in running if p.pid not in denied
                 ):
                     time.sleep(0.05)
                 for _, process, _ in running:
-                    process.poll()
                     try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    process.wait(timeout=3600)
+                        process.poll()
+                        signal_owned_group(process, signal.SIGKILL)
+                        denied.discard(process.pid)
+                    except OSError as error:
+                        cleanup_errors.append(error)
+                        denied.add(process.pid)
+                reap_deadline = time.monotonic() + 1
+                for _, process, _ in running:
+                    try:
+                        if process.pid in denied and process.poll() is None:
+                            continue  # Failure retained; cannot claim this join.
+                        process.wait(timeout=max(0, reap_deadline - time.monotonic()))
+                    except (OSError, subprocess.TimeoutExpired) as error:
+                        cleanup_errors.append(error)
+                if cleanup_errors:
+                    for secondary_error in cleanup_errors[1:]:
+                        cleanup_errors[0].add_note(
+                            f"Further cleanup error: {secondary_error!r}"
+                        )
+                    raise cleanup_errors[0]
         finally:
             for stream in streams:
                 stream.close()
+
+
+def run_application_gates(platform, build, python, mode, *, sequential=False):
+    """Collect independent checks, running dependants only after valid builds."""
+    available = []
+    for gate, executable in (("core", "dart"), ("desktop", "flutter")):
+        if shutil.which(executable):
+            available.append(gate)
+        else:
+            print(f"{gate} gate unavailable: add {executable} to PATH", flush=True)
+    directory = ROOT / "test-results/build-gates"
+    outcomes: dict[str, int] = {}
+
+    def execute(tasks):
+        if sequential:
+            for task in tasks:
+                run_gates([task], directory, outcomes=outcomes)
+        elif tasks:
+            run_gates(tasks, directory, outcomes=outcomes)
+
+    def command(gate, phase):
+        return [
+            "/usr/bin/env",
+            f"FORESIGHT_BUILD_MODE={phase}",
+            "bash",
+            str(ROOT / "tools/build_dart_gates.sh"),
+            gate,
+            platform,
+            str(build),
+            python,
+        ]
+
+    if mode != "test-only":
+        # A Desktop release executable is not a widget-test prerequisite. In
+        # normal mode its one full gate checks dependencies, runs its tests and
+        # then collects release compilation errors, without hiding either.
+        builders = (
+            available
+            if mode == "build-only"
+            else [gate for gate in available if gate == "core"]
+        )
+        execute([(f"{gate}-build", command(gate, "build-only")) for gate in builders])
+    if mode != "build-only":
+        ready = []
+        for gate in available:
+            if (
+                (mode == "all" and gate == "desktop")
+                or mode == "test-only"
+                or outcomes[f"{gate}-build"] == 0
+            ):
+                ready.append(gate)
+            else:
+                print(
+                    f"Blocked {gate} checks: its build prerequisites failed", flush=True
+                )
+        execute(
+            [
+                (
+                    f"{gate}-checks",
+                    command(
+                        gate,
+                        "all" if mode == "all" and gate == "desktop" else "test-only",
+                    ),
+                )
+                for gate in ready
+            ]
+        )
+        # A failed analysis/test must not hide the independent compiled boundary.
+        # A failed core build, however, must never run an older service binary.
+        if "core" in available and (mode == "test-only" or outcomes["core-build"] == 0):
+            execute(
+                [
+                    (
+                        "service-checks",
+                        [
+                            "bash",
+                            str(ROOT / "tools/build_service_gate.sh"),
+                            platform,
+                            str(build),
+                            python,
+                        ],
+                    )
+                ]
+            )
+        elif "core" in available:
+            print("Blocked service checks: core build prerequisites failed", flush=True)
+    print("Build/check outcomes: " + repr(outcomes), flush=True)
+    return int(any(code != 0 for code in outcomes.values()))
 
 
 def main():
@@ -81,8 +250,17 @@ def main():
     parser.add_argument("--platform", choices=("macos", "linux"), required=True)
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--python", required=True)
+    parser.add_argument("--all-stages", action="store_true")
+    parser.add_argument("--sequential", action="store_true")
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    if args.all_stages:
+        mode = os.environ.get("FORESIGHT_BUILD_MODE", "all")
+        if mode not in {"all", "build-only", "test-only"}:
+            parser.error("Unknown build mode")
+        return run_application_gates(
+            args.platform, args.build, args.python, mode, sequential=args.sequential
+        )
     tasks = [
         (
             gate,

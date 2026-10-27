@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
@@ -7,6 +8,7 @@ import 'package:foresight_core/src/domain.dart';
 import 'package:foresight_core/src/helper.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'revisions, tombstones, answer provenance and user edits survive restart',
     () async {

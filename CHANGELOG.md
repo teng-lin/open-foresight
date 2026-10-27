@@ -8,17 +8,77 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
+- Replace legacy service transport text with typed diagnostics, honor the canonical log level, and retain a bounded startup event without delaying application ownership. MCP startup and settled RPC handlers also emit closed metadata; public service status exposes bounded diagnostic health.
 - Fresh local model setup defaults to Gemma 4 E2B on all supported memory sizes, while preserving registered models and reusing compatible downloaded models.
 - Settings model choices remain selectable while saved files are discovered. Opening the Gemma chooser checks file metadata without hashing every model; local files are checksum-verified when activated.
 
 ### Added
 
+- Add an opt-in manual update notice in Settings. Checks use public GitHub release
+  metadata and never download or execute installers.
+- Settings → Diagnostics shows the desktop app's local logging session state,
+  as the session reports it, and reveals the profile's private logs folder in
+  the file manager. Copy a health summary of status values and counters into
+  the new bug report form; nothing is uploaded. The
+  [diagnostics guide](docs/diagnostics.md) covers log location, configuration,
+  retention, privacy and troubleshooting.
 - Support opt-in Developer ID signing, notarization and stapling for macOS DMGs,
   with checksums calculated after Gatekeeper assessment of the final image.
 - Rename meetings from the workspace header. Manual names persist across restarts
   and calendar refreshes.
+- Keep private pre-upgrade application database snapshots, limited to two copies
+  for seven days. Each snapshot can require space comparable to the database.
+
+### Changed
+
+- Keep background SQLite execution deadlines active during VM teardown through
+  a small, separately initialized native support image.
+
+- Bound background SQLite read admission and execution, restart failed readers
+  after actual exit, and retain cancelled work until its statement settles.
+
+- Separate meeting and source renderers from feature commands while preserving
+  note saves, answer retries, generation cancellation and dialog ownership.
+
+- Use typed desktop operation requests and replies while retaining request keys,
+  workspace checks and retry behavior when a reply is lost or malformed.
+- Search waits only for actively owned stopped-transcript indexing; saved failed
+  backlog no longer blocks later searches of other indexed documents.
+
+- Bound retained content history to 20 revisions and 32 MiB per entity, with a
+  90-day age limit. Total history grows with the number of entities. Upgrades
+  prune excess history while preserving current content.
+- Refuse database upgrades when a verified backup cannot be created or earlier
+  privacy cleanup cannot finish. Deleting saved content invalidates managed
+  snapshots and prepared restore copies; failed cleanup remains pending.
 
 ### Fixed
+
+- Preserve legacy macOS installation-lock checks through the system temporary
+  directory alias, and remove empty installation directories after native
+  package removal without deleting unowned files.
+
+- Let cancelled model downloads finish cleanup when a descendant still holds a
+  worker output pipe. Reach restart-required promptly when cancellation cannot
+  confirm worker exit or reader retirement.
+- Keep model and recording cleanup responsive while native workers finish.
+  Model replacement and service shutdown retain ownership until native cleanup
+  and pending callbacks settle; recording preserves speech model reuse.
+- Deliver public model progress across the real service connection, scale finite download budgets to pinned asset sizes, preserve actionable setup errors and retire model/audio subprocesses before replacing their owners.
+
+- Keep public model downloads, cache verification and runtime preflight in the application service. Setup dialogs retain publisher consent and receive progress while cancellation joins the owned transfer.
+
+- Bound question-model metadata and download phases, retry attempts and cancellation. An owned transport subprocess can terminate and reap stalled TLS work on the pinned Dart runtime.
+
+- Let search wait briefly for already-stopped meeting transcripts to finish
+  indexing. Stop remains independent of the helper; paused or unconfigured
+  indexing keeps previously indexed documents available.
+- Update meeting transcript search incrementally and recover saved indexing work
+  after restart. Preserve manual edits and deletion while indexing waits for a
+  model to become ready.
+- Reject duplicate active service request IDs and keep cancelled request cleanup from releasing a replacement call.
+- Bound question-model metadata and download phases, retries and cancellation. Use an owned transport subprocess because the pinned Dart runtime can retain stalled TLS sockets after socket or isolate cancellation.
+- Keep capture FIFOs in validated temporary storage and protect new installation locks in the OS account's cache directory. New Linux package hooks keep launch maintenance active until installation completes; upgrades still check the released lock path.
 
 - Check direct Google client setup before signing out Granola accounts when switching providers.
 - Show separate Google and Granola connection choices, with explicit provider switching and account sign-out confirmation. Recover direct Google sign-in after failed Granola attempts and preserve Google client setup across provider changes and restarts.

@@ -23,9 +23,11 @@ class DmgContractTest(unittest.TestCase):
     def test_verification_waits_for_owned_image_lock_without_changing_bytes(self):
         """Exercise real DiskImages EAGAIN beyond the former retry window."""
         import contextlib
+        import errno
         import fcntl
         import io
         import threading
+        import time
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -46,10 +48,25 @@ class DmgContractTest(unittest.TestCase):
                 check=True,
                 timeout=60,
             )
-            digest = packager.image_digest(image)
             released = threading.Event()
             with image.open("r+b") as stream:
-                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                # An image lock can briefly outlive a completed hdiutil create.
+                # Own this exact descriptor before starting
+                # the deliberate six-second verification-contention phase.
+                deadline = time.monotonic() + 3
+                while True:
+                    try:
+                        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError as error:
+                        remaining = deadline - time.monotonic()
+                        if (
+                            error.errno not in (errno.EAGAIN, errno.EWOULDBLOCK)
+                            or remaining <= 0
+                        ):
+                            raise
+                        time.sleep(min(0.01, remaining))
+                digest = packager.image_digest(image)
                 locked = subprocess.run(
                     ["hdiutil", "verify", str(image)],
                     capture_output=True,

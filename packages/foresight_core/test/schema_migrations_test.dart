@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/persistence_fixtures.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
@@ -9,6 +10,7 @@ import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory directory;
   late String path;
   setUp(() {
@@ -26,6 +28,7 @@ void main() {
       final id = store.meeting('Existing meeting');
       store.saveMeetingNotes(id, 'Existing notes');
       store.transcript(id, 'Existing transcript', true, 0, 1000, 'microphone');
+      preIncrementalIndexFixture(store.db);
       store.db.execute(
         'ALTER TABLE meetings DROP COLUMN title_manually_edited',
       );
@@ -69,6 +72,7 @@ void main() {
   test('v19 DDL rolls back when startup fails before migration commit', () {
     final store = Store(path);
     final id = store.meeting('Retained title');
+    preIncrementalIndexFixture(store.db);
     store.db.execute('ALTER TABLE meetings DROP COLUMN title_manually_edited');
     store.db.execute('PRAGMA user_version=18');
     store.db.execute(
@@ -95,7 +99,10 @@ void main() {
     }
     final reopened = Store(path);
     addTearDown(reopened.close);
-    expect(reopened.rows('PRAGMA user_version').single.values.single, 19);
+    expect(
+      reopened.rows('PRAGMA user_version').single.values.single,
+      Store.schemaVersion,
+    );
   });
 
   test('v15 migrates legacy action aliases without losing manual edits', () {
@@ -546,6 +553,7 @@ void main() {
       'text/plain',
       'url:https://example.com/original',
     );
+    preIncrementalIndexFixture(store.db);
     store.db.execute('ALTER TABLE source_details DROP COLUMN source_uri');
     legacyLabelFixture(store.db);
     store.db.execute('PRAGMA user_version=4');

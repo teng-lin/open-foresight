@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
@@ -18,6 +19,7 @@ class RpcArtifactRuntime extends ArtifactGenerator {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   for (final kind in ['summary', 'actions', 'questions']) {
     test(
       'RPC cancellation of $kind cannot persist its late artifact',

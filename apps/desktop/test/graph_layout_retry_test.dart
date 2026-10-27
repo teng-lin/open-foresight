@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:open_foresight/desktop_environment.dart';
 import '../test_support/platform_fixture.dart';
 import 'package:open_foresight/features/sources/sources_controller.dart';
@@ -231,7 +232,7 @@ void main() {
     for (final failed in [false, true]) {
       testWidgets(
         'ready read rejects a changed helper $changed ${failed ? "error" : "completion"}',
-        (tester) async {
+        (tester) async => withDesktopFixtures(tester, () async {
           final f = await _GraphFixture.mount(
             tester,
             'ready',
@@ -260,14 +261,14 @@ void main() {
           expect(f.feature.graphLayoutError, 'Replacement helper message');
           expect(f.connection.graphRequests, isEmpty);
           expect(tester.takeException(), isNull);
-        },
+        }),
       );
     }
   }
   for (final branch in ['cached', 'ready']) {
     testWidgets(
       '$branch deferred failure reset cannot clear a replacement request with the same key',
-      (tester) async {
+      (tester) async => withDesktopFixtures(tester, () async {
         final f = await _GraphFixture.mount(
           tester,
           branch,
@@ -304,7 +305,7 @@ void main() {
         );
         f.expectGeometry();
         expect(tester.takeException(), isNull);
-      },
+      }),
     );
   }
   for (final (branch, heldRead) in [
@@ -315,7 +316,7 @@ void main() {
     for (final code in [RpcErrorCode.busy, RpcErrorCode.internal]) {
       testWidgets(
         '$branch read $heldRead handles $code without a retry loop and recovers unchanged inputs',
-        (tester) async {
+        (tester) async => withDesktopFixtures(tester, () async {
           final failure = RpcError(code, 'Held graph read failed');
           final f = await _GraphFixture.mount(
             tester,
@@ -370,14 +371,14 @@ void main() {
             reason: 'The complete saved layout needs no new embeddings',
           );
           expect(tester.takeException(), isNull);
-        },
+        }),
       );
     }
     for (final boundary in ['session', 'dispose']) {
       for (final failed in [false, true]) {
         testWidgets(
           '$branch read $heldRead rejects retired $boundary ${failed ? "error" : "completion"}',
-          (tester) async {
+          (tester) async => withDesktopFixtures(tester, () async {
             final f = await _GraphFixture.mount(
               tester,
               branch,
@@ -414,7 +415,7 @@ void main() {
               expect(retired.graphLayoutError, 'Replacement owner message');
             }
             expect(tester.takeException(), isNull);
-          },
+          }),
         );
       }
     }

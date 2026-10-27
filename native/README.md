@@ -2,9 +2,22 @@
 
 The C ABI in `foresight_native.h` exposes owned generation, speech and capture workers. Build through the root CMake project, then run CTest for lifecycle and cancellation checks.
 
+`foresight_sql_support` is a separate system-only shared image for mandatory
+SQLite read deadlines. It does not link SQLite, models, audio, the application
+native image, or optional diagnostics. Embeddings must call the startup-only
+`initializeSqliteRuntime(supportLibrary: validatedAbsolutePath)` capability before
+any application SQLite connection or worker. It pins the originally selected
+image and validates its complete versioned code table. The entrypoint also
+freezes SQLite's resolved physical path, code anchor and source identity before
+connections. Read owners bind that original handoff and refuse path selection;
+their SQLite loader requires the frozen mapping to be already present. The Dart
+guard is isolate-local, so embedding owners must pass the handoff to every owned
+isolate and prohibit path initialization in arbitrary unbound isolates.
+See [SQL worker ownership](../docs/validation/sqlite-read-worker-budget.md).
+
 Generation supports explicit llama.cpp and LiteRT-LM workers. Local Gemma grounded requests use the versioned `x-foresight-grounded-request` schema annotation, consumed by `services/inference/main.cpp` and the citation checker in `services/inference/grounded.h`. It selects evidence units, composes text, checks source citations and numeric fidelity, and performs a separate support check. The configured context is 4096 tokens with a token-aware output reserve. Verification is fallible; failed drafts get one repair attempt followed by a labelled source fallback.
 
-Capture uses PipeWire on Linux and Core Audio on macOS; speech uses whisper.cpp on mono PCM. Workers own their subprocess groups, cancel them on request, and reap them before releasing resources. Model assets and executable paths must be registered explicitly. Deterministic lifecycle tests do not establish real-model quality; real-model tests are opt-in.
+Capture uses PipeWire on Linux and Core Audio on macOS; speech uses whisper.cpp on mono PCM. PipeWire FIFOs use a validated absolute `TMPDIR` (or `/var/tmp` when unset), private operation-owned directories and descriptor-anchored cleanup. Unsafe/symlinked temporary paths refuse capture instead of falling back silently. Workers own their subprocess groups, cancel them on request, and reap them before releasing resources. Model assets and executable paths must be registered explicitly. Deterministic lifecycle tests do not establish real-model quality; real-model tests are opt-in.
 
 
 ### Explicit macOS system audio setup
@@ -48,6 +61,15 @@ worker has exited.
 
 Live speech uses `foresight-whisper-worker`, installed beside the diagnostic Whisper CLI. Recording retains native speech handles across segments; microphone and playback handles share one serialized model worker. The final handle releases the worker at recording shutdown. Explicit external installations can set `FORESIGHT_WHISPER_WORKER`; CLI-only installations retain compatibility with the per-request diagnostic path.
 
+## Asynchronous application cleanup
+
+Generation and recording use native-owned completion tokens for probe, worker
+join and retirement. Their synchronous Dart close/dispose methods revoke work;
+await `closed` for actual cleanup before releasing dependent resources. The
+legacy C destroy/probe entrypoints remain synchronous for C++/Python callers.
+See [native retirement ownership](../docs/validation/native-retirement.md) for
+the capability contract, complete consumer dispositions and qualification limits.
+
 ## Verifying native changes
 
 - Build and test through the repository-root CMake project. The standalone
@@ -55,8 +77,12 @@ Live speech uses `foresight-whisper-worker`, installed beside the diagnostic Whi
   probe-failure and inference tests; run those too, reusing verified dependency
   libraries and tools.
 - Point the Dart core and desktop suites at the freshly built library and helper
-  (`FORESIGHT_NATIVE_LIBRARY`, `FORESIGHT_HELPER`) so their native integration
-  tests run rather than skip.
+  (`FORESIGHT_NATIVE_LIBRARY`, `FORESIGHT_HELPER`) and set
+  `FORESIGHT_TEST_HELPER` to `build/services/helper/ForesightHelperTest` from
+  the same repository-root build, so the controlled indexing test also runs
+  rather than skips. The core build gate exports all three paths. The test
+  helper is separate from production-helper/model acceptance; use the normal
+  Release build with `BUILD_TESTING` enabled to produce it.
 - When data moves between argv and stdin, update and exercise every runner
   fixture and consumer, not only the C++ side.
 - Capture fixtures must honor the production output protocol: `pw-record` writes

@@ -6,16 +6,16 @@ import 'package:grpc/grpc.dart';
 
 import '../dedicated_query_acquisition.dart';
 import '../dedicated_query_runtime.dart';
-import '../domain.dart';
+import 'service_runtime_ports.dart';
 import '../encrypted_query_runtime.dart';
 import '../gemma_download.dart' show ModelDownloadCancelled;
 import '../generated/rag_service.pb.dart';
 import '../model_setup.dart';
+import '../model_vault.dart' show MacModelVault;
 import '../native.dart' show liteRtRunner;
 import '../operation_registry.dart';
 import '../operation_requests.dart';
 import '../operations.dart';
-import '../platform_services.dart';
 import '../portable_query_setup.dart';
 import '../reference_query_detector.dart';
 import '../rpc_error.dart';
@@ -37,7 +37,7 @@ final class ModelRegistry {
   }) : _queryRuntime = queryRuntime,
        providedQueryRuntime = queryRuntime != null;
 
-  final Domain domain;
+  final ModelWorkspace domain;
   final void Function() changed, wakeDetection, invalidateEmbeddings;
   final bool Function(String) ownsDetection;
   final bool providedQueryRuntime;
@@ -81,12 +81,16 @@ final class ModelRegistry {
   Future<List<String>> detectQuestions(String text, String request) async {
     if (!providedQueryRuntime) {
       if (store.sourceQueries.model(dedicatedQueryModelKind) == null) {
-        await discoverDedicatedQueryModel(store, current: () => !_closed);
+        await discoverDedicatedQueryModel(
+          store,
+          current: () => !_closed,
+          configuration: domain.configuration,
+        );
       }
       final model = store.sourceQueries.model(dedicatedQueryModelKind);
       final worker = model?.backend == portableQueryBackend
           ? model?.runtime
-          : runtimeConfiguration['FORESIGHT_QUERY_WORKER'];
+          : domain.configuration['FORESIGHT_QUERY_WORKER'];
       if (model == null ||
           worker == null ||
           (model.backend != dedicatedQueryBackend &&
@@ -114,6 +118,10 @@ final class ModelRegistry {
                 worker: worker,
                 encryptedModel: model.path,
                 vaultRoot: File(model.path).parent,
+                vaultFactory: (root) => MacModelVault(
+                  root: root,
+                  configuration: domain.configuration,
+                ),
               )
             : DedicatedQueryRuntime(
                 python: model.runtime,
@@ -137,14 +145,17 @@ final class ModelRegistry {
   }
 
   Future<void> acquireQuery({bool Function()? current}) async {
-    if (dedicatedQueryTermsUri() == null ||
+    if (dedicatedQueryTermsUri(configuration: domain.configuration) == null ||
         store.preference(dedicatedQueryTermsKey) != 'accepted') {
       throw RpcError(
         RpcErrorCode.denied,
         'Review and accept the configured question model terms for this revision before downloading.',
       );
     }
-    final acquisition = DedicatedQueryAcquisition.distribution(store);
+    final acquisition = DedicatedQueryAcquisition.distribution(
+      store,
+      configuration: domain.configuration,
+    );
     _acquisition = acquisition;
     _downloadReceived = _downloadTotal = 0;
     _notify();
@@ -174,6 +185,7 @@ final class ModelRegistry {
         request.runtime,
         request.digest,
         current: () => _current(current),
+        configuration: domain.configuration,
       );
     } on ModelDownloadCancelled catch (error) {
       throw RpcError(RpcErrorCode.cancelled, error.toString());
@@ -208,12 +220,17 @@ final class ModelRegistry {
         runtime: request.runtime,
         expectedDigest: request.digest,
         current: () => _current(current),
+        configuration: domain.configuration,
       );
       return;
     }
+    final config = domain.configuration;
     final runtime =
         request.kind == 'generation' && request.backend == 'litert_lm'
-        ? requireInstalledRuntime(liteRtRunner(request.runtime ?? ''))
+        ? requireInstalledRuntime(
+            liteRtRunner(request.runtime ?? '', configuration: config),
+            configuration: config,
+          )
         : request.runtime ?? '';
     await store.register(
       request.kind,
@@ -230,17 +247,31 @@ final class ModelRegistry {
     ModelsGenerationRequest request, {
     bool Function()? current,
   }) async {
-    final candidate = await configureGeneration(
-      store,
-      runtimeConfiguration.nativeLibrary,
-      request.path,
-      request.runtime,
-      backend: request.backend,
-      modelType: request.modelType,
-      current: () => _current(current),
+    final workspace = domain.workspaceGeneration;
+    final config = domain.configuration;
+    var registered = false;
+    await domain.generationRuntimes.replace(
+      (attempt) async {
+        final candidate = await configureGeneration(
+          store,
+          config.nativeLibrary,
+          request.path,
+          request.runtime,
+          configuration: config,
+          backend: request.backend,
+          modelType: request.modelType,
+          current: attempt.current,
+          onCandidate: attempt.own,
+          retire: attempt.retire,
+        );
+        registered = true;
+        return candidate;
+      },
+      current: () =>
+          !_closed &&
+          (registered || (current?.call() ?? true)) &&
+          workspace == domain.workspaceGeneration,
     );
-    domain.generator?.close();
-    domain.generator = candidate;
   }
 
   Future<void> configureEmbeddingModel(

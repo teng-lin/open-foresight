@@ -1,3 +1,5 @@
+import 'package:foresight_core/src/model_acquisition.dart'
+    show runModelTransportWorker;
 import 'package:foresight_core/src/platform_services.dart';
 import 'dart:async';
 import 'dart:io';
@@ -5,14 +7,58 @@ import 'dart:convert';
 import 'package:foresight_core/src/profile_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/service.dart';
+import 'package:foresight_core/src/service_diagnostics.dart';
 import 'package:foresight_core/src/operations.dart';
+import 'package:foresight_core/src/persistence/restore_command.dart';
 import 'package:foresight_core/src/service_compatibility.dart';
 import 'package:foresight_core/src/service_socket.dart' show probeSocketPath;
 
+import 'package:foresight_core/src/diagnostic_bootstrap.dart';
+import 'package:foresight_core/src/diagnostics/startup.dart';
+import 'package:foresight_core/src/diagnostics/session.dart';
+import 'package:foresight_core/src/diagnostics/storage_worker_dispatch.dart';
+
 Future<void> main(List<String> args) async {
+  final internal = DiagnosticWorkerInvocation.parse(args);
+  if (internal.kind != DiagnosticWorkerInvocationKind.absent) {
+    if (internal.kind != DiagnosticWorkerInvocationKind.valid) {
+      exitCode = 64;
+      return;
+    }
+    try {
+      final selected = loadDiagnosticChildStartup(internal);
+      exitCode = await runDiagnosticStorageWorker(
+        functions: selected.functions,
+        expectedParentPid: selected.expectedParentPid,
+        nativeId: selected.nativeId,
+        dartId: selected.dartId,
+        catalogId: selected.catalogId,
+        verifyBeforeHello: selected.verifyBeforeHello,
+      );
+    } catch (_) {
+      exitCode = 65;
+    }
+    return;
+  }
+  if (args.any((arg) => arg.startsWith('--model-transport-worker'))) {
+    if (args.length != 1 || args.single != '--model-transport-worker') {
+      exitCode = 64;
+      return;
+    }
+    await runModelTransportWorker();
+    return;
+  }
+  if (isRestoreInvocation(args)) {
+    await _runRestoreUtility(args);
+    return;
+  }
   IsolatedApplicationService? service;
+  LoggingSession? diagnostics;
   try {
+    final runtime = ApplicationRuntimeBootstrap.prepare(DiagnosticHost.service);
+    diagnostics = await runtime.startDiagnostics(transient: args.isNotEmpty);
     final profile = ProfilePaths.resolve(runtimeConfiguration.environment);
+    diagnostics.selectProfile(profile.data);
     if (args.isNotEmpty) {
       if (args.length != 1) {
         throw ArgumentError(
@@ -158,8 +204,16 @@ Future<void> main(List<String> args) async {
       }
       return;
     }
+    await startServiceDiagnostics(diagnostics.producer);
     try {
-      service = await IsolatedApplicationService.start(profile);
+      service =
+          await runWithServiceDiagnostics<Future<IsolatedApplicationService>>(
+            diagnostics.producer,
+            () => IsolatedApplicationService.start(
+              profile,
+              diagnostics: diagnostics,
+            ),
+          );
     } catch (error) {
       // A detached launch has no stderr; tell the launcher why (L3).
       recordServiceStartupFailure(profile, error);
@@ -182,6 +236,49 @@ Future<void> main(List<String> args) async {
   } catch (error, stack) {
     stderr.writeln('$error\n$stack');
     exitCode = 1;
+  } finally {
+    // Application/native cleanup must finish before logger close can request
+    // a process exit to retire a held diagnostic FFI/isolate owner.
+    await service?.close();
+    final result = await diagnostics?.close();
+    if (result?.requiresExplicitExit == true) exit(exitCode);
+  }
+}
+
+/// The offline restore utility: transient, never a profile owner or
+/// candidate. Arguments and the data-loss confirmation are validated before
+/// any bootstrap, SQLite or profile access.
+Future<void> _runRestoreUtility(List<String> args) async {
+  final command = RestoreCommand.parse(args, stderr);
+  if (command == null) {
+    exitCode = 64;
+    return;
+  }
+  LoggingSession? diagnostics;
+  try {
+    final runtime = ApplicationRuntimeBootstrap.prepare(DiagnosticHost.service);
+    diagnostics = await runtime.startDiagnostics(transient: true);
+    final profile = ProfilePaths.resolve(runtimeConfiguration.environment);
+    diagnostics.selectProfile(profile.data);
+    exitCode = await runRestoreProfile(command, profile, stdout, stderr);
+  } catch (error) {
+    stderr.writeln('The restore command could not start: $error');
+    exitCode = 1;
+  } finally {
+    // The session's own bounded close; a logging problem never replaces the
+    // utility's result or output.
+    var explicit = false;
+    try {
+      explicit = (await diagnostics?.close())?.requiresExplicitExit == true;
+    } catch (error) {
+      stderr.writeln('Diagnostic logging did not shut down cleanly: $error');
+      explicit = true;
+    }
+    if (explicit) {
+      await stdout.flush();
+      await stderr.flush();
+      exit(exitCode);
+    }
   }
 }
 

@@ -48,15 +48,65 @@ class HelperChannel extends ClientChannel {
 
 class _HelperConnection extends Http2ClientConnection {
   ClientTransportConnection? _transport;
+  final ClientTransportConnector? _connector;
+  final _connecting = <Future<ClientTransportConnection>>{};
+  var _closing = false;
+  Future<void>? _termination;
 
-  _HelperConnection(super.host, super.port, super.options);
+  _HelperConnection(super.host, super.port, super.options) : _connector = null;
 
   _HelperConnection.fromConnector(super.connector, super.options)
-    : super.fromClientTransportConnector();
+    : _connector = connector,
+      super.fromClientTransportConnector();
 
   @override
-  Future<ClientTransportConnection> connectTransport() async =>
-      _transport = await super.connectTransport();
+  Future<ClientTransportConnection> connectTransport() {
+    if (_connector is! HelperTransportConnector) {
+      // Preserve upstream TLS/proxy/non-owned connector lifetime and policy.
+      // Only our private Unix connector supports the owned close/join contract.
+      return super.connectTransport().then(
+        (transport) => _transport = transport,
+      );
+    }
+    if (_closing) {
+      return Future.error(GrpcError.unavailable('Helper transport is closing'));
+    }
+    late final Future<ClientTransportConnection> attempt;
+    attempt = () async {
+      try {
+        return _transport = await super.connectTransport();
+      } finally {
+        _connecting.remove(attempt);
+      }
+    }();
+    _connecting.add(attempt);
+    return attempt;
+  }
+
+  @override
+  Future<void> terminate() {
+    if (_connector is! HelperTransportConnector) return super.terminate();
+    return _termination ??= _terminateOwned();
+  }
+
+  Future<void> _terminateOwned() async {
+    _closing = true;
+    try {
+      await super.terminate();
+    } finally {
+      final connector = _connector as HelperTransportConnector;
+      connector.shutdown();
+      // grpc 4.3.1 only terminates a transport that finished connecting. An
+      // operation canceled during connect must also join its late socket.
+      while (_connecting.isNotEmpty) {
+        await Future.wait([
+          for (final attempt in _connecting.toList())
+            attempt.then<void>((_) {}, onError: (Object error) {}),
+        ]);
+      }
+      await connector.close();
+    }
+  }
 
   @override
   GrpcTransportStream makeRequest(

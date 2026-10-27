@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -36,6 +37,7 @@ final class GatedWorker implements ReadWorker {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Store writer;
   late String path;
   setUp(() {
@@ -491,6 +493,75 @@ void main() {
         ),
       );
       expect(selected.value!.single.id, 1);
+    },
+  );
+
+  test(
+    'simultaneous watches beyond worker admission all settle with current values',
+    () async {
+      writer.importText('Source', 'body', 'text/plain', 'fixture');
+      writer.setPreference('inactivity', '30');
+      // SqliteReadWorker admits 16 reservations by default. Every watch below
+      // is subscribed in one turn, before any worker result can arrive.
+      const extra = 24;
+      for (var i = 0; i < extra; i++) {
+        writer.setPreference('fixture.$i', 'value-$i');
+      }
+      final reader = SqliteStoreReader.open(
+        path,
+        profile: 'fixture',
+        connection: 'first',
+      );
+      addTearDown(reader.close);
+      final events = <String, List<ReadResult<Object?>>>{};
+      final outcomes = <String, Future<ReadResult<Object?>>>{};
+      void watch<T>(String name, ReadQuery<T> query) {
+        final received = events[name] = [];
+        final outcome = Completer<ReadResult<Object?>>();
+        outcomes[name] = outcome.future;
+        final subscription = reader.watch(query).listen((event) {
+          received.add(event.asType<Object?>());
+          if (!outcome.isCompleted && (event.current || event.error != null)) {
+            outcome.complete(event.asType<Object?>());
+          }
+        });
+        addTearDown(subscription.cancel);
+      }
+
+      for (var i = 0; i < extra; i++) {
+        watch('fixture.$i', StoreReadQueries.preference('fixture.$i'));
+      }
+      watch('inactivity', StoreReadQueries.preference('inactivity', '15'));
+      watch('stats', StoreReadQueries.outputStats(now: DateTime(2026, 10, 21)));
+      final settled = await Future.wait(
+        outcomes.values,
+      ).timeout(const Duration(seconds: 10));
+      // Join every actual read before judging, so a lost value is permanent:
+      // nothing is left that could still deliver it without a new commit.
+      while (reader.busy) {
+        await reader.activityChanges.first;
+      }
+      await Future<void>.delayed(Duration.zero);
+      final lost = [
+        for (final entry in events.entries)
+          if (!entry.value.any((event) => event.current)) entry.key,
+      ];
+      expect(lost, isEmpty, reason: 'values lost after every read settled');
+      final refused = {
+        for (final entry in events.entries)
+          if (entry.value.any((event) => event.error != null))
+            entry.key: entry.value
+                .where((event) => event.error != null)
+                .map((event) => '${event.freshness.name}: ${event.error}')
+                .toList(),
+      };
+      expect(refused, isEmpty, reason: 'admission refusals reached readers');
+      expect(settled.every((result) => result.current), isTrue);
+      for (var i = 0; i < extra; i++) {
+        expect(events['fixture.$i']!.last.value, 'value-$i');
+      }
+      expect(events['inactivity']!.last.value, '30');
+      expect((events['stats']!.last.value as OutputStats).sources, 1);
     },
   );
 

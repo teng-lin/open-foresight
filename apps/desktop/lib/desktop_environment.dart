@@ -2,7 +2,11 @@ import 'dart:io';
 import 'platform_capabilities.dart';
 
 import 'package:foresight_core/desktop.dart'
-    show openPlatformUri, platformNotification;
+    show
+        DiagnosticSupportPort,
+        UnavailableDiagnosticSupport,
+        openPlatformUri,
+        platformNotification;
 
 export 'platform_capabilities.dart';
 
@@ -25,6 +29,7 @@ class DesktopEnvironment {
     this.start = _noStart,
     this.openUri = _noUri,
     this.notify = _noNotification,
+    this.diagnosticSupport = const UnavailableDiagnosticSupport(),
   }) : _homeDirectory = homeDirectory;
 
   factory DesktopEnvironment.production({
@@ -100,6 +105,25 @@ class DesktopEnvironment {
   final DesktopProcessStarter start;
   final Future<void> Function(Uri) openUri;
   final Future<void> Function(String, String) notify;
+
+  /// Startup binds the local logging session's support adapter here; tests
+  /// and failed startup keep the inert unavailable port.
+  final DiagnosticSupportPort diagnosticSupport;
+
+  DesktopEnvironment withDiagnosticSupport(DiagnosticSupportPort support) =>
+      DesktopEnvironment(
+        variables: variables,
+        capabilities: capabilities,
+        homeDirectory: _homeDirectory,
+        configDirectory: configDirectory,
+        dataDirectory: dataDirectory,
+        launcher: launcher,
+        run: run,
+        start: start,
+        openUri: openUri,
+        notify: notify,
+        diagnosticSupport: support,
+      );
 
   static Future<ProcessResult> _noProcess(
     String executable,

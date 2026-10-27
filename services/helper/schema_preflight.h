@@ -22,7 +22,7 @@
 
 namespace foresight::schema {
 namespace fs = std::filesystem;
-inline constexpr int helper_version = 1;
+inline constexpr int helper_version = 2;
 inline constexpr std::array<const char *, 3> helper_members = {
     "agent_metadata.db", "linux_state.db", "rag_vector.db"};
 

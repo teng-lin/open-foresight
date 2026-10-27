@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -78,6 +79,7 @@ class _ChildGapTimer implements Timer {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   for (final kind in ['summary', 'actions', 'preparation']) {
     test('$kind retains ownership between settled native children', () async {
       final directory = createTestTempDirectorySync('child-gap-');

@@ -1,7 +1,12 @@
 import '../operation_descriptor.dart';
+import '../client_contract.dart';
+import '../client_results.dart';
+import '../client_requests/security.dart';
 import '../operation_argument_schema.dart';
 
 const securityAttachDesktopDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeBoolean),
+  requestEncoder: OperationInputEncoder<SecurityAttachDesktopInput>(),
   scope: OperationScope.service,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -22,6 +27,8 @@ const securityAttachDesktopDescriptor = OperationDescriptor(
 );
 
 const securityDetachDesktopDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeBoolean),
+  requestEncoder: OperationInputEncoder<SecurityDetachDesktopInput>(),
   scope: OperationScope.service,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -39,6 +46,8 @@ const securityDetachDesktopDescriptor = OperationDescriptor(
 );
 
 const securityDesktopVisibilityDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeBoolean),
+  requestEncoder: OperationInputEncoder<SecurityDesktopVisibilityInput>(),
   scope: OperationScope.service,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -58,6 +67,8 @@ const securityDesktopVisibilityDescriptor = OperationDescriptor(
 );
 
 const securityDecideDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeBoolean),
+  requestEncoder: OperationInputEncoder<SecurityDecideInput>(),
   scope: OperationScope.service,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -78,6 +89,8 @@ const securityDecideDescriptor = OperationDescriptor(
 );
 
 const securityAllowImportRootDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeBoolean),
+  requestEncoder: OperationInputEncoder<SecurityAllowImportRootInput>(),
   scope: OperationScope.service,
   readOnly: false,
   approval: ApprovalPolicy.desktop,

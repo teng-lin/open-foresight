@@ -22,4 +22,42 @@ if(FORESIGHT_SANITIZERS OR FORESIGHT_THREAD_SANITIZER)
       add_link_options(-shared-libasan)
     endif()
   endif()
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # The diagnostic launcher intentionally replaces the child's environment.
+    # Shared sanitizer runtimes must remain resolvable without LD_LIBRARY_PATH.
+    execute_process(COMMAND "${CMAKE_CXX_COMPILER}" --print-runtime-dir
+      TIMEOUT 30
+      RESULT_VARIABLE _fs_runtime_result
+      OUTPUT_VARIABLE _fs_runtime_directory OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT _fs_runtime_result EQUAL 0 OR NOT IS_ABSOLUTE "${_fs_runtime_directory}"
+        OR NOT IS_DIRECTORY "${_fs_runtime_directory}")
+      message(FATAL_ERROR "Cannot locate the selected Clang sanitizer runtime directory")
+    endif()
+    add_link_options("LINKER:-rpath,${_fs_runtime_directory}")
+    # Clean diagnostic children cannot inherit the gate's environment options.
+    # Give instrumented test binaries the same fatal/report policy by default.
+    if(NOT TARGET foresight_sanitizer_defaults)
+      set(_fs_reports "${CMAKE_BINARY_DIR}/sanitizer-reports")
+      if(_fs_reports MATCHES "[\"\\\\\r\n:;]" OR IS_SYMLINK "${_fs_reports}")
+        message(FATAL_ERROR "Unsafe sanitizer report directory")
+      endif()
+      file(MAKE_DIRECTORY "${_fs_reports}")
+      set(_fs_defaults "${CMAKE_BINARY_DIR}/foresight-sanitizer-defaults.c")
+      if(FORESIGHT_THREAD_SANITIZER)
+        file(WRITE "${_fs_defaults}"
+          "const char *__tsan_default_options(void) { return \"halt_on_error=1:exitcode=66:log_path=${_fs_reports}/tsan\"; }\n")
+      else()
+        file(WRITE "${_fs_defaults}"
+          "const char *__asan_default_options(void) { return \"detect_leaks=1:halt_on_error=1:abort_on_error=1:malloc_context_size=128:log_path=${_fs_reports}/asan\"; }\n"
+          "const char *__ubsan_default_options(void) { return \"halt_on_error=1:print_stacktrace=1:log_path=${_fs_reports}/ubsan\"; }\n")
+      endif()
+      add_library(foresight_sanitizer_defaults OBJECT "${_fs_defaults}")
+      set_target_properties(foresight_sanitizer_defaults PROPERTIES POSITION_INDEPENDENT_CODE ON)
+      target_compile_options(foresight_sanitizer_defaults PRIVATE -fno-sanitize=all)
+    endif()
+    get_directory_property(_fs_link_libraries LINK_LIBRARIES)
+    if(NOT "foresight_sanitizer_defaults" IN_LIST _fs_link_libraries)
+      link_libraries(foresight_sanitizer_defaults)
+    endif()
+  endif()
 endif()

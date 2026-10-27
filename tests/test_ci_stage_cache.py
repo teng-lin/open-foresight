@@ -409,7 +409,7 @@ class ProducerTests(SourceTree):
                 raise failure
 
             with (
-                self.subTest(failure=failure),
+                self.subTest(failure=repr(failure)),
                 self.assertRaises(type(failure)) as caught,
             ):
                 self.find_work(candidates=candidates, jobs_api=jobs)

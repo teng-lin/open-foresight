@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
       REQUIRE(sqlite3_prepare_v2(database, "PRAGMA user_version", -1, &query,
                                  nullptr) == SQLITE_OK);
       REQUIRE(sqlite3_step(query) == SQLITE_ROW &&
-              sqlite3_column_int(query, 0) == 1);
+              sqlite3_column_int(query, 0) == 2);
       sqlite3_finalize(query);
       sqlite3_close(database);
     }
@@ -487,7 +487,7 @@ int main(int argc, char **argv) {
       int result;
       waitpid(pid, &result, 0);
       pid = -1;
-      REQUIRE(WIFEXITED(result) && WEXITSTATUS(result) == 86);
+      REQUIRE(WIFSIGNALED(result) && WTERMSIG(result) == SIGKILL);
       std::filesystem::remove(dir + "/.crash-at");
       stub = start();
       REQUIRE(call(model, configured,

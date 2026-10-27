@@ -59,6 +59,26 @@ void main() {
         'idempotency_key': false,
         'tools': <Object?>[],
       };
+      // Explicit new desktop asset contracts; keep every historical policy
+      // and exact MCP exposure comparison below, including no new tools.
+      expected['models.download_asset'] = {
+        'requires_helper': false,
+        'approval': true,
+        'approval_web_search': true,
+        'notifies_changes': true,
+        'workspace_epoch': false,
+        'idempotency_key': false,
+        'tools': <Object?>[],
+      };
+      expected['models.inspect_asset'] = {
+        'requires_helper': false,
+        'approval': false,
+        'approval_web_search': false,
+        'notifies_changes': false,
+        'workspace_epoch': false,
+        'idempotency_key': false,
+        'tools': <Object?>[],
+      };
       final actual = <String, Object?>{};
       for (final operation in Operation.values) {
         actual[operation.wire] = {

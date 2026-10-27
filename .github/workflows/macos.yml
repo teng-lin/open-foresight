@@ -9,17 +9,18 @@ concurrency:
   group: ${{ inputs.sweep && format('main-sweep-{0}', inputs.sweep_namespace) || format('platform-checks-{0}-{1}', github.workflow, inputs.request_id || (inputs.preview && format('preview-{0}', github.run_id) || (github.event_name == 'pull_request' && github.ref || inputs.source || github.sha))) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  macos:
+  macos-checks:
     runs-on: macos-15
-    timeout-minutes: 180
-    outputs:
-      bundle_id: ${{ steps.macos-candidate.outputs.artifact-id }}
-      bundle_digest: ${{ steps.macos-candidate.outputs.artifact-digest }}
-      attempt: ${{ steps.macos-receipt.outputs.attempt }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [contracts, native, core, desktop, service]
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       FORESIGHT_BUILD_JOBS: '3'
-      FORESIGHT_PARALLEL_GATES: '1'
+      FORESIGHT_CORE_TEST_CONCURRENCY: '2'
+      FORESIGHT_PARALLEL_GATES: '0'
       FORESIGHT_COVERAGE: ${{ (inputs.tier == 'release' || inputs.macos_coverage) && github.event_name != 'pull_request' && '1' || '0' }}
       FORESIGHT_CORE_COVERAGE_MIN: '0'
       FORESIGHT_HELPER: ${{ github.workspace }}/build/services/helper/ForesightHelper
@@ -38,24 +39,106 @@ jobs:
         version: ${{ inputs.version || needs.distribution-number.outputs.version }}
         build-number: ${{ inputs.build_number || needs.distribution-number.outputs.build_number }}
         label: ${{ inputs.label }}
-    - name: Run macOS source and SDK contracts
-      run: .venv/bin/python tools/platform_python_tests.py --platform macos
-    - name: Build and test the complete macOS application once
+    - name: Run independent macOS source and SDK contracts
+      if: matrix.stage == 'contracts'
       run: |
-        task_cmake_args=(
-          -G Ninja
-          "-DCMAKE_PREFIX_PATH=$PWD/build/sdk"
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
-          -DCMAKE_OSX_ARCHITECTURES=arm64
-          "-DICU_ROOT=$(brew --prefix icu4c)"
-          '-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local'
-        )
-        # Qualify resolved dependency roots before compiling any application code.
-        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-          "-DPython3_EXECUTABLE=$PWD/.venv/bin/python" "${task_cmake_args[@]}"
-        .venv/bin/python tools/verify_macos_cmake_cache.py build/CMakeCache.txt \
-          --sdk build/sdk --icu "$(brew --prefix icu4c)"
-        tools/build.sh --platform macos --stage all "${task_cmake_args[@]}"
+        set -o pipefail
+        mkdir -p test-results/macos
+        .venv/bin/python tools/platform_python_tests.py --platform macos 2>&1 | tee test-results/macos/contracts.log
+    - name: Run the complete isolated macOS stage
+      if: matrix.stage != 'contracts'
+      env:
+        MACOS_CHECK_STAGE: ${{ matrix.stage }}
+      run: |
+        set -o pipefail
+        mkdir -p test-results/macos
+        {
+          task_cmake_args=(
+            -G Ninja
+            "-DCMAKE_PREFIX_PATH=$PWD/build/sdk"
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+            -DCMAKE_OSX_ARCHITECTURES=arm64
+            "-DICU_ROOT=$(brew --prefix icu4c)"
+            '-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local'
+          )
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            "-DPython3_EXECUTABLE=$PWD/.venv/bin/python" "${task_cmake_args[@]}"
+          .venv/bin/python tools/verify_macos_cmake_cache.py build/CMakeCache.txt \
+            --sdk build/sdk --icu "$(brew --prefix icu4c)"
+          if [[ "$MACOS_CHECK_STAGE" != native ]]; then
+            tools/build.sh --platform macos --stage native --build-only "${task_cmake_args[@]}"
+          fi
+          if [[ "$MACOS_CHECK_STAGE" == service ]]; then
+            tools/build.sh --platform macos --stage core --build-only "${task_cmake_args[@]}"
+          fi
+          tools/build.sh --platform macos --stage "$MACOS_CHECK_STAGE" "${task_cmake_args[@]}"
+        } 2>&1 | tee "test-results/macos/${MACOS_CHECK_STAGE}.log"
+    - name: Retain every macOS lane's raw evidence
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: macos-${{ matrix.stage }}-evidence-${{ inputs.request_id || inputs.source || github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
+        overwrite: true
+        path: |
+          build/Testing/Temporary/LastTest.log
+          test-results/
+          coverage/
+          apps/desktop/coverage/lcov.info
+        if-no-files-found: ignore
+    needs:
+    - changes
+    - distribution-number
+    if: '!cancelled() && needs.changes.outputs.macos == ''true'' && (inputs.tier != ''release'' || needs.distribution-number.result == ''success'')'
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 180
+    outputs:
+      bundle_id: ${{ steps.macos-candidate.outputs.artifact-id }}
+      bundle_digest: ${{ steps.macos-candidate.outputs.artifact-digest }}
+      attempt: ${{ steps.macos-receipt.outputs.attempt }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      FORESIGHT_BUILD_JOBS: '3'
+      FORESIGHT_PARALLEL_GATES: '0'
+      FORESIGHT_COVERAGE: ${{ (inputs.tier == 'release' || inputs.macos_coverage) && github.event_name != 'pull_request' && '1' || '0' }}
+      FORESIGHT_CORE_COVERAGE_MIN: '0'
+      FORESIGHT_HELPER: ${{ github.workspace }}/build/services/helper/ForesightHelper
+      FORESIGHT_MACOS_UI_TEST: '1'
+      FORESIGHT_REQUIRE_NATIVE_UI_TEST: '1'
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-macos-stage
+      with:
+        source: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        own-pr: ${{ github.event.pull_request.number || 0 }}
+        version: ${{ inputs.version || needs.distribution-number.outputs.version }}
+        build-number: ${{ inputs.build_number || needs.distribution-number.outputs.build_number }}
+        label: ${{ inputs.label }}
+    - name: Build the macOS application for independent package checks
+      id: macos-build
+      run: |
+        set -o pipefail
+        mkdir -p test-results/macos
+        {
+          task_cmake_args=(
+            -G Ninja
+            "-DCMAKE_PREFIX_PATH=$PWD/build/sdk"
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+            -DCMAKE_OSX_ARCHITECTURES=arm64
+            "-DICU_ROOT=$(brew --prefix icu4c)"
+            '-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local'
+          )
+          # Qualify resolved dependency roots before compiling any application code.
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            "-DPython3_EXECUTABLE=$PWD/.venv/bin/python" "${task_cmake_args[@]}"
+          .venv/bin/python tools/verify_macos_cmake_cache.py build/CMakeCache.txt \
+            --sdk build/sdk --icu "$(brew --prefix icu4c)"
+          tools/build.sh --platform macos --stage all --build-only "${task_cmake_args[@]}"
+        } 2>&1 | tee test-results/macos/package-build.log
     - name: Fetch verified macos-runtime
       env:
         GH_TOKEN: ${{ github.token }}
@@ -68,6 +151,7 @@ jobs:
         python tools/ci_macos_dependencies.py --component macos-runtime --prefix build/macos-runtimes --own-head "$OWN_HEAD" --own-pr "$OWN_PR" "${args[@]}"
         python tools/ci_verify_dependency.py --component macos-runtime --prefix build/macos-runtimes
     - name: Assemble complete ad hoc application
+      id: macos-assembly
       env:
         FORESIGHT_SEARCH_API_KEY: ${{ secrets.FORESIGHT_SEARCH_API_KEY }}
         FORESIGHT_WEB_CONTENT_API_KEY: ${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
@@ -88,12 +172,18 @@ jobs:
             FORESIGHT_RESOURCES="$task_resources" dart run tool/verify_google_configuration.dart)
         fi
     - name: Verify bundled inference without developer environment
+      id: macos-inference
+      if: ${{ !cancelled() && steps.macos-assembly.outcome == 'success' }}
       run: |
         .venv/bin/python tools/verify_macos_release_runtime.py 'dist/Open Foresight.app' \
           --output test-results/macos-release-runtime.json
     - name: Installed application tooling tests
+      id: macos-installed
+      if: ${{ !cancelled() && steps.macos-assembly.outcome == 'success' }}
       run: .venv/bin/python -m unittest tests.test_macos_tools.CompiledMacComponentTests -v
     - name: Relocated application MCP smoke with minimal environment
+      id: macos-smoke
+      if: ${{ !cancelled() && steps.macos-assembly.outcome == 'success' }}
       run: |
         .venv/bin/python tools/smoke_macos_bundle.py 'dist/Open Foresight.app' \
           --expected-revision "$(git rev-parse HEAD)" \
@@ -118,7 +208,7 @@ jobs:
         PREVIEW: ${{ inputs.preview }}
         CI_TIER: release
         SOURCE: ${{ inputs.source || github.sha }}
-      if: github.ref == 'refs/heads/main' && (inputs.tier == 'release' || inputs.preview)
+      if: needs.macos-checks.result == 'success' && github.ref == 'refs/heads/main' && (inputs.tier == 'release' || inputs.preview)
       run: |-
         mkdir -p build/candidate
         ditto -c -k --keepParent 'dist/Open Foresight.app' build/candidate/Open-Foresight-macos-arm64.zip
@@ -129,7 +219,7 @@ jobs:
         fi
     - id: macos-candidate
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      if: github.ref == 'refs/heads/main' && inputs.tier == 'release' && !inputs.preview
+      if: needs.macos-checks.result == 'success' && github.ref == 'refs/heads/main' && inputs.tier == 'release' && !inputs.preview
       with:
         name: ci-macos-app-${{ inputs.source }}
         overwrite: true
@@ -138,14 +228,14 @@ jobs:
         if-no-files-found: error
         compression-level: 0
     - name: Publish small macos candidate identity receipt
-      if: inputs.tier == 'release' && github.ref == 'refs/heads/main' && !inputs.preview
+      if: needs.macos-checks.result == 'success' && inputs.tier == 'release' && github.ref == 'refs/heads/main' && !inputs.preview
       env:
         GH_TOKEN: ${{ github.token }}
         SOURCE: ${{ inputs.source || github.sha }}
         ARTIFACT_ID: ${{ steps.macos-candidate.outputs.artifact-id }}
       run: python tools/ci_artifacts.py publish-receipt --component macos-app --identity "$SOURCE" --prefix build/candidate-upload --artifact-id "$ARTIFACT_ID" --output build/candidate-receipt
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      if: inputs.tier == 'release' && github.ref == 'refs/heads/main' && !inputs.preview
+      if: needs.macos-checks.result == 'success' && inputs.tier == 'release' && github.ref == 'refs/heads/main' && !inputs.preview
       with:
         name: receipt-ci-macos-app-${{ inputs.source || github.sha }}
         overwrite: true
@@ -153,7 +243,7 @@ jobs:
         retention-days: 90
         if-no-files-found: error
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      if: inputs.preview
+      if: needs.macos-checks.result == 'success' && inputs.preview
       with:
         name: preview-macos-application
         overwrite: true
@@ -161,10 +251,26 @@ jobs:
         retention-days: 14
         if-no-files-found: error
         compression-level: 0
+    - name: Require every Mac test lane and package check
+      if: ${{ always() && !cancelled() }}
+      env:
+        CHECKS_RESULT: ${{ needs.macos-checks.result }}
+        BUILD_RESULT: ${{ steps.macos-build.outcome }}
+        ASSEMBLY_RESULT: ${{ steps.macos-assembly.outcome }}
+        INFERENCE_RESULT: ${{ steps.macos-inference.outcome }}
+        INSTALLED_RESULT: ${{ steps.macos-installed.outcome }}
+        SMOKE_RESULT: ${{ steps.macos-smoke.outcome }}
+      run: |
+        printf 'Mac lanes=%s build=%s assembly=%s inference=%s installed=%s smoke=%s\n' \
+          "$CHECKS_RESULT" "$BUILD_RESULT" "$ASSEMBLY_RESULT" "$INFERENCE_RESULT" "$INSTALLED_RESULT" "$SMOKE_RESULT"
+        for task_result in "$CHECKS_RESULT" "$BUILD_RESULT" "$ASSEMBLY_RESULT" "$INFERENCE_RESULT" "$INSTALLED_RESULT" "$SMOKE_RESULT"; do
+          [[ "$task_result" == success ]] || exit 1
+        done
     needs:
     - changes
     - distribution-number
-    if: '!cancelled() && needs.changes.outputs.macos == ''true'' && (inputs.tier != ''release'' || needs.distribution-number.result == ''success'')'
+    - macos-checks
+    if: ${{ always() && !cancelled() && needs.changes.outputs.macos == 'true' && (inputs.tier != 'release' || needs.distribution-number.result == 'success') }}
   sanitizers:
     if: inputs.tier == 'release'
     uses: ./.github/workflows/native-sanitizers.yml
@@ -919,6 +1025,18 @@ jobs:
         producer-sdk-digest: ${{ needs.linux-build.outputs.producer_sdk_digest }}
         own-pr: ${{ github.event.pull_request.number || 0 }}
         label: ${{ inputs.label }}
+    - name: Qualify this run's original source/build bytes for virtual audio
+      if: needs.changes.outputs.acceptance_virtual_audio != 'false'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        PRODUCER_ATTEMPT: ${{ needs.linux-build.outputs.attempt }}
+        ARTIFACT_ID: ${{ needs.linux-build.outputs.handoff_id }}
+        ARTIFACT_DIGEST: ${{ needs.linux-build.outputs.handoff_digest }}
+      run: |
+        python tools/ci_linux_handoff.py qualify --directory build/audio-handoff --revision "$SOURCE" \
+          --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --attempt "$PRODUCER_ATTEMPT" \
+          --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST"
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: build/acceptance-models
@@ -928,6 +1046,8 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
         SDK_IMAGE: ${{ steps.consumer.outputs.image }}
+        SOURCE_REVISION: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        AUDIO_HANDOFF_DIRECTORY: ${{ github.workspace }}/build/audio-handoff
         VERSION: ${{ steps.consumer.outputs.version }}
         CPU_MODELS_SELECTED: ${{ needs.changes.outputs.acceptance_cpu_models != 'false' }}
         SOFTWARE_GPU_SELECTED: ${{ needs.changes.outputs.acceptance_software_gpu != 'false' }}

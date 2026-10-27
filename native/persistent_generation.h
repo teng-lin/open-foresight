@@ -59,10 +59,14 @@ void shutdown_persistent(Engine &engine, bool graceful = true) {
     return;
   auto &worker = *engine.persistent;
   if (graceful && !worker.ended()) {
-    worker.input_line("shutdown\n");
-    std::unique_lock lock(worker.frame_mutex);
-    worker.frames_changed.wait_for(lock, std::chrono::seconds(1),
-                                   [&] { return worker.finished; });
+    // Graceful framing is optional. Allocation/reporting failure must never
+    // bypass the mandatory stop, child reap and destruction below.
+    foresight::ffi_barrier_void([&] {
+      worker.input_line("shutdown\n");
+      std::unique_lock lock(worker.frame_mutex);
+      worker.frames_changed.wait_for(lock, std::chrono::seconds(1),
+                                     [&] { return worker.finished; });
+    });
   }
   worker.stop();
   worker.join();
@@ -114,6 +118,9 @@ bool start_persistent(Engine &engine, Worker &request) {
         [&](const std::string &message) {
           std::lock_guard lock(worker->frame_mutex);
           worker->protocol_error = message;
+        },
+        [&] {
+          std::lock_guard lock(worker->frame_mutex);
           worker->exit_status = -1;
           worker->finished = true;
           worker->active = false;
@@ -121,7 +128,7 @@ bool start_persistent(Engine &engine, Worker &request) {
         });
   });
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-  while (!request.cancel && std::chrono::steady_clock::now() < deadline) {
+  while (!request.cancelled() && std::chrono::steady_clock::now() < deadline) {
     std::string line;
     if (worker->next(line)) {
       if (line == "ready 1")
@@ -145,7 +152,7 @@ int run_persistent(Engine &engine, Worker &request, const std::string &json,
   bool cancelling = false;
   auto cancel_deadline = std::chrono::steady_clock::time_point::max();
   while (true) {
-    if (request.cancel && !cancelling) {
+    if (request.cancelled() && !cancelling) {
       cancelling = true;
       cancel_deadline =
           std::chrono::steady_clock::now() + std::chrono::seconds(2);
@@ -170,7 +177,7 @@ int run_persistent(Engine &engine, Worker &request, const std::string &json,
       if (line == "done completed")
         return 0;
       if (line == "done cancelled")
-        return request.cancel ? 0 : 1;
+        return request.cancelled() ? 0 : 1;
       if (line == "done failed")
         return 1;
       if (!cancelling)

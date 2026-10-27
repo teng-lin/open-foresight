@@ -1,5 +1,6 @@
+import 'desktop_fixture_owner.dart';
 import 'package:open_foresight/desktop_environment.dart';
-import '../test_support/platform_fixture.dart';
+import 'pump_until.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import '../test_support/core_fixture.dart';
 import 'dart:io';
@@ -59,7 +60,7 @@ void main() {
 
   testWidgets(
     'menu routes to workspace pages and uses recording consent',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('of-menu-');
       addTearDown(() => root.deleteSync(recursive: true));
       final store = Store('${root.path}/app.db');
@@ -83,7 +84,7 @@ void main() {
           TestDesktopConnection(Application(domain)),
           deviceLoader: () async => [],
           environment: DesktopEnvironment(
-            capabilities: testHostPlatformCapabilities,
+            capabilities: const PlatformCapabilities.macOS(),
           ),
         ),
       );
@@ -101,14 +102,16 @@ void main() {
         expect(state.tab, route.value);
       }
       final starting = command('quick-meeting');
-      await tester.pumpAndSettle();
+      await pumpUntil(
+        tester,
+        () => find.text('Allow recording access').evaluate().isNotEmpty,
+      );
       expect(find.text('Allow recording access'), findsOneWidget);
       expect(domain.operations, isNot(contains('meetings.start')));
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await starting;
       await tester.pumpWidget(const SizedBox());
-    },
-    skip: !Platform.isMacOS,
+    }),
   );
 }

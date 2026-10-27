@@ -40,8 +40,19 @@ NATIVE_PATHS = (
 NATIVE_RUNTIME_PATHS = (
     "build/native/libforesight_native.so",
     "build/native/libforesight_native.dylib",
+    "build/native/libforesight_sql_support.so",
+    "build/native/libforesight_sql_support.dylib",
+    "build/native/libforesight_diagnostic_support.so",
+    "build/native/libforesight_diagnostic_support.dylib",
+    "build/native/foresight-diagnostic-launcher",
+    "build/native/diagnostic-native-inputs.json",
+    "build/native/diagnostic-toolchain-metadata.json",
+    "build/native/diagnostic-products.json",
+    "build/native/diagnostic-sql-inputs.json",
+    "build/native/runtime-support-build.json",
     "build/native/foresight-audio",
     "build/services/helper/ForesightHelper",
+    "build/services/helper/ForesightHelperTest",
     "build/services/helper/model_worker_fixture",
     "build/services/inference/foresight-model",
     "build/services/inference/foresight-query",
@@ -65,6 +76,7 @@ def roots(platform, stage):
     if stage == "core":
         return (
             "build/application",
+            "build/native/diagnostic-worker-inputs.json",
             "coverage/core",
             "test-results/build-gates/core.log",
             f"test-results/{platform}/core",

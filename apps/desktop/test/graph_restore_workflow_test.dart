@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
@@ -26,7 +27,7 @@ class RestoringGraphDomain extends GraphDomain {
 void main() {
   testWidgets(
     'label removal and deletion survive restart with restored coordinates and only missing vectors requested',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1440, 1000);
       tester.view.devicePixelRatio = 1;
       tester.platformDispatcher.accessibilityFeaturesTestValue =
@@ -222,6 +223,6 @@ void main() {
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       temp.deleteSync(recursive: true);
-    },
+    }),
   );
 }

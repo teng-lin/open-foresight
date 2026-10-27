@@ -1,8 +1,13 @@
 import '../operation_descriptor.dart';
+import '../client_contract.dart';
+import '../client_results.dart';
+import '../client_requests/graph.dart';
 import '../operation_argument_schema.dart';
 import '../graph_clusters.dart';
 
 const graphEmbeddingsDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeVectors),
+  requestEncoder: OperationInputEncoder<GraphEmbeddingsInput>(),
   scope: OperationScope.application,
   readOnly: true,
   approval: ApprovalPolicy.desktop,
@@ -22,6 +27,8 @@ const graphEmbeddingsDescriptor = OperationDescriptor(
 );
 
 const graphInvalidateDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<GraphInvalidateInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -39,6 +46,8 @@ const graphInvalidateDescriptor = OperationDescriptor(
 );
 
 const graphAcknowledgeDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<GraphAcknowledgeInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,
@@ -56,6 +65,8 @@ const graphAcknowledgeDescriptor = OperationDescriptor(
 );
 
 const graphSaveDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeBoolean),
+  requestEncoder: OperationInputEncoder<GraphSaveInput>(),
   scope: OperationScope.application,
   readOnly: false,
   approval: ApprovalPolicy.desktop,

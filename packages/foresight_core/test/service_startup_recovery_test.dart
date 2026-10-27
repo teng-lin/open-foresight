@@ -1,3 +1,5 @@
+import 'sql_support_test_bootstrap.dart';
+import 'package:foresight_test_support/transcript_index_service.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -45,6 +47,7 @@ Future<bool> lockHeldElsewhere(ProfilePaths profile) async {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'startup sweeps audio, drains helper purges and indexes interrupted transcript',
     () async {
@@ -86,6 +89,7 @@ void main() {
       final server = Server.create(
         services: [
           rag,
+          TranscriptIndexService(rag),
           AdoptionControl(control.State(pipeline: 'ready')),
         ],
       );

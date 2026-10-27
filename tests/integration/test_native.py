@@ -29,6 +29,13 @@ LIBRARY = (
 
 def load(path=LIBRARY):
     lib = C.CDLL(path)
+    abi = getattr(lib, "fs_abi_version", None)
+    if abi is None:
+        raise RuntimeError("Incompatible native ABI")
+    abi.argtypes = []
+    abi.restype = C.c_int
+    if abi() != 1:
+        raise RuntimeError("Incompatible native ABI")
     for name, args, ret in [
         ("fs_set_runtime_environment", [C.c_char_p, C.c_char_p], C.c_int),
         ("fs_engine_create", [C.c_char_p, C.c_char_p], C.c_void_p),
@@ -1120,8 +1127,13 @@ else:
             self.assertEqual(self.lib.fs_speech_cancel(speech), 0)
             self.assertEqual(self.lib.fs_speech_cancel(speech), 0)
             events = drain(self.lib, speech)
-            self.assertEqual([event["type"] for event in events], ["done"])
-            self.assertEqual(events[0]["status"], "cancelled")
+            self.assertEqual(
+                [event.get("phase") for event in events[:-1]],
+                ["speech_queued", "speech_running"],
+            )
+            self.assertEqual(events[-1]["type"], "done")
+            self.assertEqual(events[-1]["status"], "cancelled")
+            self.assertEqual([event["sequence"] for event in events], [0, 1, 2])
             self.assertIsNone(owned_json(self.lib, self.lib.fs_event_poll(speech, 20)))
             with self.assertRaises(ProcessLookupError):
                 os.kill(pid, 0)
@@ -1151,8 +1163,15 @@ else:
         self.lib.fs_speech_finish(s, b"asr")
         events = drain(self.lib, s)
         self.assertEqual(events[-1]["status"], "completed")
-        self.assertEqual(events[0]["text"].strip(), "owned transcript")
-        self.assertEqual(events[0]["end_ms"], 100)
+        self.assertEqual(
+            [event.get("phase") for event in events[:2]],
+            ["speech_queued", "speech_running"],
+        )
+        self.assertEqual(
+            [event["type"] for event in events[2:]], ["transcript", "done"]
+        )
+        self.assertEqual(events[2]["text"].strip(), "owned transcript")
+        self.assertEqual(events[2]["end_ms"], 100)
         self.lib.fs_speech_destroy(s)
 
 

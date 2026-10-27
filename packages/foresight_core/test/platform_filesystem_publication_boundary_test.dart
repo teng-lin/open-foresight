@@ -202,6 +202,39 @@ void main() {
   );
 
   test(
+    'closing one same-process installation owner preserves the other lease',
+    () {
+      final saved = Map.of(runtimeConfiguration.environment);
+      addTearDown(
+        () => runtimeConfiguration.environment
+          ..clear()
+          ..addAll(saved),
+      );
+      final app = Directory('${root.path}/multiple-profiles')..createSync();
+      runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = app.path;
+      final path = installationLockPath(app.path);
+      addTearDown(() => File(path).parent.deleteSync(recursive: true));
+      final first = acquireInstallationLock()!;
+      final second = acquireInstallationLock()!;
+      addTearDown(first.closeSync);
+      addTearDown(second.closeSync);
+      final code =
+          'import fcntl,os,sys\nf=os.open(sys.argv[1],os.O_RDWR)\ntry: fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(3)\n';
+      int probe() => Process.runSync(
+        Platform.environment['FORESIGHT_PYTHON'] ?? 'python3',
+        ['-c', code, path],
+      ).exitCode;
+      first.closeSync();
+      expect(probe(), 3);
+      final unrelated = File(path).openSync();
+      unrelated.closeSync();
+      expect(probe(), 3);
+      second.closeSync();
+      expect(probe(), 0);
+    },
+  );
+
+  test(
     'installer exclusive lock refuses new clients then admits them after release',
     () async {
       final saved = Map.of(runtimeConfiguration.environment);
@@ -222,7 +255,7 @@ void main() {
         [
           '-u',
           '-c',
-          'import fcntl,sys\nf=open(sys.argv[1],"a")\nfcntl.lockf(f,fcntl.LOCK_EX)\nprint("locked",flush=True)\nsys.stdin.readline()\nf.close()\n',
+          'import fcntl,os,sys\nf=os.fdopen(os.open(sys.argv[1],os.O_CREAT|os.O_RDWR,0o600),"a")\nfcntl.flock(f,fcntl.LOCK_EX)\nprint("locked",flush=True)\nsys.stdin.readline()\nf.close()\n',
           path,
         ],
       ).timeout(const Duration(seconds: 10));

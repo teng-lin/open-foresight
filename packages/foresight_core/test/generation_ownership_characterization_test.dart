@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -64,6 +65,7 @@ class DrainingGenerationRuntime extends NativeRuntime {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   for (final kind in ['summary', 'actions', 'enhanced_notes']) {
     for (final mode in ['cancel', 'clear', 'close']) {
       test(

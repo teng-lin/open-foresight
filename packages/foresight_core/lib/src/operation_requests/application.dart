@@ -24,11 +24,18 @@ class NotificationsRequestPermissionRequest extends OperationRequest {
 }
 
 class AudioCapabilitiesRequest extends OperationRequest {
-  AudioCapabilitiesRequest._(super.context);
+  AudioCapabilitiesRequest._(super.context, this.enumerateDevices);
+  final bool enumerateDevices;
   @override
   Operation get operation => Operation.audioCapabilities;
   factory AudioCapabilitiesRequest.decode(OperationRequestContext context) {
-    return AudioCapabilitiesRequest._(context);
+    final values = Operation.audioCapabilities.descriptor.arguments.decode(
+      context.rawArguments,
+    );
+    return AudioCapabilitiesRequest._(
+      context,
+      values.value<bool>('enumerate_devices'),
+    );
   }
 }
 

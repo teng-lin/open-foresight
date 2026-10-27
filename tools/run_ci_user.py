@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""Run Linux runtime gates as the existing workspace owner, never container root."""
+
+from __future__ import annotations
+
+import argparse
+import grp
+import json
+import os
+from pathlib import Path
+import pwd
+import stat
+import subprocess
+import tempfile
+
+FLUTTER = Path("/opt/foresight-flutter")
+FLUTTER_REVISION = "adc901062556672b4138e18a4dc62a4be8f4b3c2"
+# Fixed bootstrap venv; require a physical root-owned mode-0700 directory below.
+TOOLING_PYTHON_ROOT = Path("/var/tmp/foresight-tooling-python")  # noqa: S108
+
+
+def workspace_owner(workspace: Path) -> tuple[int, int]:
+    if not workspace.is_absolute() or workspace.resolve(strict=True) != workspace:
+        raise ValueError("Workspace must be a physical absolute directory")
+    selected = None
+    for path in (*reversed(workspace.parents), workspace):
+        info = path.lstat()
+        print(
+            json.dumps(
+                {
+                    "workspace_ancestor": str(path),
+                    "uid": info.st_uid,
+                    "gid": info.st_gid,
+                    "mode": oct(stat.S_IMODE(info.st_mode)),
+                }
+            ),
+            flush=True,
+        )
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError("Workspace ancestry must contain only directories")
+        if info.st_mode & 0o022 and not (
+            path == Path("/var/tmp")  # noqa: S108 - Exact sticky-root permission policy.
+            and info.st_uid == 0
+            and info.st_gid == 0
+            and stat.S_IMODE(info.st_mode) == 0o1777
+        ):
+            raise ValueError("Workspace ancestry has unsafe write permissions")
+        if info.st_uid:
+            if selected is None:
+                selected = (info.st_uid, info.st_gid)
+            elif info.st_uid != selected[0]:
+                raise ValueError("Workspace ancestry has mixed non-root owners")
+    if selected is None or selected[1] == 0:
+        raise ValueError("Workspace needs a non-root owner and primary group")
+    return selected
+
+
+def claim_tree(path: Path, uid: int, gid: int) -> None:
+    """Change ownership metadata only; never follow links or change mode/bytes."""
+    if (path.lstat().st_uid, path.lstat().st_gid) != (uid, gid):
+        os.lchown(path, uid, gid)
+    for parent, directories, files in os.walk(path, followlinks=False):
+        for name in (*directories, *files):
+            entry = Path(parent) / name
+            info = entry.lstat()
+            if (info.st_uid, info.st_gid) != (uid, gid):
+                os.lchown(entry, uid, gid)
+
+
+def claim_tooling_python(uid: int, gid: int) -> None:
+    """Transfer the exact private venv created by linux_tooling_python.sh."""
+    if os.environ.get("FORESIGHT_PYTHON") != str(TOOLING_PYTHON_ROOT / "bin/python"):
+        return
+    root = TOOLING_PYTHON_ROOT
+    info = root.lstat()
+    if (
+        root.resolve(strict=True) != root
+        or not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != 0
+        or stat.S_IMODE(info.st_mode) != 0o700
+    ):
+        raise ValueError("The tooling environment must be the private root-owned venv")
+    claim_tree(root, uid, gid)
+
+
+def ensure_account(uid: int, gid: int, home: Path) -> str:
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        try:
+            grp.getgrgid(gid)
+        except KeyError:
+            subprocess.run(
+                ["groupadd", "--gid", str(gid), f"foresight-ci-{gid}"],
+                check=True,
+                timeout=15,
+            )
+        name = f"foresight-ci-{uid}"
+        subprocess.run(
+            [
+                "useradd",
+                "--no-create-home",
+                "--no-log-init",
+                "--uid",
+                str(uid),
+                "--gid",
+                str(gid),
+                "--home-dir",
+                str(home),
+                "--shell",
+                "/bin/bash",
+                name,
+            ],
+            check=True,
+            timeout=15,
+        )
+        return name
+
+
+def prepare(
+    workspace: Path, *, flutter: Path | None = None
+) -> tuple[int, int, dict[str, str]]:
+    if os.geteuid() != 0:
+        raise ValueError("The container setup must prepare the runtime gate as root")
+    uid, gid = workspace_owner(workspace)
+    flutter = FLUTTER if flutter is None else flutter
+    if flutter.resolve(strict=True) != flutter or not flutter.is_dir():
+        raise ValueError("The verified Flutter working directory is required")
+    revision = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={flutter}",
+            "-C",
+            str(flutter),
+            "rev-parse",
+            "HEAD",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=15,
+    ).stdout.strip()
+    if revision != FLUTTER_REVISION:
+        raise ValueError("The restored Flutter revision differs from the pinned SDK")
+    pub = Path(os.environ.get("PUB_CACHE", str(workspace / ".cache/foresight-pub")))
+    if not pub.is_absolute() or ".." in pub.parts or not pub.is_relative_to(workspace):
+        raise ValueError("The job pub cache must remain inside its workspace")
+    parent = workspace
+    for component in pub.relative_to(workspace).parts:
+        parent = parent / component
+        try:
+            parent.mkdir(mode=0o755)
+        except FileExistsError:
+            pass
+        if not stat.S_ISDIR(parent.lstat().st_mode):
+            raise ValueError("The job pub cache must contain only physical directories")
+    claim_tree(workspace, uid, gid)
+    claim_tree(flutter, uid, gid)
+    claim_tooling_python(uid, gid)
+    # Persistent OS/NSS home storage must not inherit the sticky /var/tmp
+    # ancestor: InstallationLock deliberately forbids all writable ancestors.
+    # build/ is ignored by source identity and this private child is outside
+    # the stage artifact allowlist, so no home/config data enters either.
+    build = workspace / "build"
+    build.mkdir(mode=0o755, exist_ok=True)
+    if not stat.S_ISDIR(build.lstat().st_mode):
+        raise ValueError("The private home needs a physical workspace build directory")
+    os.chown(build, uid, gid)
+    persistent = Path(tempfile.mkdtemp(prefix=".h-", dir=build))
+    temporary = Path(tempfile.mkdtemp(prefix="c-", dir="/var/tmp"))
+    for base in (persistent, temporary):
+        os.chown(base, uid, gid)
+    env = dict(os.environ, PUB_CACHE=str(pub))
+    for base, variables in (
+        (
+            persistent,
+            {
+                "HOME": "h",
+                "XDG_CACHE_HOME": "k",
+                "XDG_CONFIG_HOME": "c",
+                "XDG_DATA_HOME": "d",
+            },
+        ),
+        (
+            temporary,
+            {
+                "TMPDIR": "t",
+                "FORESIGHT_TEST_TEMP_ROOT": "t",
+                "PYTHONPYCACHEPREFIX": "p",
+                "XDG_RUNTIME_DIR": "r",
+            },
+        ),
+    ):
+        for variable, child in variables.items():
+            path = base / child
+            path.mkdir(mode=0o700, exist_ok=True)
+            os.chown(path, uid, gid)
+            env[variable] = str(path)
+    name = ensure_account(uid, gid, Path(env["HOME"]))
+    env.update(USER=name, LOGNAME=name)
+    print(
+        json.dumps(
+            {
+                "runtime_uid": uid,
+                "runtime_gid": gid,
+                "private_root": str(temporary),
+                "private_mode": "0700",
+            }
+        ),
+        flush=True,
+    )
+    return uid, gid, env
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--workspace", type=Path, default=os.environ.get("GITHUB_WORKSPACE")
+    )
+    parser.add_argument(
+        "--flutter-root",
+        choices=("/opt/foresight-flutter", "/opt/flutter"),
+        default=None,
+        help="Pinned SDK layout used by this container",
+    )
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    if args.workspace is None or not command:
+        parser.error("workspace and a runtime gate command are required")
+    uid, gid, env = prepare(
+        args.workspace,
+        flutter=Path(args.flutter_root) if args.flutter_root is not None else None,
+    )
+    os.chdir(args.workspace)
+    os.setgroups([])
+    os.setgid(gid)
+    os.setuid(uid)
+    os.execvpe(command[0], command, env)  # noqa: S606 - Drop root/groups before the workflow command.
+
+
+if __name__ == "__main__":
+    main()

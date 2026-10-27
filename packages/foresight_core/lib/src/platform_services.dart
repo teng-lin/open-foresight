@@ -1,7 +1,12 @@
+import 'native_lifetime.dart';
+import 'native_diagnostics.dart';
 import 'profile_paths.dart';
+import 'installation_lock.dart';
+export 'installation_lock.dart' show InstallationLock;
 import 'package:crypto/crypto.dart';
 import 'dart:ffi';
 import 'package:ffi/ffi.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -59,10 +64,37 @@ String? _linuxBundleRoot(String executable) {
   return root.resolveSymbolicLinksSync();
 }
 
+/// Runtime configuration. Public construction yields an immutable snapshot: it
+/// copies [environment], so neither the caller's map nor the exposed view can
+/// change it. Only the legacy process/isolate boundary ([runtimeConfiguration])
+/// keeps an editable map; owners capture it with [snapshot].
 class RuntimeConfiguration {
   final Map<String, String> environment;
   final String? linuxBundleRoot;
-  RuntimeConfiguration(this.environment, {this.linuxBundleRoot});
+  final bool _snapshot;
+  RuntimeConfiguration(Map<String, String> environment, {this.linuxBundleRoot})
+    : environment = Map.unmodifiable(environment),
+      _snapshot = true;
+
+  /// The legacy boundary's editable map, retained for callers outside the
+  /// injected ports. Never handed to an owner without [snapshot].
+  RuntimeConfiguration._boundary(this.environment, {this.linuxBundleRoot})
+    : _snapshot = false;
+
+  /// Whether this is an immutable snapshot rather than the legacy boundary.
+  bool get isSnapshot => _snapshot;
+
+  /// An immutable copy; a snapshot is returned as is.
+  RuntimeConfiguration snapshot() => _snapshot
+      ? this
+      : RuntimeConfiguration(environment, linuxBundleRoot: linuxBundleRoot);
+
+  /// A frontend's already resolved map in this process's service runtime.
+  factory RuntimeConfiguration.serviceWorker(Map<String, String> environment) =>
+      RuntimeConfiguration(
+        environment,
+        linuxBundleRoot: _linuxBundleRoot(Platform.resolvedExecutable),
+      );
   factory RuntimeConfiguration.resolve({
     Map<String, String>? environment,
     String? executable,
@@ -181,19 +213,103 @@ class RuntimeConfiguration {
       (Platform.isMacOS
           ? 'libforesight_native.dylib'
           : 'libforesight_native.so');
+  String? get installationRoot => switch (this['FORESIGHT_INSTALL_ROOT']) {
+    final String root => canonicalProfilePath(root),
+    null => null,
+  };
+
+  /// A new snapshot where explicit values win over [defaults].
+  RuntimeConfiguration withDefaults(Map<String, String> defaults) =>
+      defaults.keys.every(environment.containsKey)
+      ? snapshot()
+      : RuntimeConfiguration({
+          ...defaults,
+          ...environment,
+        }, linuxBundleRoot: linuxBundleRoot);
+
+  /// A new snapshot where [values] replace entries; a null value removes one.
+  RuntimeConfiguration withOverrides(Map<String, String?> values) =>
+      RuntimeConfiguration({
+        for (final entry in environment.entries)
+          if (!values.containsKey(entry.key)) entry.key: entry.value,
+        for (final entry in values.entries)
+          if (entry.value case final String value) entry.key: value,
+      }, linuxBundleRoot: linuxBundleRoot);
+
+  /// Profile-owned caches for native and Python workers of the [data] profile.
+  RuntimeConfiguration withProfileRuntime(String data) =>
+      withDefaults(_profileRuntimeDefaults(data));
 }
 
+Map<String, String> _profileRuntimeDefaults(String data) => {
+  'FORESIGHT_LITERT_CACHE': '$data/cache/litert',
+  'PYTHONPYCACHEPREFIX': '$data/cache/python',
+};
+
 RuntimeConfiguration? _runtimeConfiguration;
+
+/// The legacy process/isolate boundary, resolved lazily on first use. Its
+/// environment stays editable for callers outside the injected ports;
+/// composition roots capture it once with [runtimeSnapshot].
 RuntimeConfiguration get runtimeConfiguration =>
-    _runtimeConfiguration ??= RuntimeConfiguration.resolve();
+    _runtimeConfiguration ??= _legacyBoundary(RuntimeConfiguration.resolve());
+
+/// An immutable snapshot of [configuration]; when omitted, the bound owner
+/// snapshot ([runWithRuntimeConfiguration]) or else a snapshot of the legacy
+/// boundary. Every owner capture uses this, so no port holds the editable map.
+RuntimeConfiguration runtimeSnapshot([RuntimeConfiguration? configuration]) =>
+    configuration?.snapshot() ??
+    currentOwnerRuntimeSnapshot ??
+    runtimeConfiguration.snapshot();
+
+/// A snapshot of the legacy boundary for owners constructed outside any owner
+/// scope, which keep reading it at use as they did before injection.
+RuntimeConfiguration legacyRuntimeSnapshot() => runtimeConfiguration.snapshot();
+
+final _ownerRuntimeSnapshot = Object();
+
+/// Runs [action] with `configuration.snapshot()` bound as the owner snapshot
+/// for owned constructors and default captures inside it, including its async
+/// continuations. The innermost scope wins. The legacy boundary is neither
+/// read nor changed.
+R runWithRuntimeConfiguration<R>(
+  RuntimeConfiguration configuration,
+  R Function() action,
+) => runZoned(
+  action,
+  zoneValues: {_ownerRuntimeSnapshot: configuration.snapshot()},
+);
+
+/// The innermost bound owner snapshot, or null outside any owner scope.
+RuntimeConfiguration? get currentOwnerRuntimeSnapshot =>
+    Zone.current[_ownerRuntimeSnapshot] as RuntimeConfiguration?;
+
+RuntimeConfiguration _legacyBoundary(RuntimeConfiguration configuration) =>
+    configuration.isSnapshot
+    ? RuntimeConfiguration._boundary(
+        Map.of(configuration.environment),
+        linuxBundleRoot: configuration.linuxBundleRoot,
+      )
+    : configuration;
 
 /// Install the frontend's resolved map before any worker runtime access. The
 /// process environment still names the handoff already consumed by the frontend.
 void installServiceWorkerEnvironment(Map<String, String> environment) {
-  _runtimeConfiguration = RuntimeConfiguration(
-    Map<String, String>.from(environment),
-    linuxBundleRoot: _linuxBundleRoot(Platform.resolvedExecutable),
+  _runtimeConfiguration = _legacyBoundary(
+    RuntimeConfiguration.serviceWorker(environment),
   );
+}
+
+/// Install a snapshot transported from another isolate as this isolate's
+/// boundary (an editable copy), or restore a previous boundary in tests.
+/// Returns the boundary it replaced without resolving one: a worker's process
+/// handoff may already be consumed.
+RuntimeConfiguration? installRuntimeConfiguration(
+  RuntimeConfiguration configuration,
+) {
+  final previous = _runtimeConfiguration;
+  _runtimeConfiguration = _legacyBoundary(configuration);
+  return previous;
 }
 
 // mode_t is unsigned short on Darwin and unsigned int on Linux. Calling libc
@@ -464,8 +580,12 @@ Future<void> openPlatformUri(Uri uri) async {
   }
 }
 
-Future<void> platformNotification(String title, String message) async {
-  final helper = runtimeConfiguration['FORESIGHT_NOTIFICATIONS'];
+Future<void> platformNotification(
+  String title,
+  String message, {
+  RuntimeConfiguration? configuration,
+}) async {
+  final helper = runtimeSnapshot(configuration)['FORESIGHT_NOTIFICATIONS'];
   final result = Platform.isMacOS
       ? helper == null
             ? throw StateError(
@@ -496,35 +616,81 @@ const _nativeEnvironmentKeys = {
   'FORESIGHT_WHISPER_WORKER',
   'PYTHONPYCACHEPREFIX',
   'LD_LIBRARY_PATH',
+  'FORESIGHT_LOG_LEVEL',
 };
 bool _nativeEnvironmentConfigured = false;
 
 /// Configure C/C++ getenv consumers once, before service-owned workers start.
 /// Dart's resource map does not otherwise modify the process environment.
-void configureNativeEnvironment() {
+void configureNativeEnvironment({RuntimeConfiguration? configuration}) {
   if (_nativeEnvironmentConfigured) return;
-  final values = runtimeConfiguration.environment.entries
+  final config = runtimeSnapshot(configuration);
+  final values = config.environment.entries
       .where(
         (entry) =>
             _nativeEnvironmentKeys.contains(entry.key) &&
+            entry.key != 'FORESIGHT_LOG_LEVEL' &&
             entry.value.isNotEmpty,
       )
       .toList();
-  if (values.isEmpty) {
+  late final DynamicLibrary selected;
+  try {
+    selected = DynamicLibrary.open(config.nativeLibrary);
+  } on ArgumentError {
+    if (values.isNotEmpty || config['FORESIGHT_NATIVE'] != null) {
+      rethrow;
+    }
+    // A SQL-only development worker may have no native mapping available.
+    // A selected/mapped native-capable replacement still passes the gate below.
     _nativeEnvironmentConfigured = true;
     return;
   }
-  final lib = DynamicLibrary.open(runtimeConfiguration.nativeLibrary);
-  final configure = lib
-      .lookupFunction<
-        Int32 Function(Pointer<Utf8>, Pointer<Utf8>),
-        int Function(Pointer<Utf8>, Pointer<Utf8>)
-      >('fs_set_runtime_environment');
+  final bindings = NativeLibrary(selected);
+  final lib = bindings.library;
+  // This runs after installation/profile ownership is acquired. A worker lost
+  // with native work cannot be replaced in the same mapped process, even from
+  // another frontend isolate. Base-only runtimes keep their optional contract.
+  if (lib.providesSymbol('fs_lifetime_admission') &&
+      lib.lookupFunction<Int32 Function(), int Function()>(
+            'fs_lifetime_admission',
+          )() !=
+          1) {
+    throw StateError('Native ownership is unconfirmed; restart the service');
+  }
+  final loggingLevel = NativeLibrary.diagnosticLevel;
+  final loggingCapable =
+      loggingLevel != null &&
+      NativeDiagnosticQueueFunctions.fromLoaded(bindings) != null;
+  if (values.isEmpty && !loggingCapable) {
+    _nativeEnvironmentConfigured = true;
+    return;
+  }
+  final configure =
+      lib.providesSymbol('fs_set_runtime_environment') || values.isNotEmpty
+      ? lib.lookupFunction<
+          Int32 Function(Pointer<Utf8>, Pointer<Utf8>),
+          int Function(Pointer<Utf8>, Pointer<Utf8>)
+        >('fs_set_runtime_environment')
+      : null;
   for (final entry in values) {
     final key = entry.key.toNativeUtf8(), value = entry.value.toNativeUtf8();
     try {
-      if (configure(key, value) != 0) {
+      if (configure!(key, value) != 0) {
         throw StateError('Cannot configure native runtime ${entry.key}');
+      }
+    } finally {
+      calloc.free(key);
+      calloc.free(value);
+    }
+  }
+  if (loggingCapable) {
+    final key = 'FORESIGHT_LOG_LEVEL'.toNativeUtf8();
+    final value = loggingLevel.toNativeUtf8();
+    try {
+      if (configure == null || configure(key, value) != 0) {
+        try {
+          NativeLibrary.diagnosticConfigurationUnavailable?.call();
+        } catch (_) {}
       }
     } finally {
       calloc.free(key);
@@ -534,16 +700,31 @@ void configureNativeEnvironment() {
   _nativeEnvironmentConfigured = true;
 }
 
-void configureProfileRuntime(String data) {
-  runtimeConfiguration.environment.putIfAbsent(
-    'FORESIGHT_LITERT_CACHE',
-    () => '$data/cache/litert',
-  );
-  runtimeConfiguration.environment.putIfAbsent(
-    'PYTHONPYCACHEPREFIX',
-    () => '$data/cache/python',
-  );
-  configureNativeEnvironment();
+/// Add the [data] profile's cache defaults and configure native consumers from
+/// the resulting snapshot, which is returned. Without a snapshot the legacy
+/// boundary receives the defaults in place, as its other callers expect; a
+/// caller's snapshot is never changed.
+RuntimeConfiguration configureProfileRuntime(
+  String data, {
+  RuntimeConfiguration? configuration,
+}) {
+  final RuntimeConfiguration profiled;
+  if (configuration != null && configuration.isSnapshot) {
+    profiled = configuration.withProfileRuntime(data);
+  } else {
+    final boundary = configuration ?? runtimeConfiguration;
+    _profileRuntimeDefaults(data).forEach(
+      (key, value) => boundary.environment.putIfAbsent(key, () => value),
+    );
+    // Preserve legacy cache defaults while selecting the bound owner's native
+    // resources. An explicitly supplied boundary still takes precedence.
+    profiled =
+        (configuration == null ? currentOwnerRuntimeSnapshot : null)
+            ?.withProfileRuntime(data) ??
+        boundary.snapshot();
+  }
+  configureNativeEnvironment(configuration: profiled);
+  return profiled;
 }
 
 String _notificationFailure(ProcessResult result) {
@@ -565,6 +746,7 @@ String _notificationFailure(ProcessResult result) {
 
 Future<Map<String, dynamic>> notificationCapabilities({
   bool requestPermission = false,
+  RuntimeConfiguration? configuration,
 }) async {
   if (!Platform.isMacOS) {
     return {
@@ -572,7 +754,7 @@ Future<Map<String, dynamic>> notificationCapabilities({
       'backend': 'freedesktop',
     };
   }
-  final helper = runtimeConfiguration['FORESIGHT_NOTIFICATIONS'];
+  final helper = runtimeSnapshot(configuration)['FORESIGHT_NOTIFICATIONS'];
   if (helper == null) {
     throw StateError(
       'The bundled notification adapter is unavailable. Reinstall Open Foresight.',
@@ -594,39 +776,40 @@ Future<Map<String, dynamic>> notificationCapabilities({
 /// profiles, including clients launched during the installer's final app swap.
 String installationLockPath(String appRoot) {
   final canonical = canonicalProfilePath(appRoot);
-  final result = Process.runSync('/usr/bin/id', ['-u']);
-  final uid = result.stdout.toString().trim();
-  if (result.exitCode != 0 || int.tryParse(uid) == null) {
-    throw StateError('Cannot determine installation lock owner');
-  }
   final identity = sha256
       .convert(utf8.encode(canonical))
       .toString()
       .substring(0, 24);
-  return '/tmp/of-install-$uid-$identity/lock';
+  final home = installationLockHome();
+  final cache = Platform.isMacOS
+      ? '$home/Library/Caches/io.openforesight.App'
+      : '$home/.cache/open-foresight';
+  return '$cache/install-locks/$identity/lock';
 }
 
-RandomAccessFile? acquireInstallationLock() {
-  final root = runtimeConfiguration['FORESIGHT_INSTALL_ROOT'];
+InstallationLock? acquireInstallationLock({
+  RuntimeConfiguration? configuration,
+}) {
+  final root = runtimeSnapshot(configuration)['FORESIGHT_INSTALL_ROOT'];
   if (root == null) return null;
-  final path = installationLockPath(root);
-  privateDirectory(File(path).parent.path);
-  if (FileSystemEntity.typeSync(path, followLinks: false) ==
-      FileSystemEntityType.link) {
-    throw StateError('Installation lock must not be a symbolic link');
-  }
-  final lock = File(path).openSync(mode: FileMode.append);
-  try {
-    if (Process.runSync('/bin/chmod', ['600', path]).exitCode != 0) {
-      throw StateError('Cannot protect installation lock');
-    }
-    try {
-      lock.lockSync(FileLock.shared);
-    } on FileSystemException {
+  void refuseMaintenance() {
+    if (FileSystemEntity.typeSync(
+          '${canonicalProfilePath(root)}/.installation-maintenance',
+          followLinks: false,
+        ) !=
+        FileSystemEntityType.notFound) {
       throw StateError(
-        'An Open Foresight update is in progress. Retry launching after installation finishes.',
+        'An Open Foresight update is in progress or was interrupted. Complete installation before launching.',
       );
     }
+  }
+
+  refuseMaintenance();
+  final lock = InstallationLock.acquire(installationLockPath(root));
+  try {
+    // The installer publishes its marker before probing locks. This recheck
+    // closes the gap if it publishes between our initial check and acquisition.
+    refuseMaintenance();
     return lock;
   } catch (_) {
     lock.closeSync();
@@ -634,10 +817,7 @@ RandomAccessFile? acquireInstallationLock() {
   }
 }
 
-String? get configuredInstallationRoot {
-  final root = runtimeConfiguration['FORESIGHT_INSTALL_ROOT'];
-  return root == null ? null : canonicalProfilePath(root);
-}
+String? get configuredInstallationRoot => runtimeConfiguration.installationRoot;
 
 /// A packaged client may attach only to its own installed application revision.
 /// Development clients without a packaged revision retain the existing contract.
@@ -645,7 +825,7 @@ void validateServiceCompatibility(
   Map status, {
   RuntimeConfiguration? configuration,
 }) {
-  final config = configuration ?? runtimeConfiguration;
+  final config = runtimeSnapshot(configuration);
   final revision = config['FORESIGHT_RUNTIME_REVISION'];
   if (revision == null) return;
   final root = config['FORESIGHT_INSTALL_ROOT'];

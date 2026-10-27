@@ -1,6 +1,7 @@
 """Offline ownership, refusal and cleanup contracts for actual GUI acceptance."""
 
 from contextlib import closing
+from io import BytesIO
 import hashlib
 import json
 import os
@@ -973,6 +974,181 @@ def test_linux_stalled_owned_launcher_is_reaped_without_accessibility(
     process.terminate.assert_called_once()
     accessibility.check.assert_not_called()
     host.process = None
+
+
+@pytest.fixture
+def incomplete_launcher(linux_owned, monkeypatch):
+    host, accessibility, process = linux_owned
+    image = {"value": Path("/usr/bin/bash").resolve()}
+    monkeypatch.setattr(gui, "process_path", lambda _: image["value"])
+    monkeypatch.setattr(Path, "read_bytes", lambda _: b"")
+    original_stat = Path.stat
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda path, *args, **kwargs: (
+            SimpleNamespace(st_uid=os.geteuid())
+            if str(path) == "/proc/123"
+            else original_stat(path, *args, **kwargs)
+        ),
+    )
+    return host, accessibility, process, image
+
+
+def test_empty_exec_argv_retries_only_startup_before_actual_gui(
+    incomplete_launcher, monkeypatch
+):
+    host, accessibility, _, image = incomplete_launcher
+
+    def exec_native(_):
+        accessibility.check.assert_not_called()
+        assert host.evidence["launcher_observation"]["argv"] == [""]
+        image["value"] = host.executable
+
+    monkeypatch.setattr(gui.time, "sleep", exec_native)
+    host.start()
+    assert host.evidence["startup"] == "passed_actual_gui"
+    accessibility.check.assert_called()
+    host.close()
+
+
+def test_empty_exec_argv_never_authorizes_cleanup_or_ui(incomplete_launcher):
+    host, accessibility, process, _ = incomplete_launcher
+    host.process = process
+    assert not host._owned_launcher()
+    with pytest.raises(RuntimeError, match="process identity"):
+        host._ui()
+    with pytest.raises(RuntimeError, match="process identity"):
+        host.close()
+    process.terminate.assert_not_called()
+    accessibility.check.assert_not_called()
+    host.process = None
+
+
+def test_empty_exec_argv_still_obeys_startup_deadline(
+    incomplete_launcher, monkeypatch
+):
+    host, accessibility, process, _ = incomplete_launcher
+    clock = iter([0, 1])
+    monkeypatch.setattr(gui.time, "monotonic", lambda: next(clock))
+    with pytest.raises(TimeoutError, match="launcher did not exec") as failure:
+        host.start()
+    assert "process identity" in failure.value.__notes__[0]
+    process.terminate.assert_not_called()
+    accessibility.check.assert_not_called()
+    host.process = None
+
+
+def test_empty_exec_argv_does_not_relax_user_identity(
+    incomplete_launcher, monkeypatch
+):
+    host, accessibility, process, _ = incomplete_launcher
+    original_stat = Path.stat
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda path, *args, **kwargs: (
+            SimpleNamespace(st_uid=os.geteuid() + 1)
+            if str(path) == "/proc/123"
+            else original_stat(path, *args, **kwargs)
+        ),
+    )
+    with pytest.raises(RuntimeError, match="process identity"):
+        host.start()
+    process.terminate.assert_not_called()
+    accessibility.check.assert_not_called()
+    host.process = None
+
+
+def test_owned_pre_exec_origin_retries_without_persisting_parent_arguments(
+    linux_owned, monkeypatch
+):
+    host, accessibility, _ = linux_owned
+    origin = (Path(sys.executable).resolve(), b"python3\0fixture-parent.py\0")
+    monkeypatch.setattr(host, "_capture_launcher_origin", lambda: origin)
+    image = {"value": origin[0]}
+    monkeypatch.setattr(gui, "process_path", lambda _: image["value"])
+    monkeypatch.setattr(Path, "read_bytes", lambda _: origin[1])
+    original_stat = Path.stat
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda path, *args, **kwargs: (
+            SimpleNamespace(st_uid=os.geteuid())
+            if str(path) == "/proc/123"
+            else original_stat(path, *args, **kwargs)
+        ),
+    )
+
+    def exec_native(_):
+        accessibility.check.assert_not_called()
+        observation = host.evidence["launcher_observation"]
+        assert observation["origin_argv_matches"] is True
+        assert "argv" not in observation
+        assert not host._owned_launcher()
+        image["value"] = host.executable
+
+    monkeypatch.setattr(gui.time, "sleep", exec_native)
+    host.start()
+    assert host.evidence["startup"] == "passed_actual_gui"
+    host.close()
+
+
+def test_parent_interpreter_with_other_arguments_is_not_a_startup_transition(
+    linux_owned, monkeypatch
+):
+    host, accessibility, process = linux_owned
+    origin = (Path(sys.executable).resolve(), b"python3\0fixture-parent.py\0")
+    monkeypatch.setattr(host, "_capture_launcher_origin", lambda: origin)
+    monkeypatch.setattr(gui, "process_path", lambda _: origin[0])
+    monkeypatch.setattr(Path, "read_bytes", lambda _: b"python3\0unrelated.py\0")
+    original_stat = Path.stat
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda path, *args, **kwargs: (
+            SimpleNamespace(st_uid=os.geteuid())
+            if str(path) == "/proc/123"
+            else original_stat(path, *args, **kwargs)
+        ),
+    )
+    with pytest.raises(RuntimeError, match="process identity"):
+        host.start()
+    process.terminate.assert_not_called()
+    accessibility.check.assert_not_called()
+    host.process = None
+
+
+@pytest.mark.parametrize(
+    "arguments,accepted",
+    [
+        (b"", False),
+        (b"unterminated", False),
+        (b"p" * 8192 + b"\0", False),
+        (b"python3\0fixture-parent.py\0", True),
+    ],
+)
+def test_launch_origin_snapshot_is_bounded_and_complete(
+    linux_owned, monkeypatch, arguments, accepted
+):
+    host, _, _ = linux_owned
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", lambda *args, **kwargs: BytesIO(arguments))
+        actual = host._capture_launcher_origin()
+    assert actual == (
+        (Path(sys.executable).resolve(), arguments) if accepted else None
+    )
+
+
+def test_unavailable_launch_origin_does_not_invent_a_match(linux_owned, monkeypatch):
+    host, _, _ = linux_owned
+
+    def unavailable(*args, **kwargs):
+        raise OSError("fixture proc observation unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", unavailable)
+        assert host._capture_launcher_origin() is None
 
 
 @pytest.mark.parametrize(

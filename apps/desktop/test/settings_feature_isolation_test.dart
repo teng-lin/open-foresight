@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'dart:io';
 import 'dart:async';
 
@@ -159,7 +160,7 @@ class _ModelReader implements StoreReader {
 void main() {
   testWidgets(
     'same-owner preview displays a model but cannot certify embedding readiness',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('settings-preview-');
       final model = File('${root.path}/embedding.litertlm')
         ..writeAsStringSync('UI fixture');
@@ -250,12 +251,12 @@ void main() {
       controller.dispose();
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
-    },
+    }),
   );
 
   testWidgets(
     'Settings mounts with ports and owns setup state without a Workspace',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('settings-feature-');
       final connection = ControllerConnection(
         Application(
@@ -319,6 +320,6 @@ void main() {
       controller.dispose();
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
-    },
+    }),
   );
 }

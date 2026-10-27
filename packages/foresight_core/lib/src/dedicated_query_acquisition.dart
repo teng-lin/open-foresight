@@ -1,3 +1,4 @@
+export 'dedicated_query_terms.dart';
 import 'rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
@@ -15,21 +16,6 @@ import 'store.dart';
 /// runtime authenticates. This is internal distribution data, not user setup.
 const referenceDetectorDistributionVersion = '1.0.0';
 
-/// The accepted revision is the authenticated model digest, not server metadata.
-const dedicatedQueryTermsKey =
-    'modelTerms.query-detector.$dedicatedQueryModelDigest';
-Uri? dedicatedQueryTermsUri() {
-  final uri = Uri.tryParse(
-    runtimeConfiguration['FORESIGHT_QUERY_TERMS_URL'] ?? '',
-  );
-  return uri != null &&
-          uri.scheme == 'https' &&
-          uri.host.isNotEmpty &&
-          uri.userInfo.isEmpty
-      ? uri
-      : null;
-}
-
 /// One owned metadata/download/encryption/registration operation. The existing
 /// registration remains usable until the new encrypted candidate passes the
 /// fixed model identity and real worker readiness checks.
@@ -42,10 +28,18 @@ class DedicatedQueryAcquisition {
     Directory? stagingRoot,
     this.runtime,
     this.catalog,
-  }) : stagingRoot = stagingRoot ?? File(store.path).parent;
+    RuntimeConfiguration? configuration,
+  }) : configuration = configuration?.snapshot() ?? currentOwnerRuntimeSnapshot,
+       stagingRoot = stagingRoot ?? File(store.path).parent;
 
-  factory DedicatedQueryAcquisition.distribution(Store store) {
+  /// Bundled resources come from the owner's [configuration]. The distribution
+  /// credential keeps its separately owned value-supply path.
+  factory DedicatedQueryAcquisition.distribution(
+    Store store, {
+    RuntimeConfiguration? configuration,
+  }) {
     final key = runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY'];
+    final resources = runtimeSnapshot(configuration);
     if (!Platform.isMacOS) {
       throw StateError('Automatic question model acquisition requires macOS.');
     }
@@ -55,7 +49,7 @@ class DedicatedQueryAcquisition {
       );
     }
     for (final name in ['FORESIGHT_QUERY_WORKER', 'FORESIGHT_MODEL_CRYPTO']) {
-      final value = runtimeConfiguration[name];
+      final value = resources[name];
       if (value == null || !File(value).existsSync()) {
         throw StateError(
           'The bundled automatic question runtime is unavailable.',
@@ -63,8 +57,8 @@ class DedicatedQueryAcquisition {
       }
     }
     final queryRuntime =
-        runtimeConfiguration['FORESIGHT_QUERY_RUNTIME'] ??
-        runtimeConfiguration['FORESIGHT_LITERT_PYTHON'];
+        resources['FORESIGHT_QUERY_RUNTIME'] ??
+        resources['FORESIGHT_LITERT_PYTHON'];
     if (queryRuntime == null || !File(queryRuntime).existsSync()) {
       throw StateError(
         'The bundled automatic question runtime is unavailable.',
@@ -86,7 +80,9 @@ class DedicatedQueryAcquisition {
         root: Directory(
           '${File(store.path).parent.path}/models/query-detector',
         ),
+        configuration: resources,
       ),
+      configuration: resources,
     );
   }
 
@@ -97,6 +93,7 @@ class DedicatedQueryAcquisition {
   final MacModelVault vault;
   final Directory stagingRoot;
   final String? runtime;
+  final RuntimeConfiguration? configuration;
   bool _closed = false;
   bool _started = false;
   Future<void>? _closing;
@@ -199,6 +196,7 @@ class DedicatedQueryAcquisition {
         runtime: runtime,
         current: valid,
         vault: vault,
+        configuration: configuration,
       );
       if (catalog case final assets?) {
         await assets.publish(plan.metadata, encrypted, adopt);

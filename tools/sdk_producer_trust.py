@@ -19,7 +19,10 @@ WORKFLOW = PRODUCERS["dependency-sdk"].workflows[0]
 JOBS = {
     component: jobs[0] for component, jobs in PRODUCERS["dependency-sdk"].jobs.items()
 }
+PACKAGE_INITIALIZER = "tools/__init__.py"
 PRODUCER_CONTROLS = (
+    PACKAGE_INITIALIZER,
+    "tools/ci_registry.py",
     "tools/ci_artifacts.py",
     "tools/linux_sdk_artifacts.py",
     "tools/ci_verify_dependency.py",
@@ -40,10 +43,12 @@ def read_producer_controls(repository, commit, *, api, paths=PRODUCER_CONTROLS):
 
     Before WS2-0 the table did not exist. Its absence is acceptable only when
     none of that source's other controls reference it. Present tables retain
-    byte/mode verification; all other controls and all recipe inputs stay
-    mandatory. This does not qualify source approval or artifact bytes itself.
+    byte/mode verification. Historical namespace packages have no initializer;
+    read that absence explicitly, without inventing a blob or treating it as
+    equivalent to a present initializer. All other controls and recipe inputs
+    stay mandatory. This does not qualify source approval or artifact bytes.
     """
-    conditional = {TRUST_TABLE}.intersection(paths)
+    conditional = {TRUST_TABLE, PACKAGE_INITIALIZER}.intersection(paths)
     source = read_source(
         repository,
         commit,
@@ -52,7 +57,7 @@ def read_producer_controls(repository, commit, *, api, paths=PRODUCER_CONTROLS):
         optional_paths=conditional,
     )
     if (
-        conditional
+        TRUST_TABLE in conditional
         and TRUST_TABLE not in source
         and any(b"ci_producer_trust" in data for _, data in source.values())
     ):
@@ -68,6 +73,12 @@ def producer_controls_match(repository, commit, *, api, root, paths=PRODUCER_CON
     mismatch needs requalification of existing bytes, not a cold compilation.
     """
     source = read_producer_controls(repository, commit, api=api, paths=paths)
+    initializer = Path(root) / PACKAGE_INITIALIZER
+    if PACKAGE_INITIALIZER in paths and PACKAGE_INITIALIZER not in source:
+        # A namespace producer did not execute the consumer's new initializer.
+        # Even an empty present file is a different control, not implicit approval.
+        if initializer.exists() or initializer.is_symlink():
+            return False
     for name, (mode, data) in source.items():
         path = Path(root) / name
         if path.is_symlink() or not path.is_file():

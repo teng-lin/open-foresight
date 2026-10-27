@@ -21,6 +21,10 @@ from litert_extensions import (
 )
 from google_client_release import release_google_client, write_google_client
 from app_version import read_version
+from runtime_package_support import prepare as prepare_runtime_support
+from runtime_package_support import stage as stage_runtime_support
+from runtime_package_support import seal as seal_runtime_support
+from runtime_package_support import prepare_worker, stage_worker, seal_worker
 from query_worker_packaging import (
     copy_worker as copy_query_worker,
     copy_runtime as copy_query_runtime,
@@ -172,6 +176,10 @@ def main():
         speech_worker = args.whisper_gpu_runtime.parent / "foresight-whisper-worker"
         if not speech_worker.is_file():
             raise ValueError("Whisper runtime must include foresight-whisper-worker")
+    diagnostic_worker = prepare_worker(ROOT, args.build)
+    support = prepare_runtime_support(ROOT, args.build / "native", "linux-x86_64")
+    if diagnostic_worker.receipt["native_id"] != support.receipt["native_id"]:
+        raise ValueError("Diagnostic worker and support NativeID differ")
     shutil.copytree(args.flutter_bundle, args.output / "app")
     (args.output / "bin").mkdir()
     (args.output / "lib").mkdir()
@@ -180,6 +188,8 @@ def main():
     shutil.copy2(service, args.output / "bin/foresight-service")
     shutil.copy2(mcp, args.output / "bin/foresight-mcp")
     shutil.copy2(native, args.output / "lib/libforesight_native.so")
+    stage_runtime_support(args.output, support)
+    stage_worker(args.output, diagnostic_worker)
     if args.whisper_gpu_runtime:
         shutil.copy2(args.whisper_gpu_runtime, args.output / "bin/whisper-cli-vulkan")
         speech_worker = args.whisper_gpu_runtime.parent / "foresight-whisper-worker"
@@ -371,6 +381,8 @@ esac
         args.output, commit, args.generation_backend, args.whisper_gpu_device,
         web_search_keys,
     )
+    seal_runtime_support(args.output, support, transformed=False)
+    seal_worker(args.output, diagnostic_worker, transformed=False)
     files = [
         {
             "path": str(file.relative_to(args.output)),

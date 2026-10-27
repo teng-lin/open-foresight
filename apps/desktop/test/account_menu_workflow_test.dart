@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_core/desktop.dart' show GoogleAccountPresentation;
 import 'dart:io';
@@ -77,53 +78,54 @@ class PendingAdditionalAccount extends SignedInAccount {
 }
 
 void main() {
-  testWidgets('cancelling Add another account retains the existing login', (
-    tester,
-  ) async {
-    final root = createTestTempDirectorySync('add-account-');
-    final auth = PendingAdditionalAccount(root);
-    GoogleSignInOutcome? outcome;
-    try {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Builder(
-            builder: (context) => TextButton(
-              onPressed: () async {
-                outcome = await showDialog<GoogleSignInOutcome>(
-                  context: context,
-                  builder: (_) => GoogleSignInDialog(
-                    auth: auth,
-                    addAccount: true,
-                    openBrowser: (_) async {},
-                  ),
-                );
-              },
-              child: const Text('Add another account'),
+  testWidgets(
+    'cancelling Add another account retains the existing login',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final root = createTestTempDirectorySync('add-account-');
+      final auth = PendingAdditionalAccount(root);
+      GoogleSignInOutcome? outcome;
+      try {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Builder(
+              builder: (context) => TextButton(
+                onPressed: () async {
+                  outcome = await showDialog<GoogleSignInOutcome>(
+                    context: context,
+                    builder: (_) => GoogleSignInDialog(
+                      auth: auth,
+                      addAccount: true,
+                      openBrowser: (_) async {},
+                    ),
+                  );
+                },
+                child: const Text('Add another account'),
+              ),
             ),
           ),
-        ),
-      );
-      await tester.tap(find.text('Add another account'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(auth.invitations, 1);
-      expect(auth.account, 'alex');
-      await tester.tap(find.text('Cancel sign-in'));
-      await tester.pumpAndSettle();
-      expect(outcome?.cancelled, true);
-      expect(outcome?.error, isNull);
-      expect(auth.connected, true);
-      expect(auth.account, 'alex');
-      expect(auth.saved, ['alex']);
-    } finally {
-      await tester.pumpWidget(const SizedBox.shrink());
-      await auth.close();
-      root.deleteSync(recursive: true);
-    }
-  });
+        );
+        await tester.tap(find.text('Add another account'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(auth.invitations, 1);
+        expect(auth.account, 'alex');
+        await tester.tap(find.text('Cancel sign-in'));
+        await tester.pumpAndSettle();
+        expect(outcome?.cancelled, true);
+        expect(outcome?.error, isNull);
+        expect(auth.connected, true);
+        expect(auth.account, 'alex');
+        expect(auth.saved, ['alex']);
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        await auth.close();
+        root.deleteSync(recursive: true);
+      }
+    }),
+  );
   testWidgets(
     'switching accounts shares notes and individual sign-out keeps the other account',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1280, 850);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -178,11 +180,11 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
         root.deleteSync(recursive: true);
       }
-    },
+    }),
   );
   testWidgets(
     'sidebar reflects signed-in identity and signs out without deleting notes',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1280, 850);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -225,6 +227,6 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
         root.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 }

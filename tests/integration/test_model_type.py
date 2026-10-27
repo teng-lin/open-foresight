@@ -20,6 +20,13 @@ class ModelTypeTest(unittest.TestCase):
         self.model = self.root / "model"
         self.model.write_text("fixture")
         self.lib = C.CDLL(LIBRARY)
+        abi = getattr(self.lib, "fs_abi_version", None)
+        if abi is None:
+            raise RuntimeError("Incompatible native ABI")
+        abi.argtypes = []
+        abi.restype = C.c_int
+        if abi() != 1:
+            raise RuntimeError("Incompatible native ABI")
         for name, args, result in [
             (
                 "fs_engine_create_model_type",

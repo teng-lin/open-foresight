@@ -32,6 +32,13 @@ def main():
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     lib = C.CDLL(str(args.library.resolve()))
+    abi = getattr(lib, "fs_abi_version", None)
+    if abi is None:
+        raise RuntimeError("Incompatible native ABI")
+    abi.argtypes = []
+    abi.restype = C.c_int
+    if abi() != 1:
+        raise RuntimeError("Incompatible native ABI")
     lib.fs_capture_start.argtypes = [C.c_char_p, C.c_int, C.c_int]
     lib.fs_capture_start.restype = C.c_void_p
     lib.fs_event_poll.argtypes = [C.c_void_p, C.c_int]

@@ -1,15 +1,20 @@
 """Offline tests of RPC timing, exact export provenance and owned cleanup."""
 
 import argparse
+from contextlib import nullcontext
+import fcntl
 import hashlib
 import io
 import json
+import mmap
 import os
+import select
 import sys
 from pathlib import Path
 import shutil
 import socket
 import subprocess
+import struct
 import tarfile
 import threading
 from types import SimpleNamespace
@@ -17,6 +22,336 @@ from types import SimpleNamespace
 import pytest
 
 from tools import measure_service_rpc as rpc
+
+
+DIAGNOSTIC_CONTEXT = {"native_id": "1" * 64, "worker_id": "2" * 64, "catalog_id": "3" * 64}
+
+
+@pytest.fixture
+def diagnostic_page_factory(private, monkeypatch):
+    if sys.platform != "linux":
+        pytest.skip("Linux diagnostic memfd and proc ownership inventory")
+    created = []
+    mapping_handles = {}
+    actual_open = os.open
+
+    def open_mapping(path, flags, *args, **kwargs):
+        # Unit tests exercise a real sealed kernel FD without requesting a
+        # capability. The separate observer proof covers map_files permissions.
+        if str(path) in mapping_handles:
+            return actual_open(f"/proc/self/fd/{mapping_handles[str(path)]}", flags, *args, **kwargs)
+        return actual_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(rpc.os, "open", open_mapping)
+
+    def make(*, seals=7, mode=0o600, size=16384, regular=False):
+        descriptor = (actual_open(private / "ordinary", os.O_CREAT | os.O_RDWR, 0o600) if regular else
+                      os.memfd_create("foresight-diagnostic", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING))
+        os.fchmod(descriptor, mode)
+        os.ftruncate(descriptor, size)
+        if not regular:
+            fcntl.fcntl(descriptor, getattr(fcntl, "F_ADD_SEALS", 1033), seals)
+        region = mmap.mmap(descriptor, min(size, 16384), flags=mmap.MAP_SHARED, prot=mmap.PROT_READ | mmap.PROT_WRITE)
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import os,mmap,sys; f=int(sys.argv[1]); "
+             "m=mmap.mmap(f,min(os.fstat(f).st_size,16384)); os.close(f); "
+             "os.write(1,b'ready\\n'); os.read(0,1)", str(descriptor)],
+            pass_fds=(descriptor,), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        )
+        created.append((descriptor, region, child))
+        assert select.select([child.stdout], [], [], 5)[0], "owned child did not become ready"
+        assert child.stdout.readline() == b"ready\n"
+        header = bytearray(256)
+        struct.pack_into("<IHHQQQ", header, 0, 0x5044464F, 1, 256, 1, os.getpid(), child.pid)
+        header[32:64] = b"N" * 32
+        for key, offset in (("native_id", 64), ("worker_id", 96), ("catalog_id", 128)):
+            header[offset:offset + 32] = bytes.fromhex(DIAGNOSTIC_CONTEXT[key])
+        struct.pack_into("<9Q", header, 160, 1, 0x2000000000000005, 0x2000000000000005, 10, 10, 5, 5, 1, 1)
+        os.pwrite(descriptor, header, 0)
+        os.pwrite(descriptor, b"PRIVATE_DIAGNOSTIC_PAYLOAD_CANARY", 256)
+        metadata = os.fstat(descriptor)
+        lines = [line.split(None, 5) for line in Path("/proc/self/maps").read_text().splitlines()]
+        fields = next(line for line in lines if len(line) == 6 and line[4] == str(metadata.st_ino))
+        fields[5] = "/memfd:foresight-diagnostic (deleted)"
+        mapping_handles[f"/proc/{os.getpid()}/map_files/{fields[0]}"] = descriptor
+        return descriptor, child, fields
+
+    try:
+        yield make
+    finally:
+        for descriptor, region, child in created:
+            try:
+                child.communicate(b"x", timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.communicate(timeout=5)
+            finally:
+                region.close()
+                os.close(descriptor)
+
+
+def diagnostic_capture(monkeypatch, inventory, fields):
+    session, parent = os.getsid(0), os.getpid()
+    original_text, original_pin = Path.read_text, os.pidfd_open
+    monkeypatch.setattr(rpc, "session_members", lambda sid: [parent] if sid != parent else [])
+
+    def pin(pid):
+        if pid == session and pid != parent:
+            raise ProcessLookupError()
+        return original_pin(pid)
+
+    monkeypatch.setattr(rpc.os, "pidfd_open", pin)
+    monkeypatch.setattr(Path, "read_text", lambda path, *a, **kw: " ".join(fields) + "\n"
+                        if str(path) == f"/proc/{parent}/maps" else original_text(path, *a, **kw))
+    inventory.capture(session, "outside sample window")
+
+
+def test_sealed_diagnostic_data_is_owned_pinned_and_never_payload_hashed(diagnostic_page_factory, monkeypatch):
+    descriptor, child, fields = diagnostic_page_factory()
+    report = {"diagnostic_context": DIAGNOSTIC_CONTEXT}
+    inventory = rpc.RuntimeInventory(report, diagnostic_context=DIAGNOSTIC_CONTEXT)
+    actual_pread = os.pread
+    reads = []
+
+    def read_header(fd, count, offset):
+        reads.append((count, offset))
+        assert (count, offset) == (256, 0)
+        return actual_pread(fd, count, offset)
+
+    monkeypatch.setattr(rpc.os, "pread", read_header)
+    monkeypatch.setattr(rpc.hashlib, "file_digest", lambda *a: pytest.fail("diagnostic payload hashed"))
+    diagnostic_capture(monkeypatch, inventory, fields)
+    os.pwrite(descriptor, b"changed private queue bytes", 256)
+    os.pwrite(descriptor, struct.pack("<Q", 12), 184)
+    diagnostic_capture(monkeypatch, inventory, fields)
+    pinned = [fd for fd, _ in inventory.diagnostic_handles.values()]
+    inventory.finish()
+    inventory.finish()
+    assert reads and len(pinned) == 1 and not inventory.diagnostic_handles
+    for fd in pinned:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+    data = report["mapped_diagnostic_data"]
+    assert len(data) == 1 and data[0]["payload_hashed"] is False and data[0]["seals"] == 7
+    observation = report["mapped_runtime_snapshots"][-1]["processes"][-1]["diagnostic_data"][0]
+    assert observation["counters"]["child_pid"] == child.pid
+    assert observation["counters"]["request_published"] == 12
+    encoded = json.dumps(report)
+    assert "PRIVATE_DIAGNOSTIC_PAYLOAD_CANARY" not in encoded and "changed private queue bytes" not in encoded
+    assert "N" * 32 not in encoded and "2000000000000005" not in encoded
+    assert not report.get("mapped_runtime_files")
+
+
+@pytest.mark.parametrize("context", [{}, {"native_id": "1" * 64}, {**DIAGNOSTIC_CONTEXT, "other": "4" * 64},
+                                     {**DIAGNOSTIC_CONTEXT, "worker_id": "not an identity"},
+                                     {**DIAGNOSTIC_CONTEXT, "worker_id": 3}])
+def test_diagnostic_inventory_requires_exact_external_identity_context(context):
+    with pytest.raises(ValueError, match="expected diagnostic context"):
+        rpc.RuntimeInventory({}, diagnostic_context=context)
+
+
+def test_reported_context_cannot_enable_diagnostic_exception(diagnostic_page_factory, monkeypatch):
+    _, _, fields = diagnostic_page_factory()
+    report = {"diagnostic_context": DIAGNOSTIC_CONTEXT}
+    inventory = rpc.RuntimeInventory(report)
+    assert inventory.diagnostic_context is None
+    actual_open = rpc.os.open
+
+    def opened(path, *args, **kwargs):
+        assert "/map_files/" not in str(path), "report data authorized a diagnostic handle"
+        return actual_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(rpc.os, "open", opened)
+    try:
+        with pytest.raises(ValueError, match="Deleted mapped file"):
+            diagnostic_capture(monkeypatch, inventory, fields)
+    finally:
+        inventory.finish()
+    assert report["status"] == "incomplete" and not inventory.diagnostic_handles
+
+
+@pytest.mark.parametrize("method", ["capture", "mapped_diagnostic"])
+@pytest.mark.parametrize("already_captured", [False, True])
+def test_finished_inventory_cannot_open_new_pins(diagnostic_page_factory, monkeypatch, method, already_captured):
+    _, _, fields = diagnostic_page_factory()
+    report = {}
+    inventory = rpc.RuntimeInventory(report, diagnostic_context=DIAGNOSTIC_CONTEXT)
+    if already_captured:
+        diagnostic_capture(monkeypatch, inventory, fields)
+    pinned = [fd for fd, _ in inventory.diagnostic_handles.values()]
+    inventory.finish()
+    before = len(report.get("mapped_runtime_snapshots", []))
+    monkeypatch.setattr(rpc.os, "open", lambda *args, **kwargs: pytest.fail("opened after finish"))
+    monkeypatch.setattr(rpc.os, "pidfd_open", lambda *args, **kwargs: pytest.fail("pinned after finish"))
+    with pytest.raises(RuntimeError, match="already finished"):
+        if method == "capture":
+            inventory.capture(os.getsid(0), "after finish")
+        else:
+            inventory.mapped_diagnostic(os.getpid(), os.getsid(0), fields)
+    assert len(report.get("mapped_runtime_snapshots", [])) == before
+    assert not inventory.pending and not inventory.diagnostic_handles
+    for fd in pinned:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
+@pytest.mark.parametrize("change", ["no-context", "unknown-name", "executable", "private", "offset", "range",
+                                    "device", "inode", "no-seals", "missing-seal", "mode", "size", "ordinary"])
+def test_diagnostic_data_contract_refuses_unqualified_objects(diagnostic_page_factory, monkeypatch, change):
+    options = {"seals": 0} if change == "no-seals" else {"seals": 3} if change == "missing-seal" else {}
+    options.update({"mode": 0o640} if change == "mode" else {"size": 32768} if change == "size" else
+                   {"regular": True} if change == "ordinary" else {})
+    _, _, fields = diagnostic_page_factory(**options)
+    if change == "unknown-name":
+        fields[5] = "/memfd:unknown (deleted)"
+    if change in {"executable", "private"}:
+        fields[1] = "rwx s".replace(" ", "") if change == "executable" else "rw-p"
+    if change == "offset":
+        fields[2] = "00001000"
+    if change == "range":
+        fields[0] = "1000-2000"
+    if change == "device":
+        fields[3] = "00:00"
+    if change == "inode":
+        fields[4] = str(int(fields[4]) + 1)
+    report = {"status": "passed"}
+    inventory = rpc.RuntimeInventory(report, diagnostic_context=None if change == "no-context" else DIAGNOSTIC_CONTEXT)
+    try:
+        with pytest.raises(ValueError):
+            diagnostic_capture(monkeypatch, inventory, fields)
+    finally:
+        inventory.finish()
+    assert report["status"] == "incomplete" and report["mapped_runtime_snapshots"][0]["status"] == "incomplete"
+    assert not inventory.diagnostic_handles and not report.get("mapped_diagnostic_data")
+
+
+@pytest.mark.parametrize("change", ["magic", "version", "header-size", "generation", "nonce", "native-id", "worker-id",
+                                    "catalog-id", "parent", "child", "reserved", "counter", "control"])
+def test_diagnostic_header_refuses_forgery(diagnostic_page_factory, monkeypatch, change):
+    descriptor, _, fields = diagnostic_page_factory()
+    mutations = {"magic": (0, b"xxxx"), "version": (4, b"\x02\x00"), "header-size": (6, b"\x00\x02"),
+                 "generation": (8, bytes(8)), "nonce": (32, bytes(32)), "native-id": (64, bytes(32)),
+                 "worker-id": (96, bytes(32)), "catalog-id": (128, bytes(32)), "parent": (16, bytes(8)),
+                 "child": (24, struct.pack("<Q", os.getpid())), "reserved": (232, b"x"),
+                 "counter": (184, struct.pack("<Q", 1 << 63)), "control": (168, struct.pack("<Q", 4))}
+    offset, value = mutations[change]
+    os.pwrite(descriptor, value, offset)
+    inventory = rpc.RuntimeInventory({}, diagnostic_context=DIAGNOSTIC_CONTEXT)
+    try:
+        with pytest.raises(ValueError):
+            diagnostic_capture(monkeypatch, inventory, fields)
+    finally:
+        inventory.finish()
+    assert not inventory.diagnostic_handles
+
+
+def test_diagnostic_header_change_at_finish_fails_and_closes_pin(diagnostic_page_factory, monkeypatch):
+    descriptor, _, fields = diagnostic_page_factory()
+    report = {}
+    inventory = rpc.RuntimeInventory(report, diagnostic_context=DIAGNOSTIC_CONTEXT)
+    diagnostic_capture(monkeypatch, inventory, fields)
+    pinned = [fd for fd, _ in inventory.diagnostic_handles.values()]
+    os.pwrite(descriptor, b"X" * 32, 32)
+    with pytest.raises(ValueError, match="immutable header changed"):
+        inventory.finish()
+    assert report["status"] == "incomplete" and not inventory.diagnostic_handles
+    for fd in pinned:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
+@pytest.mark.parametrize("failure", ["open-denied", "short-read", "readonly", "foreign-handle"])
+def test_diagnostic_handle_failures_are_closed_and_private(diagnostic_page_factory, monkeypatch, failure):
+    descriptor, _, fields = diagnostic_page_factory()
+    if failure in {"open-denied", "readonly"}:
+        actual = rpc.os.open
+
+        def opened(path, *args, **kwargs):
+            if "/map_files/" in str(path):
+                if failure == "open-denied":
+                    raise PermissionError(1, "denied", str(path))
+                return os.dup(descriptor)
+            return actual(path, *args, **kwargs)
+
+        monkeypatch.setattr(rpc.os, "open", opened)
+    elif failure == "short-read":
+        monkeypatch.setattr(rpc.os, "pread", lambda *args: b"x" * 255)
+    else:
+        actual_stat = rpc.os.fstat
+        monkeypatch.setattr(rpc.os, "fstat", lambda fd: SimpleNamespace(
+            st_mode=actual_stat(fd).st_mode, st_uid=os.geteuid() + 1))
+    report = {}
+    inventory = rpc.RuntimeInventory(report, diagnostic_context=DIAGNOSTIC_CONTEXT)
+    try:
+        with pytest.raises(ValueError) as error:
+            diagnostic_capture(monkeypatch, inventory, fields)
+        assert fields[0] not in str(error.value)
+    finally:
+        inventory.finish()
+    assert report["status"] == "incomplete" and not inventory.diagnostic_handles
+
+
+def test_diagnostic_permissions_rechecked_before_finish(diagnostic_page_factory, monkeypatch):
+    descriptor, _, fields = diagnostic_page_factory()
+    report = {}
+    inventory = rpc.RuntimeInventory(report, diagnostic_context=DIAGNOSTIC_CONTEXT)
+    diagnostic_capture(monkeypatch, inventory, fields)
+    pinned = [fd for fd, _ in inventory.diagnostic_handles.values()]
+    os.fchmod(descriptor, 0o640)
+    with pytest.raises(ValueError, match="Unsafe diagnostic data handle"):
+        inventory.finish()
+    assert report["status"] == "incomplete" and not inventory.diagnostic_handles
+    for fd in pinned:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
+@pytest.mark.parametrize("validation_fails", [False, True])
+def test_diagnostic_close_failure_uses_its_own_exception_state(diagnostic_page_factory, monkeypatch, validation_fails):
+    descriptor, _, fields = diagnostic_page_factory()
+    report = {}
+    inventory = rpc.RuntimeInventory(report, diagnostic_context=DIAGNOSTIC_CONTEXT)
+    diagnostic_capture(monkeypatch, inventory, fields)
+    pinned = next(iter(inventory.diagnostic_handles.values()))[0]
+    if validation_fails:
+        os.pwrite(descriptor, b"X" * 32, 32)
+    actual_close = os.close
+
+    def closed(fd):
+        actual_close(fd)
+        if fd == pinned:
+            raise OSError("controlled close failure")
+
+    try:
+        raise LookupError("unrelated caller exception")
+    except LookupError:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(rpc.os, "close", closed)
+            with pytest.raises(ValueError, match="immutable header changed" if validation_fails else "handle cleanup failed") as failure:
+                inventory.finish()
+    assert report["status"] == "incomplete" and not inventory.diagnostic_handles
+    if validation_fails:
+        assert "Diagnostic data handle cleanup failed" in failure.value.__notes__
+    with pytest.raises(OSError):
+        os.fstat(pinned)
+
+
+@pytest.mark.parametrize("failure", ["not-peer", "outside-session", "foreign-owner", "wrong-parent", "exited"])
+def test_diagnostic_peer_proof_is_required(diagnostic_page_factory, monkeypatch, failure):
+    _, child, _ = diagnostic_page_factory()
+    parent, session = os.getpid(), os.getsid(0)
+    if failure == "outside-session":
+        monkeypatch.setattr(rpc.os, "getsid", lambda pid: session + 1)
+    elif failure == "foreign-owner":
+        original = Path.stat
+        monkeypatch.setattr(Path, "stat", lambda path, *a, **kw: SimpleNamespace(st_uid=os.geteuid() + 1)
+                            if str(path) == f"/proc/{parent}" else original(path, *a, **kw))
+    elif failure == "wrong-parent":
+        monkeypatch.setattr(Path, "read_text", lambda path: f"{child.pid} (owned) S {parent + 1} 1 {session} 0")
+    elif failure == "exited":
+        monkeypatch.setattr(rpc.signal, "pidfd_send_signal", lambda *a: (_ for _ in ()).throw(ProcessLookupError()))
+    with pytest.raises((ValueError, ProcessLookupError)):
+        rpc.RuntimeInventory.diagnostic_peers(parent, child.pid, parent + 100000 if failure == "not-peer" else parent, session)
 
 
 def command(root, *args):
@@ -751,6 +1086,9 @@ def test_real_supervisor_cleans_descendant_after_service_exits(private, ignore_t
         assert os.getsid(child) == process.pid
         assert process.poll() is None, "Supervisor must retain group ownership after service exits"
         child_handle = os.pidfd_open(child)
+        exited = select.poll()
+        exited.register(child_handle, select.POLLIN)
+        assert exited.poll(0) == [], "Descendant must still be alive before cleanup"
         if stop_supervisor:
             os.kill(process.pid, rpc.signal.SIGSTOP)
         measurement.close()
@@ -767,12 +1105,15 @@ def test_real_supervisor_cleans_descendant_after_service_exits(private, ignore_t
         else:
             assert measurement.report["owned_session_cleanup"] == "supervisor verified the session empty"
             assert measurement.report["graceful_shutdown"] is True
-        # The supervisor reaps on graceful exit; after SIGKILL, init may still
-        # own a dead zombie briefly. Neither case leaves an executing child.
-        def stopped():
-            path = Path(f"/proc/{child}/stat")
-            return not path.exists() or path.read_text().rpartition(")")[2].split()[0] == "Z"
-        rpc.wait_until(stopped, timeout=5)
+        # The birth-bound pidfd becomes readable on exit, including while init
+        # still owns a zombie after SIGKILL. Reading /proc races with reaping
+        # and can observe a reused PID instead of this descendant.
+        assert any(
+            fd == child_handle and events & select.POLLIN
+            for fd, events in exited.poll(5000)
+        ), (
+            "Owned descendant must exit within five seconds"
+        )
     finally:
         if child_handle is not None:
             try:
@@ -787,24 +1128,31 @@ def test_real_supervisor_cleans_descendant_after_service_exits(private, ignore_t
         assert process.returncode in {0, -9}, (out, err)
 
 
-def test_supervisor_membership_ignores_disappearing_process_and_parses_comm(monkeypatch):
+def test_supervisor_membership_uses_kernel_sid_and_ignores_exited_process(monkeypatch):
     entries = [SimpleNamespace(name="self"), SimpleNamespace(name="10"),
                SimpleNamespace(name="11"), SimpleNamespace(name="12"), SimpleNamespace(name="13")]
-    monkeypatch.setattr(Path, "iterdir", lambda _path: entries)
-    def stat(entry, _name):
-        if entry.name == "11":
-            raise FileNotFoundError("exited")
-        if entry.name == "12":
+    monkeypatch.setattr(rpc.os, "scandir", lambda _path: nullcontext(entries))
+    calls = []
+    def sid(pid):
+        calls.append(pid)
+        if pid == 11:
             raise ProcessLookupError("exited")
-        return SimpleNamespace(read_text=lambda: "13 (name with ) spaces) S 1 99 10 0")
-    # SimpleNamespace cannot overload '/', so adapt the numeric fixture entries.
-    class Entry:
-        def __init__(self, name):
-            self.name = name
-        def __truediv__(self, name):
-            return stat(self, name)
-    monkeypatch.setattr(Path, "iterdir", lambda _path: [Entry(row.name) for row in entries])
+        return 99 if pid == 12 else 10
+    monkeypatch.setattr(rpc.os, "getsid", sid)
     assert rpc.session_members(10) == [13]
+    assert calls == [11, 12, 13]
+
+
+def test_supervisor_live_members_ignores_disappearing_process_and_parses_comm(monkeypatch):
+    monkeypatch.setattr(rpc, "session_members", lambda _session: [11, 12, 13])
+    def stat(path):
+        if path.parts[-2] == "11":
+            raise FileNotFoundError("exited")
+        if path.parts[-2] == "12":
+            raise ProcessLookupError("exited")
+        return "13 (name with ) spaces) S 1 99 10 0"
+    monkeypatch.setattr(Path, "read_text", stat)
+    assert rpc.live_session_members(10) == [{"pid": 13, "state": "S", "process_group": 99}]
 
 
 def test_supervisor_refuses_missing_subreaper_before_launch(monkeypatch):
@@ -1221,20 +1569,70 @@ def test_native_relay_stopped_process_has_bounded_escalated_cleanup(native_relay
 def test_native_relay_constructor_failure_closes_owned_process(native_relay, relay_server, private, monkeypatch, failure):
     service = relay_server(lambda connection, stop: connection.recv(1))
     evidence = {}
+    child_samples = []
     if failure == "setup":
         monkeypatch.setattr(rpc.os, "set_blocking", lambda *args: (_ for _ in ()).throw(OSError("setup failed")))
         expected, message = OSError, "setup failed"
     else:
         original = rpc.file_identity
+        parent_path = Path(f"/proc/{os.getpid()}/exe")
+
         def identity(path):
             value = original(path)
-            if str(path).startswith("/proc/"):
+            if str(path).startswith("/proc/") and path != parent_path:
+                child_samples.append(path)
                 value["sha256"] = "different"
             return value
         monkeypatch.setattr(rpc, "file_identity", identity)
         expected, message = ValueError, "different image"
     with pytest.raises(expected, match=message):
         rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", evidence, {})
+    assert evidence["exit_code"] == 0
+    assert evidence["log"]["sha256"]
+    if failure == "image":
+        assert len(child_samples) == 1, "Unrelated image was tolerated as an exec transition"
+
+
+def test_native_relay_waits_for_parent_to_native_exec_transition(native_relay, relay_server, private, monkeypatch):
+    service = relay_server(lambda connection, stop: stop.wait(3))
+    original = rpc.file_identity
+    parent_path = Path(f"/proc/{os.getpid()}/exe")
+    parent = original(parent_path)
+    observed = []
+
+    def identity(path):
+        if str(path).startswith("/proc/") and path != parent_path:
+            observed.append(path)
+            if len(observed) <= 2:
+                return dict(parent)
+        return original(path)
+
+    monkeypatch.setattr(rpc, "file_identity", identity)
+    evidence = {}
+    peer = rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", evidence, {})
+    try:
+        assert len(observed) == 3
+        assert evidence["executed_image"]["sha256"] == original(native_relay)["sha256"]
+        assert evidence["executed_image"]["sha256"] != parent["sha256"]
+    finally:
+        peer.close()
+
+
+def test_native_relay_rejects_parent_image_that_never_executes(native_relay, relay_server, private, monkeypatch):
+    service = relay_server(lambda connection, stop: stop.wait(3))
+    original = rpc.file_identity
+    parent_path = Path(f"/proc/{os.getpid()}/exe")
+    parent = original(parent_path)
+
+    def identity(path):
+        if str(path).startswith("/proc/"):
+            return dict(parent)
+        return original(path)
+
+    monkeypatch.setattr(rpc, "file_identity", identity)
+    evidence = {}
+    with pytest.raises(ValueError, match="different image"):
+        rpc.DesktopHostPeer(native_relay, service.path, private / "relay.log", evidence, {}, timeout=.03)
     assert evidence["exit_code"] == 0
     assert evidence["log"]["sha256"]
 

@@ -101,6 +101,19 @@ void checkPcmFormats() {
 }
 
 int main() {
+  REQUIRE(fs_macos_capture_terminal(false, MacCaptureFailure::none) ==
+          MacCaptureOutcome::stopped);
+  REQUIRE(fs_macos_capture_terminal(true, MacCaptureFailure::none) ==
+          MacCaptureOutcome::cancelled);
+  for (const auto failure :
+       {MacCaptureFailure::permission, MacCaptureFailure::unavailable}) {
+    // A later cancel must preserve an already observed terminal failure. The
+    // capture loop still delivers its buffered final PCM before this decision.
+    REQUIRE(fs_macos_capture_terminal(false, failure) ==
+            MacCaptureOutcome::failed);
+    REQUIRE(fs_macos_capture_terminal(true, failure) ==
+            MacCaptureOutcome::failed);
+  }
   @autoreleasepool {
     checkPcmFormats();
     // One-shot startup watchdog: converted PCM, including silent buffers,
@@ -289,8 +302,9 @@ int main() {
     discarded->discardAudio = true;
     auto *privateAudio =
         reinterpret_cast<const AudioBufferList *>(uintptr_t(1));
-    REQUIRE(output(0, nullptr, privateAudio, nullptr, nullptr, nullptr,
-                   discarded.get()) == noErr);
+    REQUIRE(captureSystemAudio(discarded->ring, discarded->ring->callbacks,
+                               discarded->format, discarded->discardAudio,
+                               privateAudio) == noErr);
     REQUIRE(!discarded->ring->pop(sample));
 
     REQUIRE([systemAudioState(nullptr)[@"system_audio"] isEqual:@"unknown"]);
@@ -323,16 +337,32 @@ int main() {
     REQUIRE(capabilities.find("permission_verified") != std::string::npos);
     // Discovery does not create taps or launch permission requests.
     {
-      std::lock_guard lock(systemRequestMutex);
-      REQUIRE(!systemRequest);
+      std::lock_guard lock(systemRequestMutex());
+      REQUIRE(!systemRequest());
     }
     REQUIRE(before ==
             micStatus()); // Discovery must never request microphone access.
     std::atomic<bool> cancel{true};
     unsigned frames = 0;
-    fs_macos_capture(
-        "missing-device", false, 48000, cancel, [&](const auto &) { ++frames; },
-        [](const auto &) {});
+    auto owner = fs_macos_capture_owner();
+    foresight::diagnostics::configure(foresight::diagnostics::Level::info);
+    uint64_t diagnostic_token = 0;
+    REQUIRE(fs_diagnostic_open(1, sizeof(fs_diagnostic_record),
+                               &diagnostic_token) == 0);
+    const auto outcome = fs_macos_capture(
+        "missing-device", false, 48000, cancel, owner,
+        [&](const auto &) { ++frames; }, [](const auto &) {});
+    fs_macos_capture_close(owner);
+    REQUIRE(outcome == MacCaptureOutcome::failed);
+    fs_diagnostic_record diagnostic{};
+    fs_diagnostic_batch batch{};
+    REQUIRE(fs_diagnostic_drain(diagnostic_token, 1, sizeof(diagnostic),
+                                &diagnostic, 1, 0, &batch, sizeof(batch)) == 0);
+    REQUIRE(batch.count == 1);
+    REQUIRE(diagnostic.event == FS_DIAGNOSTIC_WORKER_FAILED);
+    REQUIRE(diagnostic.outcome == 3);
+    REQUIRE(diagnostic.category == 0 || diagnostic.category == 7);
+    REQUIRE(fs_diagnostic_close(diagnostic_token) == 0);
     REQUIRE(frames == 0);
     std::cout
         << "macOS audio buffer, discovery and cancellation contracts passed\n";

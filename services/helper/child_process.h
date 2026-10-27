@@ -37,7 +37,7 @@ public:
                             mode = std::move(mode), model = std::move(model),
                             option = std::move(option)]() mutable {
       try {
-        std::unique_lock launch(foresight::launch_mutex);
+        std::unique_lock launch(foresight::launch_mutex_for_process());
         posix_spawn_file_actions_t actions;
         posix_spawn_file_actions_init(&actions);
         posix_spawn_file_actions_adddup2(&actions, input, STDIN_FILENO);

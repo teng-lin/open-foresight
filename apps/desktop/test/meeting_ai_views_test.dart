@@ -1,3 +1,5 @@
+import 'desktop_fixture_owner.dart';
+import 'package:foresight_test_support/google_connections.dart';
 import '../test_support/core_fixture.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -51,7 +53,7 @@ class _WorkflowViewRuntime extends NativeRuntime {
   bool cancel({String? requestId}) => true;
 }
 
-class _WorkflowViewDomain extends Domain {
+class _WorkflowViewDomain extends AdapterDomain {
   _WorkflowViewDomain(super.store, super.helper);
   @override
   Future<void> index(String id, {bool Function()? current}) async {
@@ -62,7 +64,7 @@ class _WorkflowViewDomain extends Domain {
 void main() {
   testWidgets(
     'task completion and local-document preparation use service operations',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       tester.view.physicalSize = const Size(1440, 1000);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -95,9 +97,6 @@ void main() {
       final helper = OfflineHelper('${root.path}/sock', '${root.path}/helper');
       final domain = _WorkflowViewDomain(store, helper);
       addTearDown(() {
-        domain.close();
-        domain.generator?.close();
-        store.close();
         if (root.existsSync()) root.deleteSync(recursive: true);
       });
       await tester.pumpWidget(
@@ -168,6 +167,6 @@ void main() {
       final closing = helper.close().then((_) => helperClosed = true);
       await pumpUntil(tester, () => helperClosed);
       await closing;
-    },
+    }),
   );
 }

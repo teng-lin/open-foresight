@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
@@ -20,6 +21,7 @@ class DiscoveredRuntime extends NativeRuntime {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   for (final hasCandidate in [false, true]) {
     test(
       'resume refuses late discovery after close, candidate=$hasCandidate',
@@ -38,12 +40,13 @@ void main() {
         final domain = Domain(
           store,
           helper,
-          discoverGeneration: (receivedStore, library, {current}) {
-            expect(receivedStore, same(store));
-            stillCurrent = current;
-            entered.complete();
-            return release.future;
-          },
+          discoverGeneration:
+              (receivedStore, library, {current, onCandidate, retire}) {
+                expect(receivedStore, same(store));
+                stillCurrent = current;
+                entered.complete();
+                return release.future;
+              },
         );
         try {
           final pending = domain.resume();
@@ -93,7 +96,7 @@ void main() {
     final domain = Domain(
       store,
       helper,
-      discoverGeneration: (_, _, {current}) {
+      discoverGeneration: (_, _, {current, onCandidate, retire}) {
         expect(current!(), isTrue);
         entered.complete();
         return release.future;

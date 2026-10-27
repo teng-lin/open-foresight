@@ -283,10 +283,10 @@ class MeetingStore {
           as String;
 
   void restoreMeetingEnhancedDraft(int meeting, String body) {
-    db.execute('UPDATE meeting_notes SET enhanced_body=? WHERE meeting_id=?', [
-      body,
-      meeting,
-    ]);
+    db.execute(
+      'UPDATE meeting_notes SET enhanced_body=?,enhanced_generated=0 WHERE meeting_id=?',
+      [body, meeting],
+    );
   }
 
   void saveMeetingEnhancedDraft(int meeting, String body) =>
@@ -318,10 +318,10 @@ class MeetingStore {
           ? now
           : null;
       db.execute(
-        "INSERT INTO meeting_notes(meeting_id,body,revision,timestamp,$column,enhanced_body) VALUES(?,'',0,?,?,?) "
-        'ON CONFLICT(meeting_id) DO UPDATE SET timestamp=excluded.timestamp,enhanced_body=excluded.enhanced_body,'
+        "INSERT INTO meeting_notes(meeting_id,body,revision,timestamp,$column,enhanced_body,enhanced_generated) VALUES(?,'',0,?,?,?,?) "
+        'ON CONFLICT(meeting_id) DO UPDATE SET timestamp=excluded.timestamp,enhanced_body=excluded.enhanced_body,enhanced_generated=excluded.enhanced_generated,'
         '$column=COALESCE(excluded.$column,meeting_notes.$column)',
-        [meeting, now, date, body],
+        [meeting, now, date, body, manual ? 0 : 1],
       );
       write();
       db.execute('RELEASE save_enhanced_note');

@@ -88,6 +88,7 @@ static char values[4096];
 void set_mode(int value) { mode = value; }
 int get_calls(void) { return calls; }
 const char *get_values(void) { return values; }
+int fs_abi_version(void) { return 1; }
 int fs_set_runtime_environment(const char *key, const char *value) {
   calls++;
   if (mode) return -1;
@@ -169,6 +170,31 @@ int fs_set_runtime_environment(const char *key, const char *value) {
       lock.unlockSync();
       lock.closeSync();
       expect(configuredInstallationRoot, app.resolveSymbolicLinksSync());
+    },
+  );
+
+  test(
+    'installation maintenance and hardlinked/special lock files refuse launch',
+    () {
+      final app = Directory('${root.path}/Maintained.app')..createSync();
+      runtimeConfiguration.environment['FORESIGHT_INSTALL_ROOT'] = app.path;
+      final path = installationLockPath(app.path);
+      privateDirectory(File(path).parent.path);
+      addTearDown(() => File(path).parent.deleteSync(recursive: true));
+      final marker = File('${app.path}/.installation-maintenance')
+        ..writeAsStringSync('');
+      expect(acquireInstallationLock, throwsStateError);
+      expect(File(path).existsSync(), isFalse);
+      marker.deleteSync();
+      final owned = acquireInstallationLock()!;
+      owned.closeSync();
+      final target = File('${File(path).parent.path}/linked-lock');
+      expect(Process.runSync('/bin/ln', [path, target.path]).exitCode, 0);
+      expect(acquireInstallationLock, throwsStateError);
+      target.deleteSync();
+      File(path).deleteSync();
+      expect(Process.runSync('/usr/bin/mkfifo', [path]).exitCode, 0);
+      expect(acquireInstallationLock, throwsStateError);
     },
   );
 

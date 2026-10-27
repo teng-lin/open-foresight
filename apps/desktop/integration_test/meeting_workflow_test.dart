@@ -603,8 +603,21 @@ void main() {
         (summary['generated'] as String).toLowerCase(),
         contains('country'),
       );
-      await tester.ensureVisible(find.byTooltip('Edit Summary'));
-      await tester.tap(find.byTooltip('Edit Summary'));
+      final editSummary = find.byWidgetPredicate(
+        (widget) =>
+            widget is IconButton &&
+            widget.tooltip == 'Edit Summary' &&
+            widget.onPressed != null,
+      );
+      await waitUntil(
+        tester,
+        () => editSummary.evaluate().length == 1,
+        reason: 'Generated summary did not reach the editable UI projection',
+      );
+      await tester.ensureVisible(editSummary);
+      await tester.pumpAndSettle();
+      expect(editSummary.hitTestable(), findsOneWidget);
+      await tester.tap(editSummary);
       await tester.pumpAndSettle();
       await tester.enterText(
         find.byType(TextField).last,
@@ -720,7 +733,17 @@ void main() {
         'Ask what you can do for your country.',
       );
       await selectMeetingPanel(tester, 'Summary');
-      await tester.tap(find.text('Previous versions'));
+      final previousVersions = find.text('Previous versions');
+      await waitUntil(
+        tester,
+        () => previousVersions.evaluate().length == 1,
+        reason:
+            'Saved summary versions did not reach the reopened UI projection',
+      );
+      await tester.ensureVisible(previousVersions);
+      await tester.pumpAndSettle();
+      expect(previousVersions.hitTestable(), findsOneWidget);
+      await tester.tap(previousVersions);
       await tester.pumpAndSettle();
       expect(
         find.textContaining('My meeting review: preserve this edit.'),

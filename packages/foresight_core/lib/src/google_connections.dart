@@ -3,7 +3,7 @@ import 'desktop_connection.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
-import 'domain.dart';
+import 'application_services/service_workspace_ports.dart';
 import 'google_auth.dart';
 import 'store.dart' hide Parser;
 import 'document_parser.dart';
@@ -13,7 +13,7 @@ import 'desktop_google_sources.dart';
 export 'google_calendar_event.dart' show calendarDescriptionText;
 
 class GoogleConnections implements ConnectedSources {
-  final Domain domain;
+  final SourceIndexPort domain;
   final GoogleAuth auth;
   bool _closed = false;
   Future<void>? _refreshing;

@@ -209,7 +209,9 @@ def test_release_producer_outputs_names_and_full_gates_match_the_verified_index(
         assert "inputs.tier == 'release'" in run["env"]["ACCEPTANCE_FULL"]
     assert "linux-bundle" not in jobs
     assert "inputs.tier != 'release'" in jobs["linux-native"]["if"]
-    assert "inputs.tier == 'release'" in jobs["macos"]["env"]["FORESIGHT_COVERAGE"]
+    assert (
+        "inputs.tier == 'release'" in jobs["macos-checks"]["env"]["FORESIGHT_COVERAGE"]
+    )
     assert "inputs.tier != 'release'" in jobs["publish-caches"]["if"]
     assert jobs["sanitizers"]["with"] == {
         "source": "${{ inputs.source }}",

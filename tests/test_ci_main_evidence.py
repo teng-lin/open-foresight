@@ -225,7 +225,7 @@ class MainEvidenceTests(unittest.TestCase):
             repository=REPOSITORY, api=self.reader.api,
         )
         for error in (ValueError("missing"), KeyError("expired"), TypeError("invalid")):
-            with self.subTest(error=error):
+            with self.subTest(error=repr(error)):
                 reader = FixtureReader()
                 verifier.side_effect = error
                 with patch.dict("sys.modules", {"tools.ci_qualification_index": module}):
@@ -249,7 +249,7 @@ class MainEvidenceTests(unittest.TestCase):
             lambda: self.reader.pr.update(merged_at=None),
         ]
         for edit in edits:
-            with self.subTest(edit=edit):
+            with self.subTest(edit=edit.__code__.co_firstlineno):
                 self.setUp()
                 edit()
                 self.assertEqual(self.proposal()["decision"], "sweep")

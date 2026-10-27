@@ -21,6 +21,10 @@ from tools import integration_gates as gates
 
 @pytest.fixture(autouse=True)
 def isolated_audio_host(monkeypatch):
+    monkeypatch.setattr(
+        gates, "_source_worker_defines",
+        lambda env, dart: {"FIXTURE_WORKER": "verified public context"},
+    )
     # Model the sound-device-free CI container, regardless of the test host.
     exists = Path.exists
     monkeypatch.setattr(
@@ -209,6 +213,7 @@ def test_fast_gate_selects_platform_failures_and_isolates_capture_path(
     native = tmp_path / "native"
     if has_native:
         native.touch()
+        (tmp_path / "libforesight_sql_support.so").touch()
     args = SimpleNamespace(
         native=native if has_native else None,
         output=tmp_path,

@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -58,6 +59,7 @@ class _Runtime extends NativeRuntime {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'meeting follow-up retrieval and generation use only that conversation history',
     () async {

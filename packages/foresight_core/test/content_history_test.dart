@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:io';
 
 import 'package:foresight_core/src/store.dart';
@@ -10,6 +11,7 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Store store;
   late String path;
   setUp(() {
@@ -128,7 +130,9 @@ void main() {
           .revisions('meeting_notes', id)
           .map((r) => r['snapshot'] as Map);
       expect(notes.any((r) => r['body'] == 'raw first'), isTrue);
-      expect(notes.any((r) => r['enhanced_body'] == 'enhanced first'), isTrue);
+      // Generated live drafts are replaceable derived output, not manual history.
+      expect(notes.any((r) => r['enhanced_body'] == 'enhanced first'), isFalse);
+      expect(store.meetingEnhancedNotes(id), 'enhanced second');
       expect(
         store.contentHistory.revisions('artifacts', artifact).first['snapshot'],
         containsPair('edited', 'edit first'),

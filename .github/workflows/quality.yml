@@ -27,7 +27,8 @@ jobs:
         run: python tools/check_migration_integrity.py
   python:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # The complete coverage suite exceeds ten minutes on two-core hosted runners.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -39,6 +40,8 @@ jobs:
       - run: ruff check .
       - run: mypy
       - run: python tools/check_subprocess_timeouts.py
+      - name: Check offline documentation links
+        run: python -m tools.check_document_links
       - name: Install pinned protobuf compiler for contract tests
         run: |
           task_protoc="$RUNNER_TEMP/quality-protoc"
@@ -47,8 +50,14 @@ jobs:
           unzip -q "$task_protoc.zip" -d "$task_protoc"
           test "$("$task_protoc/bin/protoc" --version)" = 'libprotoc 35.1'
           echo "$task_protoc/bin" >> "$GITHUB_PATH"
+      - name: Provision pinned acceptance evidence fixture
+        env:
+          FORESIGHT_EVIDENCE_CACHE: ${{ runner.temp }}/evidence-fixtures
+        run: python -m tools.evidence_fixture --fetch
       - name: Offline Python unit tests
-        run: python -m pytest --cov --cov-config=.coveragerc --cov-report=term --cov-report=xml --durations=20 --junitxml=coverage/python/junit.xml
+        env:
+          FORESIGHT_EVIDENCE_CACHE: ${{ runner.temp }}/evidence-fixtures
+        run: python tools/pytest_parallel.py --cov --cov-config=.coveragerc --cov-report=term --cov-report=xml --durations=20 --junitxml=coverage/python/junit.xml
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

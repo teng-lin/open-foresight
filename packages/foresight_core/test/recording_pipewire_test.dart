@@ -336,7 +336,7 @@ print(' '.join(labels))
             'source': source,
           });
         }, interruption: gaps.add);
-        recording.start(
+        await recording.start(
           inspector.path,
           model.path,
           microphoneTarget: '$prefix-input',
@@ -352,7 +352,7 @@ print(' '.join(labels))
           () => recording!.sampleCounts.every((count) => count >= 96000),
           'two seconds of measured PCM are buffered',
         );
-        recording.pause();
+        await recording.pause();
         final pausedCounts = List<int>.from(recording.sampleCounts);
         expect(recording.captures, isEmpty);
         await stopPlayer(localPlayer);
@@ -369,7 +369,7 @@ print(' '.join(labels))
         await stopPlayer(localPlayer);
         await stopPlayer(remotePlayer);
         await drainPausedRoutes(pausedCounts);
-        recording.resume();
+        await recording.resume();
         localPlayer = await play('$prefix-local', 437);
         remotePlayer = await play('$prefix-remote', 997);
         await waitFor(

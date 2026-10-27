@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -33,6 +34,7 @@ OutputStats stats(OutputStatsPeriod period) => OutputStats(
 );
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'Stats identity captures immutable calendar labels, not exact cutoff',
     () {

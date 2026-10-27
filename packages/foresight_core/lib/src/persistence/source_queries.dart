@@ -1,15 +1,27 @@
+import 'preference_entities.dart';
+import '../platform_services.dart'
+    show RuntimeConfiguration, currentOwnerRuntimeSnapshot;
 import 'dart:convert';
+import 'source_contents.dart';
 import 'package:sqlite3/sqlite3.dart';
 import '../read_models.dart';
-import 'label_store.dart';
-import 'model_store.dart';
+import 'label_queries.dart';
+import 'model_queries.dart';
 import 'read_schema_guard.dart';
 
 /// Immutable named reads on the caller's connection and short SQLite snapshot.
 class SourceQueries {
   final Database db;
   final int supportedVersion;
-  SourceQueries(this.db, {required this.supportedVersion});
+
+  /// An explicit or bound owner snapshot, fixed at construction (an editable
+  /// boundary passed here is frozen); null outside any owner scope.
+  final RuntimeConfiguration? configuration;
+  SourceQueries(
+    this.db, {
+    required this.supportedVersion,
+    RuntimeConfiguration? configuration,
+  }) : configuration = configuration?.snapshot() ?? currentOwnerRuntimeSnapshot;
   T _read<T>(T Function() read) =>
       readSnapshot(db, read, supportedVersion: supportedVersion);
   List<Map<String, Object?>> _rows(
@@ -21,7 +33,8 @@ class SourceQueries {
         .map((row) => Map<String, Object?>.from(row))
         .toList(),
   );
-  LabelStore get _labels => LabelStore(db, supportedVersion: supportedVersion);
+  LabelQueries get _labels =>
+      LabelQueries(db, supportedVersion: supportedVersion);
   List<SourceSummary> summaries() => _labels
       .sourceRows(
         'SELECT sources.id,sources.title,sources.mime,sources.provenance,sources.locally_edited,sources.state,sources.error,sources.revision,sources.deleted,source_details.imported,source_details.changed,source_details.source_uri '
@@ -29,13 +42,15 @@ class SourceQueries {
       )
       .map(SourceSummary.fromRow)
       .toList();
-  List<SourceDocument> sources() => _labels
-      .sourceRows(
-        'SELECT sources.*,source_details.imported,source_details.changed,source_details.source_uri '
-        'FROM sources LEFT JOIN source_details ON sources.id=source_details.source_id WHERE deleted=0 ORDER BY title',
-      )
-      .map(SourceDocument.fromRow)
-      .toList();
+  List<SourceDocument> sources() => _read(
+    () => _labels
+        .sourceRows(
+          'SELECT sources.*,source_details.imported,source_details.changed,source_details.source_uri '
+          'FROM sources LEFT JOIN source_details ON sources.id=source_details.source_id WHERE deleted=0 ORDER BY title',
+        )
+        .map((row) => SourceDocument.fromRow(materializeSource(db, row)))
+        .toList(),
+  );
   SourceDocument? source(String id, {bool includeDeleted = false}) => _read(() {
     final row = _rows('SELECT * FROM sources WHERE id=? AND (? OR deleted=0)', [
       id,
@@ -44,7 +59,7 @@ class SourceQueries {
     return row == null
         ? null
         : SourceDocument.fromRow({
-            ...row,
+            ...materializeSource(db, row),
             'labels': jsonEncode(_labels.names(id)),
           });
   });
@@ -68,17 +83,24 @@ class SourceQueries {
   ).map(ExportNote.fromRow).toList();
   String noteBody(int id) =>
       _rows('SELECT body FROM notes WHERE id=?', [id]).single['body'] as String;
-  String preference(String key, [String fallback = '']) =>
-      _rows('SELECT value FROM preferences WHERE key=?', [
-            key,
-          ]).firstOrNull?['value']
-          as String? ??
-      fallback;
+  String preference(String key, [String fallback = '']) => _read(
+    () =>
+        PreferenceEntities(db).read(key) ??
+        _rows('SELECT value FROM preferences WHERE key=?', [
+              key,
+            ]).firstOrNull?['value']
+            as String? ??
+        fallback,
+  );
   Map<String, String> googleSourceMimes() => {
     for (final row in _rows('SELECT source_id,mime FROM google_sources'))
       row['source_id'] as String: row['mime'] as String,
   };
-  ModelStore get _models => ModelStore(db, supportedVersion: supportedVersion);
+  ModelQueries get _models => ModelQueries(
+    db,
+    supportedVersion: supportedVersion,
+    configuration: configuration,
+  );
   ModelRegistration? model(String kind) => _read(() {
     final row = _models.model(kind);
     return row == null ? null : ModelRegistration.fromRow(row);

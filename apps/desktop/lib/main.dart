@@ -12,19 +12,66 @@ import 'desktop_environment.dart';
 
 export 'application.dart' show Foresight, Workspace, WorkspaceTestAccess;
 
+ApplicationRuntimeBootstrap? _desktopRuntime;
+LoggingSession? _desktopDiagnostics;
+final _desktopDiagnosticSupport = LocalDiagnosticSupport.platform();
+Future<void>? _quittingDesktop;
+
+Future<void> _prepareDesktopRuntime() async {
+  final runtime = _desktopRuntime ??= ApplicationRuntimeBootstrap.prepare(
+    DiagnosticHost.desktop,
+  );
+  _desktopDiagnostics ??= await runtime.startDiagnostics();
+  _desktopDiagnosticSupport.attachSession(_desktopDiagnostics!);
+}
+
 Future<void> main([List<String> arguments = const []]) async {
+  if (DiagnosticWorkerInvocation.parse(arguments).kind !=
+          DiagnosticWorkerInvocationKind.absent ||
+      arguments.any(
+        (argument) => argument.startsWith('--model-transport-worker'),
+      )) {
+    exit(64);
+  }
+  Object? bootstrapFailure;
+  try {
+    await _prepareDesktopRuntime();
+  } catch (error) {
+    bootstrapFailure = error;
+  }
   WidgetsFlutterBinding.ensureInitialized();
   runApp(
     DesktopStartup(
       arguments: arguments,
-      environment: DesktopEnvironment.production(),
+      environment: DesktopEnvironment.production().withDiagnosticSupport(
+        _desktopDiagnosticSupport,
+      ),
+      prepareRuntime: _prepareDesktopRuntime,
+      bootstrapFailure: bootstrapFailure,
     ),
   );
 }
 
-Future<DesktopConnection> connectDesktopDomain(ProfilePaths profile) =>
-    connectDesktop(profile);
-void quitDesktop() => exit(0);
+Future<DesktopConnection> connectDesktopDomain(ProfilePaths profile) {
+  final diagnostics = _desktopDiagnostics;
+  if (diagnostics == null) return connectDesktop(profile);
+  return runWithServiceDiagnostics(
+    diagnostics.producer,
+    () => connectDesktop(profile),
+    component: DiagnosticComponent.desktop,
+  );
+}
+
+void quitDesktop() {
+  // This callback is for startup forwarding/failure before a workspace owns
+  // application resources. Normal workspace cleanup keeps its existing owner.
+  unawaited(
+    _quittingDesktop ??= () async {
+      await _desktopDiagnostics?.close();
+      exit(0);
+    }(),
+  );
+}
 
 /// Mount before connecting so service/profile failures remain visible and can
 /// be retried without retaining the failed attempt's activation socket.
@@ -36,6 +83,8 @@ class DesktopStartup extends StatefulWidget {
   final VoidCallback quit;
   final void Function(String) configureRuntime;
   final Future<List<AudioDevice>> Function()? deviceLoader;
+  final Future<void> Function()? prepareRuntime;
+  final Object? bootstrapFailure;
   const DesktopStartup({
     super.key,
     required this.environment,
@@ -45,6 +94,8 @@ class DesktopStartup extends StatefulWidget {
     this.quit = quitDesktop,
     this.configureRuntime = configureProfileRuntime,
     this.deviceLoader,
+    this.prepareRuntime,
+    this.bootstrapFailure,
   });
   @override
   State<DesktopStartup> createState() => _DesktopStartupState();
@@ -58,7 +109,11 @@ class _DesktopStartupState extends State<DesktopStartup> {
   @override
   void initState() {
     super.initState();
-    unawaited(start());
+    if (widget.bootstrapFailure case final failure?) {
+      this.failure = failure;
+    } else {
+      unawaited(start());
+    }
   }
 
   Future<void> start() async {
@@ -69,11 +124,14 @@ class _DesktopStartupState extends State<DesktopStartup> {
     });
     AppCommands? ownedCommands;
     try {
+      await widget.prepareRuntime?.call();
       final profile =
           widget.profile ?? ProfilePaths.resolve(widget.environment.variables);
       privateDirectory(profile.data, repairOwnedPermissions: true);
       privateRuntime(profile);
       widget.configureRuntime(profile.data);
+      _desktopDiagnostics?.selectProfile(profile.data);
+      _desktopDiagnosticSupport.selectProfile(profile);
       final commandPath = '${profile.runtime}/commands.sock';
       final authUrl = widget.arguments
           .where(

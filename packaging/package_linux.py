@@ -236,13 +236,29 @@ def deb_maintainer(action):
     return (
         "#!/bin/sh\nset -eu\n" + upgrade_helper() + 'case "${1-}" in\n'
         f"  {action})\n"
-        "    refuse_upgrade_if_recording /opt/open-foresight\n"
+        "    prepare_installation_change /opt/open-foresight\n"
         "    ;;\nesac\n"
     )
 
 
 def deb_prerm():
     return deb_maintainer("upgrade|remove")
+
+
+def deb_postinst():
+    return (
+        "#!/bin/sh\nset -eu\n"
+        + upgrade_helper()
+        + 'case "${1-}" in configure) finish_installation_maintenance /opt/open-foresight ;; esac\n'
+    )
+
+
+def deb_postrm():
+    return (
+        "#!/bin/sh\nset -eu\n"
+        + upgrade_helper()
+        + 'case "${1-}" in remove|purge) finish_installation_removal /opt/open-foresight ;; esac\n'
+    )
 
 
 def deb_preinst():
@@ -256,21 +272,33 @@ def rpm_scriptlets():
     # percent operators and printf/stat formats through that expansion.
     helper = upgrade_helper().replace("%", "%%")
     return (
-        "%pre\n" + helper + "refuse_upgrade_if_recording /opt/open-foresight\n"
+        "%pre\n" + helper + "prepare_installation_change /opt/open-foresight\n"
         '%preun\nif [ "$1" = 0 ]; then\n'
         + helper
-        + "  refuse_upgrade_if_recording /opt/open-foresight\nfi\n"
+        + "  prepare_installation_change /opt/open-foresight\nfi\n"
+        + "%posttrans\n"
+        + helper
+        + "finish_installation_maintenance /opt/open-foresight\n"
+        + '%postun\nif [ "$1" = 0 ]; then\n'
+        + helper
+        + "  finish_installation_removal /opt/open-foresight\nfi\n"
     )
 
 
 def arch_install_script():
     return upgrade_helper() + (
+        "pre_install() {\n"
+        "  prepare_installation_change /opt/open-foresight\n"
+        "}\n\n"
         "pre_upgrade() {\n"
-        "  refuse_upgrade_if_recording /opt/open-foresight\n"
+        "  prepare_installation_change /opt/open-foresight\n"
         "}\n\n"
         "pre_remove() {\n"
-        "  refuse_upgrade_if_recording /opt/open-foresight\n"
-        "}\n"
+        "  prepare_installation_change /opt/open-foresight\n"
+        "}\n\n"
+        "post_install() { finish_installation_maintenance /opt/open-foresight; }\n"
+        "post_upgrade() { finish_installation_maintenance /opt/open-foresight; }\n"
+        "post_remove() { finish_installation_removal /opt/open-foresight; }\n"
     )
 
 
@@ -473,6 +501,10 @@ def make_deb(root, output, version, release, metadata):
     preinst = control / "preinst"
     preinst.write_text(deb_preinst())
     preinst.chmod(0o755)
+    for name, content in (("postinst", deb_postinst()), ("postrm", deb_postrm())):
+        script = control / name
+        script.write_text(content)
+        script.chmod(0o755)
     subprocess.run(
         ["dpkg-deb", "--root-owner-group", "--build", str(root), str(output)],
         check=True,

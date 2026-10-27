@@ -25,6 +25,7 @@ void main() {
         'FORESIGHT_HELPER',
         'FORESIGHT_SERVICE',
         'FORESIGHT_MODEL_WORKER',
+        'FORESIGHT_LITERT_RUNNER',
       ])
         key: (File(
           '${root.path}/$key',
@@ -143,6 +144,37 @@ void main() {
       expect(manifest.existsSync(), isFalse);
     });
   }
+
+  for (final value in ['relative-runner', '/missing/runner']) {
+    test('invalid runner input $value never writes a manifest', () {
+      environment['FORESIGHT_LITERT_RUNNER'] = value;
+      expect(
+        () => prepareMacosIntegrationRuntime(
+          registerTearDown: addTearDown,
+          executable: executable,
+          environment: environment,
+          isMacOS: true,
+        ),
+        throwsStateError,
+      );
+      expect(manifest.existsSync(), isFalse);
+    });
+  }
+
+  test('a fixture without an optional runner remains supported', () {
+    environment.remove('FORESIGHT_LITERT_RUNNER');
+    final file = prepareMacosIntegrationRuntime(
+      registerTearDown: addTearDown,
+      executable: executable,
+      environment: environment,
+      isMacOS: true,
+    );
+    expect(file?.path, manifest.path);
+    expect(
+      jsonDecode(manifest.readAsStringSync()),
+      isNot(contains('FORESIGHT_LITERT_RUNNER')),
+    );
+  });
 
   test('missing trusted native input never writes a manifest', () {
     expect(

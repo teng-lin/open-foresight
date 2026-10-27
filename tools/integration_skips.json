@@ -90,17 +90,6 @@
       "reason": "Checksum-pinned public model fixtures and the current packaged CPU runtimes."
     },
     {
-      "path": "apps/desktop/test/quick_start_test.dart",
-      "conditions": [
-        "!Platform.isMacOS",
-        "!Platform.isMacOS",
-        "!Platform.isMacOS",
-        "!Platform.isMacOS"
-      ],
-      "gate": "platform",
-      "reason": "Runs on its supported operating system in the regular platform build."
-    },
-    {
       "path": "apps/desktop/test/saved_answer_native_test.dart",
       "conditions": [
         "Platform.environment['FORESIGHT_ANSWER_DATABASE'] == null"
@@ -224,14 +213,6 @@
       "reason": "Unix executable fixture compiler protocol uses Python and chmod; unsupported Windows hosts skip it while Linux/macOS platform jobs run it."
     },
     {
-      "path": "apps/desktop/test/desktop_menu_test.dart",
-      "conditions": [
-        "!Platform.isMacOS"
-      ],
-      "gate": "platform",
-      "reason": "macOS menu channel routing and recording permission flows run in the regular macOS desktop suite; Linux skips only these Apple-specific contracts."
-    },
-    {
       "path": "apps/desktop/test/onboarding_workflow_test.dart",
       "conditions": [
         "!Platform.isMacOS",
@@ -271,6 +252,38 @@
       ],
       "gate": "platform",
       "reason": "The regular macOS core gate runs production query acquisition cancellation through its native factory with held metadata transport and no model download. Linux skips this macOS-only factory contract."
+    },
+    {
+      "path": "packages/foresight_core/test/meeting_incremental_native_test.dart",
+      "conditions": [
+        "executable == null || executable.isEmpty ? 'Requires FORESIGHT_TEST_HELPER from a freshly built repository-root test-helper target' : false"
+      ],
+      "gate": "core-native",
+      "reason": "The core gate supplies FORESIGHT_TEST_HELPER from the matched repository-root ForesightHelperTest target. This exercises real application-to-helper transcript indexing without a downloaded model; it does not substitute the test helper for the production helper."
+    },
+    {
+      "path": "packages/foresight_core/test/native_cross_isolate_lifetime_test.dart",
+      "conditions": [
+        "library == null ? 'Requires the current built native lifetime v2 library' : false"
+      ],
+      "gate": "core-native",
+      "reason": "Runs in the regular core-native gate with the matching built lifetime-v2 library; an owned child VM checks cross-isolate refusal and joined cleanup without model assets."
+    },
+    {
+      "path": "packages/foresight_core/test/native_recording_lifetime_test.dart",
+      "conditions": [
+        "library == null ? 'Requires the current native library and helper; deterministic worker, no physical audio or model inference' : false"
+      ],
+      "gate": "core-native",
+      "reason": "Runs in the regular core-native gate with the matching built library/helper and a deterministic owned speech worker; no physical audio or inference weights are required."
+    },
+    {
+      "path": "packages/foresight_core/test/service_native_owner_lifetime_test.dart",
+      "conditions": [
+        "library == null ? 'Requires the current native library/helper; controlled models, no physical audio/GPU/model inference' : false"
+      ],
+      "gate": "core-native",
+      "reason": "Runs in the regular core-native gate with the matching built library/helper; owned child VMs check real native work loss, the admission ACK gap, joined replacement and SQL-only replacement without physical audio or model weights."
     }
   ]
 }

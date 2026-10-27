@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import '../domain.dart';
+import 'service_workflow_ports.dart';
 import '../persistence/conversation_queries.dart';
 import '../rpc_error.dart';
 import 'answer_coordinator.dart';
@@ -17,7 +17,7 @@ final class AutomaticAnswerCoordinator {
     required this.changed,
   }) : _queries = ConversationQueries(domain.store);
 
-  final Domain domain;
+  final GenerationReadPort domain;
   final AnswerGateway Function() answers;
   final Future<void> Function(int) indexMeeting;
   final void Function(String) cancelDetection;

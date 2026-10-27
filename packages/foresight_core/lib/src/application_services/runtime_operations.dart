@@ -1,12 +1,14 @@
+import 'model_asset_acquisition.dart';
 import 'dart:io';
 import '../answer_contract.dart' show answerValidationFailures;
-import '../audio_devices.dart';
-import '../domain.dart';
+import 'audio_operations.dart';
+import 'service_workflow_ports.dart';
 import '../operation_registry.dart';
 import '../operation_requests.dart';
 import '../operations.dart';
 import '../platform_services.dart';
 import '../service_compatibility.dart';
+import '../service_diagnostics.dart';
 import 'answer_coordinator.dart';
 import 'generation_coordinator.dart';
 import 'google_maintenance.dart';
@@ -24,7 +26,9 @@ final class ApplicationIdentity {
 final class RuntimeOperations {
   RuntimeOperations({
     required this.domain,
+    required this.audio,
     required this.identity,
+    required this.assetDownloads,
     required this.generation,
     required this.models,
     required this.workflow,
@@ -34,8 +38,10 @@ final class RuntimeOperations {
     required this.accounts,
     required this.answers,
   });
-  final Domain domain;
+  final RuntimeOperationsPort domain;
+  final AudioOperations audio;
   final ApplicationIdentity identity;
+  final ModelAssetAcquisitionCoordinator assetDownloads;
   final GenerationCoordinator generation;
   final ModelRegistry models;
   final MeetingWorkflowCoordinator workflow;
@@ -53,19 +59,31 @@ final class RuntimeOperations {
     ...recording.state,
   };
   Map<String, Object?>? get generationState => domain.generator == null
-      ? null
+      ? domain.generationFailure == null
+            ? null
+            : {
+                'state': 'failed',
+                'error': domain.generationRestartRequired
+                    ? 'Generation ownership is unconfirmed; restart the service'
+                    : domain.generationFailure.toString(),
+                'restart_required': domain.generationRestartRequired,
+                'generating': false,
+              }
       : {
           ...domain.generator!.effectiveState,
           'generating': domain.generator!.generating,
         };
   Map<String, Object?> status() => {
+    'diagnostics': serviceDiagnosticHealth().toJson(),
+    'diagnostic_observation': serviceDiagnosticObservation(),
     'pid': pid,
     'profile_id': identity.profileId,
     'application_api_version': applicationApiVersion,
-    'installation_root': configuredInstallationRoot,
-    'runtime_revision': runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'],
+    'installation_root': domain.configuration.installationRoot,
+    'runtime_revision': domain.configuration['FORESIGHT_RUNTIME_REVISION'],
     'models_busy': generation.modelBusy,
     'query_model_download': models.acquisitionState,
+    'model_asset_download': assetDownloads.state.toWire(),
     'capture': captureState,
     'sources_paused': domain.sourcesPaused,
     'helper': domain.helper.snapshot?.toProto3Json(),
@@ -85,24 +103,17 @@ final class RuntimeOperations {
   List<OperationHandler> get handlers => [
     TypedOperationHandler<NotificationsCapabilitiesRequest>(
       Operation.notificationsCapabilities,
-      (request, {current}) => notificationCapabilities(),
+      (request, {current}) =>
+          notificationCapabilities(configuration: domain.configuration),
     ),
     TypedOperationHandler<NotificationsRequestPermissionRequest>(
       Operation.notificationsRequestPermission,
-      (request, {current}) => notificationCapabilities(requestPermission: true),
+      (request, {current}) => notificationCapabilities(
+        requestPermission: true,
+        configuration: domain.configuration,
+      ),
     ),
-    TypedOperationHandler<AudioCapabilitiesRequest>(
-      Operation.audioCapabilities,
-      (request, {current}) => audioCapabilities(),
-    ),
-    TypedOperationHandler<AudioRequestSystemRequest>(
-      Operation.audioRequestSystem,
-      (request, {current}) => requestSystemAudioPermission(),
-    ),
-    TypedOperationHandler<AudioRequestMicrophoneRequest>(
-      Operation.audioRequestMicrophone,
-      (request, {current}) => requestMicrophonePermission(),
-    ),
+    ...audio.handlers,
     TypedOperationHandler<StatusRequest>(
       Operation.status,
       (request, {current}) => status(),

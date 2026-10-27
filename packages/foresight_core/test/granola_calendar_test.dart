@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -157,6 +158,7 @@ class GranolaFixture {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory directory;
   late GranolaFixture fixture;
   late GoogleAuth auth;

@@ -158,7 +158,7 @@ struct Model {
     const std::string worker = configured                     ? configured
                                : fs::exists(installed_worker) ? installed_worker
                                                               : build_worker;
-    std::unique_lock launch(foresight::launch_mutex);
+    std::unique_lock launch(foresight::launch_mutex_for_process());
 
     int in[2], out[2];
     if (foresight::cloexec_pipe(in))
@@ -313,10 +313,13 @@ struct Model {
   // Recovered tokenizer chunker has no overlap argument: fixed nonoverlapping
   // token windows.
   std::vector<std::string> chunks(const std::string &s, int size,
-                                  int /*overlap*/) {
+                                  int /*overlap*/,
+                                  size_t *token_count = nullptr) {
     if (size <= 0)
       throw std::runtime_error("Chunk size must be positive");
     auto tokens = encode(s);
+    if (token_count)
+      *token_count = tokens.size();
     std::vector<std::string> out;
     for (size_t i = 0; i < tokens.size(); i += size_t(size)) {
       size_t end = std::min(tokens.size(), i + size_t(size));

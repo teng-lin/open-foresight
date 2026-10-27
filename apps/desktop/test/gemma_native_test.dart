@@ -237,7 +237,7 @@ void main() {
         }
         await app.close();
         domain.close();
-        domain.generator?.close();
+        await domain.drain();
         await helper.close();
         store.close();
         dir.deleteSync(recursive: true);

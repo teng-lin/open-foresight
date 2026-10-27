@@ -1,3 +1,7 @@
+import 'native_lifetime.dart';
+import 'audio_device_process.dart';
+import 'audio_device.dart';
+export 'audio_device.dart';
 import 'dart:ffi';
 import 'dart:isolate';
 import 'package:ffi/ffi.dart';
@@ -5,22 +9,17 @@ import 'platform_services.dart';
 import 'dart:convert';
 import 'dart:io';
 
-class AudioDevice {
-  final String name, label;
-  final bool playback;
-  AudioDevice(this.name, this.label, this.playback);
-}
+final _deviceProcess = AudioDeviceProcessRunner();
 
 Future<List<AudioDevice>> audioDevices({
   bool? macOS,
   Future<ProcessResult> Function(String executable, List<String> arguments)?
   runProcess,
+  RuntimeConfiguration? configuration,
 }) async {
-  final run =
-      runProcess ??
-      ((executable, arguments) => Process.run(executable, arguments));
+  final run = runProcess ?? _deviceProcess.run;
   if (macOS ?? Platform.isMacOS) {
-    final helper = runtimeConfiguration['FORESIGHT_AUDIO_DEVICES'];
+    final helper = runtimeSnapshot(configuration)['FORESIGHT_AUDIO_DEVICES'];
     if (helper == null) {
       throw StateError('The bundled Mac audio device adapter is unavailable.');
     }
@@ -70,8 +69,10 @@ Future<List<AudioDevice>> audioDevices({
 }
 
 /// Querying capabilities never asks for protected resources or starts capture.
-Map<String, dynamic> audioCapabilities() {
-  final lib = DynamicLibrary.open(runtimeConfiguration.nativeLibrary);
+Map<String, dynamic> audioCapabilities({RuntimeConfiguration? configuration}) {
+  final lib = NativeLibrary(
+    DynamicLibrary.open(runtimeSnapshot(configuration).nativeLibrary),
+  ).library;
   final result = lib
       .lookupFunction<Pointer<Utf8> Function(), Pointer<Utf8> Function()>(
         'fs_audio_capabilities',
@@ -89,38 +90,45 @@ Map<String, dynamic> audioCapabilities() {
 
 /// Explicit permission setup only. Run the blocking TCC request off the service
 /// event loop so other clients and active model/recording work stay responsive.
-Future<Map<String, dynamic>> requestMicrophonePermission() async {
-  final capabilities = audioCapabilities();
+Future<Map<String, dynamic>> requestMicrophonePermission({
+  RuntimeConfiguration? configuration,
+}) async {
+  final config = runtimeSnapshot(configuration);
+  final capabilities = audioCapabilities(configuration: config);
   if (Platform.isMacOS && capabilities['microphone_purpose_present'] != true) {
     throw StateError(
       'The application service bundle is missing its microphone purpose string. Launch the installed Open Foresight application service and reinstall if necessary.',
     );
   }
-  final path = runtimeConfiguration.nativeLibrary;
+  // Only the resolved library path crosses into the request isolate.
+  final path = config.nativeLibrary;
   final granted = await Isolate.run(() {
-    final lib = DynamicLibrary.open(path);
+    final lib = NativeLibrary(DynamicLibrary.open(path)).library;
     return lib.lookupFunction<Int32 Function(), int Function()>(
           'fs_audio_request_microphone',
         )() ==
         0;
   });
-  return {'granted': granted, ...audioCapabilities()};
+  return {'granted': granted, ...audioCapabilities(configuration: config)};
 }
 
 /// Explicitly exercise the service's system-audio tap consent path. CoreAudio
 /// cannot verify authorization publicly: completed requests may still be silent.
 /// Preserve native unknown/pending/denied results instead of claiming a grant.
-Future<Map<String, dynamic>> requestSystemAudioPermission() async {
-  final capabilities = audioCapabilities();
+Future<Map<String, dynamic>> requestSystemAudioPermission({
+  RuntimeConfiguration? configuration,
+}) async {
+  final config = runtimeSnapshot(configuration);
+  final capabilities = audioCapabilities(configuration: config);
   if (Platform.isMacOS &&
       capabilities['system_audio_purpose_present'] != true) {
     throw StateError(
       'The application service bundle is missing its system audio purpose string. Launch the installed Open Foresight application service and reinstall if necessary.',
     );
   }
-  final path = runtimeConfiguration.nativeLibrary;
+  final path = config.nativeLibrary;
   return await Isolate.run(() {
-    final lib = DynamicLibrary.open(path);
+    final lib = NativeLibrary(DynamicLibrary.open(path)).library;
     final result = lib
         .lookupFunction<
           Pointer<Utf8> Function(Int32),

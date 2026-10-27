@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:open_foresight/features/settings/settings_controller.dart';
 import 'dart:async';
 
@@ -111,7 +112,7 @@ void main() {
   for (final timeout in [true, false]) {
     testWidgets(
       'Stats retains same-input ${timeout ? 'timeout' : 'failure'} values without a rebuild loop and recovers on its watch',
-      (tester) async {
+      (tester) async => withDesktopFixtures(tester, () async {
         final f = await _mount(tester);
         f.reader.succeed(0, 17);
         await tester.pumpAndSettle();
@@ -183,7 +184,7 @@ void main() {
           hasLength(1),
           reason: 'successful values remain cached',
         );
-      },
+      }),
     );
   }
 
@@ -191,7 +192,7 @@ void main() {
     for (final failure in [false, true]) {
       testWidgets(
         'retired Stats ${failure ? 'error' : 'success'} after $boundary cannot publish or replace a newer query',
-        (tester) async {
+        (tester) async => withDesktopFixtures(tester, () async {
           final f = await _mount(tester);
           final revision = f.reader.dataRevision;
           final key = f.reader.queries.single.key;
@@ -226,7 +227,7 @@ void main() {
             expect(f.reader.requests, hasLength(2));
           }
           expect(tester.takeException(), isNull);
-        },
+        }),
       );
     }
   }

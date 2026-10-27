@@ -20,6 +20,15 @@ The desktop accepts `DesktopConnection`; production connects `RemoteDomain` to t
 
 `_WorkspaceState` coordinates navigation, lifecycle, and the shared update boundary. Sources and graph, chat, meetings, settings and models, and integrations each have a controller that owns their mutable state and screen widgets. SQL lives behind named core `Store` queries. Saved output statistics cache their text scan by database revision and are labelled as words because historical records do not contain tokenizer usage.
 
+Application composition supplies explicit workspace ports to source, meeting,
+Google, answer, indexing, note and status workflows. These ports retain the
+existing store, cancellation, queue and generation owners while limiting each
+consumer's available methods. `application_ports_test.dart` guards the migrated
+constructor dependencies. Summary, recording and model-registry ports belong to
+the separate native lifetime conversion and are not qualified by that test yet.
+The pure balanced-transcript excerpt helper lives in `text_budget.dart`; it does
+not require a service owner import.
+
 `labels.auto_assign` acquires any missing embeddings, validates the source snapshot, then plans propagation and publishes all associations, the label cluster, and graph invalidation in one write transaction. A failed label write rolls back the entire publication. `Application` composes explicit business-service owners and the application operation registry. `AnswerCoordinator` admits answers, and each `ConversationAnswer` passes immutable retrieval, prompt and generation results between phases. Conversation queries own the atomic answer, memory checkpoint and meeting-link transaction. `Domain` owns lower-level source and model services and receives a `ModelGate`; it never constructs or looks up an `Application`. Callers, including fixtures, bind their application explicitly.
 
 ## Ownership inside the service
@@ -166,12 +175,14 @@ Peer verification protects the desktop approval connection against bearer-token 
 | `list_meetings`, `create_meeting`, `get_meeting` | Meeting metadata, original notes, transcript segments, generated artifacts, and edits. |
 | `save_meeting_notes`, `import_transcript` | Save original notes or append final transcript evidence; index transcripts. |
 | `generate_meeting_artifact`, `enhance_meeting_notes`, `edit_artifact` | Generate summaries/actions, enrich notes using evidence, or retain edits separately from generated originals. |
+| `get_meeting_tasks`, `edit_meeting_task` | Read evidence-backed tasks with edit, completion and stale status; edit a task or its status while preserving extraction evidence. |
+| `prepare_meeting`, `cancel_meeting_generation` | Generate a preparation brief from explicitly selected already-imported sources, or cancel active task extraction/preparation for a meeting. |
 | `start_recording`, `pause_recording`, `resume_recording`, `stop_recording` | Use the shared microphone/playback capture and transcription lifecycle. Pause releases capture devices and retains queued pre-pause speech; Resume reacquires the same routes. |
 | `ask` | Generate a grounded answer with checked citations using the configured local generator. |
 
 Tool failures return `isError: true` with a useful message and a structured `error` containing a stable `code` and `message`. Codes distinguish invalid arguments, missing resources, busy workers, cancellation, unavailable services, denied access, and internal failures. An `unavailable` error may also carry a `reason`: `closing` (the service refused the request before running it, so retrying is safe), `outcomeUnknown` (the request was sent and may have committed), or `notSent` (it never reached the service). A `denied` error may carry `reason: needsDesktop` when the operation needs the desktop's approval and no desktop is attached. Invalid protocol requests are handled by the SDK. Tools expose their input schemas and effect annotations. Clients may supply a progress token for started/ongoing/completed notifications. `ask` returns the final checked answer; provisional generation remains internal to the service/desktop stream.
 
-The operation identities live in `packages/foresight_core/lib/src/operations.dart`. Required descriptors define argument shape, access, helper readiness, model admission, activity and MCP projection. The wire adapter decodes one immutable typed request before access checks, leases, activity stamps or dispatch. The application and service registries own 75 and eight handlers respectively; runtime tests assert their disjoint, exhaustive union. Desktop command interfaces and remote facades accept operation identities and convert them to wire names at the transport. The RPC contracts check the frozen 32 MCP schemas, reject raw operation names outside approved declarations, and invoke every MCP tool over stdio against a controlled service socket. Request fingerprints retain the original argument field presence and JSON number representations.
+The operation identities live in `packages/foresight_core/lib/src/operations.dart`. Required descriptors define argument shape, access, helper readiness, model admission, activity and MCP projection. The wire adapter decodes one immutable typed request before access checks, leases, activity stamps or dispatch. The `Operation` enum declares 87 operations. Each `OperationRegistry` is constructed for one descriptor scope and rejects duplicate handlers, handlers from another scope and any missing operation of its scope, so each registry is exhaustive and duplicate-free for its scope. The scopes and the per-scope handler split are defined by the operation descriptors, not by this document. Desktop command interfaces and remote facades accept operation identities and convert them to wire names at the transport. `rpcTools` exposes 32 MCP tools, each built from exactly one entry of `operationToolProjections`. The RPC contracts check the frozen MCP schema of every tool, reject raw operation names outside approved declarations, and invoke every MCP tool over stdio against a controlled service socket. Request fingerprints retain the original argument field presence and JSON number representations.
 
 The owned helper API is `foresight.helper.v1.RagService`; all failures use non-OK gRPC statuses. Legacy success acknowledgement fields retain their wire tags, but carry no error channel. The immutable recovered descriptor preserves historical message presence and edition features. `tools/generate_bindings.py` versions its package and source name for production. To regenerate Dart bindings, activate `protoc_plugin 24.0.0` and run `python tools/check_dart_bindings.py --write`. CI regenerates all three schemas and rejects drift; descriptor snapshots also check the control and web-content RPC shapes, defaults, and reserved tags.
 
@@ -321,6 +332,13 @@ attribution. Profile content and downloaded models
 remain outside the bundle. With no HOME environment variable on macOS, the system
 user directory is obtained from Directory Services.
 
+Audio enumeration runs through the service audio operation. Application composition
+may inject an `AudioOperations` provider; the production default uses the host
+adapter. Desktop environment process runners do not enumerate devices. Enumeration
+returns device rows without requesting microphone or system access. The desktop
+environment fixture exercises this operation with an injected service provider;
+it does not qualify physical devices.
+
 The Mac audio discovery adapter uses `FORESIGHT_AUDIO_DEVICES --list-devices` and
 returns a JSON array of `{ "id": "stable-device-id", "label": "Device", "playback": false }`.
 The Mac notification adapter uses `FORESIGHT_NOTIFICATIONS --title TITLE --message MESSAGE`;
@@ -368,13 +386,47 @@ Python bytecode caches default to `<profile>/cache/litert` and
 Packaged runtimes also set `FORESIGHT_INSTALL_ROOT` to the canonical outer `.app`
 and `FORESIGHT_RUNTIME_REVISION` to their build revision. Before loading native
 code, opening the database, or starting workers, the service takes a shared,
-nonblocking POSIX lock at
-`/tmp/of-install-<uid>-<sha256(canonical app path) first 24 hex digits>/lock`.
-The private directory is 0700 and the lock is 0600. The descriptor remains open
-for the service lifetime. The installer takes the exclusive version of that
-same lock after explicitly stopping services and holds it through revalidation
-and replacement. A service launched during replacement fails with an actionable
-update-in-progress message before it opens profile state or native components.
+nonblocking `flock` lease under the OS account's home (resolved independently of
+`HOME`/XDG profile overrides):
+
+- Linux: `~/.cache/open-foresight/install-locks/<installation hash>/lock`.
+- macOS: `~/Library/Caches/io.openforesight.App/install-locks/<installation hash>/lock`.
+
+The installation hash is the first 24 hexadecimal SHA-256 digits of the canonical
+installed application path. New directories are private at creation and the
+regular lock file is 0600, single-linked and opened without following symlinks.
+The descriptor remains open for the service lifetime. On macOS, the installer
+holds the exclusive new lock and a compatibility lock at the released
+`/tmp/of-install-<uid>-<hash>/lock` path throughout staging and replacement.
+Linux package hooks inspect both the released path and every NSS account's new
+fixed cache path; they never use the root process's HOME/XDG values to discover
+another user's service.
+
+New Linux package hooks publish `.installation-maintenance` in the installation
+root before checking locks. New services check it before and after lock
+acquisition. Package completion removes it; interrupted installation keeps new
+services refused until an explicit successful installation retry. A failed
+preflight removes only the marker it just created. No package hook signals or
+stops a live service.
+
+The released Linux binary ignores the new maintenance marker: a legacy service
+that starts after preflight can still race package replacement. Existing legacy
+locks remain an upgrade refusal, but this does not close that concurrent-launch
+lane. Qualification of that transition remains open; stop released clients before
+upgrading and do not present lock probing as proof of old/new launch exclusion.
+Older installer versions do not discover the new lock path, so close all clients
+before any deliberate downgrade using an older installer.
+
+Question-model metadata and downloads run in an internal transport-only service
+subprocess. The parent owns cancellation, finite operation budgets and actual
+reaping. Credentials and URLs travel through bounded stdin, never argv or
+stderr; framed stdout carries only progress and transport results. This mode
+resolves no profile or application ownership and loads no application native
+library. It exists because the pinned Dart runtime can leave stalled TLS sockets
+alive after `HttpClient`/isolate cancellation. A connect timeout retires the whole
+transport process before retrying; successful partial-body resume stays within
+that worker. Previous model registration changes only after authentication and
+readiness succeed.
 
 Status includes additive `application_api_version` (currently 1),
 `installation_root`, `runtime_revision`, and `lifetime` fields. Clients carrying a
@@ -434,3 +486,119 @@ import grants remains deferred with the typed import-grant architecture. Approva
 dialogs label peer identity as unverified, highlight risky options and limit
 repeated identical requests; OS-verified requester attribution and distinct local
 capture gestures remain deferred with the desktop peer-verification design.
+
+### Model transport ownership
+
+Question-model metadata and blob downloads run in a dedicated service transport
+subprocess. Metadata calls cancel their live RPC at the deadline. Downloads bound
+connect, response-header and body-idle phases to 30 seconds, each attempt to five
+minutes and the complete retry operation to 15 minutes. Retry delays and parallel
+ranges share the total budget. Timeout and cancellation terminate and reap the
+owned process before releasing its operation; cancelling a Future alone cannot
+reliably close a stalled TLS connection on the pinned Dart runtime.
+
+The production service accepts the internal `--model-transport-worker` mode
+before ordinary profile/service startup. Transport boundary tests compile the
+actual service before starting their operation budgets and separately retain a
+source/JIT total-deadline case. Question-model downloads retain their existing
+buffered-byte semantics. Public
+Gemma and speech assets reuse that worker ownership and deadline policy while
+retaining their disk-backed resumable parts, bounded-memory assembly and final
+checksum verification. Public-file whole-attempt budgets derive from independently
+pinned catalog byte counts: five minutes of headroom, transfer at 256 KiB/s, and
+five full disk passes at 1 MiB/s. The total allows the configured finite retry
+count plus one minute for retry delays. Caller-asserted sizes do not set these
+bounds. Connect/header/body-idle limits remain 30 seconds; question-model budgets
+remain five/15 minutes. Only the final path returns to the service parent.
+
+`models.inspect_asset` verifies a pinned model's existing cache/registration and
+returns its path or null. `models.download_asset` requires a pinned kind/digest
+and request ID, verifies publisher consent before network work, and performs
+Gemma runtime preflight in the service. Progress is published in the normal
+`model_asset_download` status value and each normal changed broadcast. The
+validated optional `progress_key` (1–256 characters) correlates that presentation
+with the desktop subscription independently of the service's authoritative
+request ID and cancellation envelope. A desktop owns its subscription/current
+predicate; the service retains its busy owner until download and worker cleanup
+settle. Shutdown revokes new work synchronously and joins that producer before
+model/runtime teardown. Existing model install operations keep their separate
+configuration reservation and native ownership. If bounded preflight or transfer
+termination cannot confirm child exit, the job's bookkeeping still settles and
+a `restart_required` state blocks replacement downloads until service restart;
+it does not claim the unknown child was reaped.
+
+Transport cancellation closes the parent's owned stdout and stderr stream
+readers while joining the worker's bounded termination attempt. A descendant
+holding a pipe open cannot keep a cancelled operation waiting for EOF. Confirmed
+cleanup also joins the parser. If cancellation cannot confirm worker exit or reader
+retirement, the operation settles as `restart_required` rather than waiting for
+the download's size-scaled deadline. Without cancellation, the existing attempt
+deadline still bounds an absent exit acknowledgement.
+
+Public workers return closed failure codes (`diskSpace`, `interrupted`, `hash`,
+`https`, `invalid`) and an optional bounded required-byte count. The service maps
+those to safe model-setup RpcErrors; model dialogs allow only known model error
+messages and never display arbitrary exception, path or authenticated URL text.
+Service cache hashing checks cancellation between streamed file chunks.
+Audio discovery shares one in-flight adapter child and kills and reaps it on
+timeout before admitting another enumeration.
+
+Desktop setup imports model/catalog values, read-only cache helpers and the
+remote downloader interface. Its compile closure excludes the HTTP download
+engine and model transport worker. Tests inject explicit local download doubles;
+production composition supplies the service proxy.
+
+
+### Typed client calls
+
+The existing operation descriptor constants own both request encoders and result
+decoders. Each descriptor infers its concrete input and result types; its `send`
+and `sendCurrent` extensions resolve the original `Operation` by descriptor
+identity. There is no second wire-method registry. For example:
+
+```dart
+final created = await meetingsCreateDescriptor.send(
+  connection,
+  const MeetingsCreateInput(title: 'Planning'),
+);
+// created.id is an int; a source-deletion input cannot compile for this call.
+```
+
+`WireField.absent()` differs from `WireField(null)`. Encoders retain original
+field presence, false/zero/null values, envelope spellings and date strings;
+schema validation does not insert defaults before request fingerprinting. The
+existing transport still owns workspace scoping, reconnect/resend policy,
+current predicates and operation lifetime. Raw transport methods remain for v1
+compatibility; production desktop/proxy callers use typed descriptors.
+
+`sendKeyed` delegates to the existing `PendingRequestKey`. Its send-only captured
+workspace envelope stays outside the original argument-comparison ledger. A
+malformed data-bearing reply becomes `internal/outcomeUnknown` before that ledger
+can release the key; retry therefore reuses the same key, and edited retries
+learn the first result before amendment. Transport errors retain their identity,
+code and reason. This layer adds no automatic retry or application ownership.
+
+Data-bearing replies expose concrete immutable values. Partial Drive metadata
+and optional capability fields retain presence. V1 void acknowledgement metadata
+is deliberately discarded, and refresh status remains optional when the caller
+only requires acknowledgement. This preserves old clear-after-disconnect and
+ignored-result behavior without returning unchecked maps to consumers. Actual
+application capture replies and cancellation booleans are decoded by their
+corresponding contracts, rather than treated as void acknowledgements.
+
+
+Model download progress uses an explicit optional `progress_key`, separate from
+RPC-authoritative request IDs and cancellation. The typed desktop bridge sends
+its local correlation key there. The acquisition owner publishes it through both
+startup status and normal changed snapshots; capture-level telemetry leaves that
+progress untouched. The real service-to-proxy fixture verifies checking phase,
+correlation and terminal state without downloading a model or claiming installed
+runtime acceptance.
+
+Answer streams decode each chunk through `answerStreamDescriptor`, so malformed
+chunks receive the same safe `internal/outcomeUnknown` classification as other
+data replies. The client AST guard rejects direct command calls and method
+tear-offs. Its exact RemoteDomain transport-leaf inventory permits the existing
+desktop attach/visibility/detach, import-root consent, request/resend, clear-status,
+Google sign-in and answer stream adapters, and separately records callback calls.
+An extra operation, duplicate leaf or transport tear-off fails that inventory.

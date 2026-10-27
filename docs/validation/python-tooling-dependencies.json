@@ -1,0 +1,568 @@
+{
+  "baseline": "b41ea253fcdfed04abf892ea8430f1698eb6f5f3",
+  "ci_leaf_candidates": [
+    "tools.ci_producer_trust",
+    "tools.ci_registry",
+    "tools.ci_release_gh",
+    "tools.ci_selection",
+    "tools.ci_stats_snapshot",
+    "tools.ci_timing"
+  ],
+  "cyclic_components": [
+    [
+      "tools.installed_desktop_approval",
+      "tools.smoke_macos_bundle"
+    ],
+    [
+      "tools.ci_artifacts",
+      "tools.ci_release_candidates",
+      "tools.github_release",
+      "tools.prepare_release"
+    ],
+    [
+      "tools.ci_app_dependency_seed",
+      "tools.ci_linux_handoff",
+      "tools.ci_tooling_image"
+    ],
+    [
+      "tools.ci_acceptance_history",
+      "tools.ci_acceptance_observations",
+      "tools.ci_acceptance_plan",
+      "tools.ci_qualification_index",
+      "tools.ci_rollout",
+      "tools.ci_transport_exercise"
+    ],
+    [
+      "tools.ci_main_coordinator",
+      "tools.ci_main_evidence",
+      "tools.ci_main_sweep"
+    ]
+  ],
+  "edges": {
+    "native.setup_models": [],
+    "packaging.check_abi": [],
+    "packaging.check_preview_version": [],
+    "packaging.package_linux": [],
+    "packaging.smoke_installed": [
+      "tools.installed_documents",
+      "tools.model_pins"
+    ],
+    "tools.accept_software_gpu": [
+      "tools.integration_gates",
+      "tools.test_packaged_model_runtime"
+    ],
+    "tools.app_version": [],
+    "tools.build_litert_extensions": [
+      "tools.test_litert_status_abi"
+    ],
+    "tools.build_macos_runtimes": [
+      "tools.build_macos_vendor",
+      "tools.litert_extensions"
+    ],
+    "tools.build_macos_sdk": [],
+    "tools.build_macos_vendor": [
+      "tools.litert_extensions"
+    ],
+    "tools.build_sanitizer_sdk": [
+      "tools.build_macos_sdk",
+      "tools.sanitizer_runtime"
+    ],
+    "tools.build_sequence": [],
+    "tools.build_whisper_vulkan": [],
+    "tools.candidate_identity": [
+      "tools.app_version",
+      "tools.build_sequence",
+      "tools.prepare_release"
+    ],
+    "tools.check_build_cache": [],
+    "tools.check_coverage": [],
+    "tools.check_dart_bindings": [],
+    "tools.check_document_links": [],
+    "tools.check_integration_inventory": [],
+    "tools.check_migration_integrity": [],
+    "tools.check_subprocess_timeouts": [],
+    "tools.ci_acceptance_history": [
+      "tools.ci_acceptance_observations",
+      "tools.ci_artifacts",
+      "tools.github_job_attempts"
+    ],
+    "tools.ci_acceptance_observations": [
+      "tools.ci_artifacts",
+      "tools.ci_qualification_index",
+      "tools.ci_rollout"
+    ],
+    "tools.ci_acceptance_plan": [
+      "tools.ci_acceptance_history"
+    ],
+    "tools.ci_app_build_transport": [
+      "tools.sdk_build_transport"
+    ],
+    "tools.ci_app_dependency_seed": [
+      "tools.ci_linux_handoff",
+      "tools.ci_producer_trust"
+    ],
+    "tools.ci_artifacts": [
+      "tools.ci_producer_trust",
+      "tools.ci_release_candidates",
+      "tools.sdk_approval_bridge",
+      "tools.sdk_final_approval",
+      "tools.sdk_producer_trust",
+      "tools.sdk_workflow_recipe"
+    ],
+    "tools.ci_build_artifacts": [
+      "tools.ci_git"
+    ],
+    "tools.ci_build_environment": [
+      "tools.ci_artifacts"
+    ],
+    "tools.ci_cache_publish_guard": [
+      "tools.ci_artifacts"
+    ],
+    "tools.ci_cache_reconcile": [
+      "tools.ci_artifacts"
+    ],
+    "tools.ci_changes": [
+      "tools.ci_qualification_index",
+      "tools.ci_selection",
+      "tools.platform_python_tests"
+    ],
+    "tools.ci_dependency_wait": [
+      "tools.ci_artifacts",
+      "tools.ci_macos_dependencies"
+    ],
+    "tools.ci_drift_issue": [
+      "tools.build_sequence",
+      "tools.ci_nightly"
+    ],
+    "tools.ci_git": [
+      "tools.ci_timing"
+    ],
+    "tools.ci_linux_acceptance": [
+      "tools.ci_artifacts",
+      "tools.ci_linux_handoff",
+      "tools.release_asset_acceptance"
+    ],
+    "tools.ci_linux_handoff": [
+      "tools.ci_artifacts",
+      "tools.ci_producer_trust",
+      "tools.ci_tooling_image",
+      "tools.integration_application",
+      "tools.release_asset_acceptance"
+    ],
+    "tools.ci_linux_sdk_reference": [
+      "tools.ci_artifacts",
+      "tools.integration_application",
+      "tools.linux_sdk_artifacts"
+    ],
+    "tools.ci_linux_shadow_compare": [
+      "tools.compare_test_runs"
+    ],
+    "tools.ci_linux_shadow_sdk": [
+      "tools.ci_artifacts",
+      "tools.ci_dependency_wait",
+      "tools.integration_application",
+      "tools.linux_sdk_artifacts"
+    ],
+    "tools.ci_macos_dependencies": [
+      "tools.ci_artifacts",
+      "tools.ci_verify_dependency",
+      "tools.sdk_producer_trust"
+    ],
+    "tools.ci_main_coordinator": [
+      "tools.ci_main_evidence",
+      "tools.ci_main_sweep",
+      "tools.ci_qualification_index",
+      "tools.ci_rollout"
+    ],
+    "tools.ci_main_evidence": [
+      "tools.build_sequence",
+      "tools.ci_changes",
+      "tools.ci_main_sweep",
+      "tools.ci_nightly",
+      "tools.ci_qualification_index",
+      "tools.ci_release_candidates",
+      "tools.ci_rollout",
+      "tools.github_job_attempts"
+    ],
+    "tools.ci_main_sweep": [
+      "tools.ci_main_coordinator",
+      "tools.ci_main_evidence",
+      "tools.ci_release_candidates",
+      "tools.ci_selection"
+    ],
+    "tools.ci_native_cache": [
+      "tools.ci_artifacts",
+      "tools.ci_git",
+      "tools.ci_timing"
+    ],
+    "tools.ci_native_work": [
+      "tools.ci_build_artifacts",
+      "tools.ci_build_environment",
+      "tools.ci_native_cache"
+    ],
+    "tools.ci_nightly": [
+      "tools.build_sequence"
+    ],
+    "tools.ci_preview_audit": [
+      "tools.ci_artifacts",
+      "tools.ci_linux_acceptance",
+      "tools.ci_nightly",
+      "tools.ci_producer_trust",
+      "tools.integration_application"
+    ],
+    "tools.ci_producer_trust": [],
+    "tools.ci_qualification_index": [
+      "tools.ci_artifacts",
+      "tools.ci_rollout"
+    ],
+    "tools.ci_registry": [],
+    "tools.ci_release_attestation": [
+      "tools.ci_artifacts"
+    ],
+    "tools.ci_release_candidates": [
+      "tools.app_version",
+      "tools.ci_artifacts",
+      "tools.ci_producer_trust",
+      "tools.github_job_attempts",
+      "tools.prepare_release"
+    ],
+    "tools.ci_release_evidence": [
+      "tools.ci_artifacts",
+      "tools.ci_release_attestation",
+      "tools.ci_release_candidates",
+      "tools.github_release",
+      "tools.release_acceptance_report",
+      "tools.release_asset_acceptance"
+    ],
+    "tools.ci_release_gh": [],
+    "tools.ci_rollout": [
+      "tools.ci_acceptance_plan",
+      "tools.ci_artifacts",
+      "tools.ci_selection",
+      "tools.ci_transport_exercise"
+    ],
+    "tools.ci_sanitizer_artifacts": [
+      "tools.ci_artifacts",
+      "tools.ci_git",
+      "tools.ci_producer_trust",
+      "tools.sanitizer_runtime"
+    ],
+    "tools.ci_selection": [],
+    "tools.ci_stage_artifacts": [
+      "tools.ci_build_artifacts",
+      "tools.ci_git"
+    ],
+    "tools.ci_stage_cache": [
+      "tools.ci_artifacts",
+      "tools.ci_git",
+      "tools.ci_native_cache",
+      "tools.ci_timing"
+    ],
+    "tools.ci_stage_environment": [
+      "tools.ci_build_environment"
+    ],
+    "tools.ci_stats": [
+      "tools.ci_stats_snapshot"
+    ],
+    "tools.ci_stats_snapshot": [],
+    "tools.ci_timing": [],
+    "tools.ci_tooling_image": [
+      "tools.ci_app_build_transport",
+      "tools.ci_app_dependency_seed",
+      "tools.ci_artifacts",
+      "tools.ci_producer_trust"
+    ],
+    "tools.ci_transport_exercise": [
+      "tools.check_coverage",
+      "tools.ci_artifacts",
+      "tools.ci_cache_reconcile",
+      "tools.ci_dependency_wait",
+      "tools.ci_linux_handoff",
+      "tools.ci_linux_shadow_sdk",
+      "tools.ci_rollout",
+      "tools.ci_tooling_image",
+      "tools.compare_test_runs",
+      "tools.integration_application",
+      "tools.linux_sdk_artifacts",
+      "tools.platform_python_tests"
+    ],
+    "tools.ci_verify_dependency": [
+      "tools.build_macos_runtimes",
+      "tools.build_macos_sdk",
+      "tools.build_macos_vendor"
+    ],
+    "tools.clean_macos_runtime_sources": [],
+    "tools.cleanup_linux_packages": [
+      "tools.ci_artifacts"
+    ],
+    "tools.compare_test_runs": [],
+    "tools.create_dmg": [],
+    "tools.create_sdk_approval": [
+      "tools.ci_artifacts",
+      "tools.ci_producer_trust",
+      "tools.sdk_approval_bridge"
+    ],
+    "tools.download_embedding_fixture": [
+      "tools.build_macos_runtimes",
+      "tools.test_macos_release_models"
+    ],
+    "tools.download_embeddinggemma2": [],
+    "tools.evaluate_embeddinggemma2": [
+      "tools.download_embeddinggemma2"
+    ],
+    "tools.evaluate_models": [
+      "tools.generate_bindings",
+      "tools.helper_protocol"
+    ],
+    "tools.evaluate_pipeline": [
+      "tools.evaluate_models"
+    ],
+    "tools.generate_bindings": [],
+    "tools.github_job_attempts": [],
+    "tools.github_release": [
+      "tools.ci_artifacts"
+    ],
+    "tools.google_client_release": [],
+    "tools.helper_protocol": [],
+    "tools.install_macos": [],
+    "tools.installed_desktop_approval": [
+      "tools.installed_runtime",
+      "tools.linux_desktop_accessibility",
+      "tools.smoke_macos_bundle"
+    ],
+    "tools.installed_documents": [
+      "tools.installed_desktop_approval",
+      "tools.installed_runtime",
+      "tools.smoke_macos_bundle"
+    ],
+    "tools.installed_runtime": [
+      "tools.install_macos"
+    ],
+    "tools.integration_application": [
+      "tools.ci_artifacts",
+      "tools.ci_git",
+      "tools.ci_producer_trust",
+      "tools.linux_sdk_artifacts"
+    ],
+    "tools.integration_gates": [
+      "tools.test_macos_release_models"
+    ],
+    "tools.legacy_query_executor": [
+      "tools.legacy_query_weights"
+    ],
+    "tools.legacy_query_weights": [],
+    "tools.legacy_query_worker": [
+      "tools.legacy_query_executor"
+    ],
+    "tools.linux_desktop_accessibility": [
+      "tools.installed_runtime"
+    ],
+    "tools.linux_sdk_artifacts": [
+      "tools.ci_artifacts",
+      "tools.sdk_approval_bridge",
+      "tools.sdk_build_recipe",
+      "tools.sdk_build_transport"
+    ],
+    "tools.linux_test_schedule": [
+      "tools.parallel_build_gates"
+    ],
+    "tools.litert_extensions": [],
+    "tools.macos_bundle": [],
+    "tools.measure_service_rpc": [
+      "tools.model_pins"
+    ],
+    "tools.migrate_profile": [
+      "tools.sqlite_preflight"
+    ],
+    "tools.model_pins": [],
+    "tools.original_query_oracle.fixups": [],
+    "tools.original_query_oracle.prepare": [],
+    "tools.package": [
+      "tools.app_version",
+      "tools.google_client_release",
+      "tools.helper_protocol",
+      "tools.litert_extensions",
+      "tools.prepare_litert",
+      "tools.query_worker_packaging",
+      "tools.web_search_release"
+    ],
+    "tools.package_macos": [
+      "tools.app_version",
+      "tools.google_client_release",
+      "tools.litert_extensions",
+      "tools.macos_bundle",
+      "tools.web_search_release"
+    ],
+    "tools.parallel_build_gates": [],
+    "tools.pins": [],
+    "tools.platform_python_tests": [],
+    "tools.prepare_litert": [],
+    "tools.prepare_release": [
+      "tools.app_version",
+      "tools.ci_artifacts",
+      "tools.ci_release_candidates",
+      "tools.github_release"
+    ],
+    "tools.preview_packages": [
+      "tools.app_version",
+      "tools.build_sequence",
+      "tools.ci_artifacts",
+      "tools.ci_nightly",
+      "tools.ci_qualification_index",
+      "tools.release_asset_acceptance"
+    ],
+    "tools.publish_linux_package_aliases": [
+      "tools.ci_artifacts",
+      "tools.ci_producer_trust",
+      "tools.ci_registry",
+      "tools.linux_sdk_artifacts"
+    ],
+    "tools.query_worker_packaging": [],
+    "tools.reference_distribution_config": [
+      "tools.google_client_release"
+    ],
+    "tools.release_acceptance_report": [
+      "tools.release_latest"
+    ],
+    "tools.release_asset_acceptance": [
+      "tools.github_release"
+    ],
+    "tools.release_inputs": [
+      "tools.ci_artifacts",
+      "tools.github_release",
+      "tools.prepare_release",
+      "tools.release_asset_acceptance"
+    ],
+    "tools.release_latest": [],
+    "tools.release_upgrade": [
+      "tools.ci_artifacts",
+      "tools.release_asset_acceptance",
+      "tools.release_latest"
+    ],
+    "tools.release_upload": [
+      "tools.ci_artifacts",
+      "tools.github_release",
+      "tools.release_asset_acceptance"
+    ],
+    "tools.reuse_release_acceptance": [
+      "tools.ci_artifacts",
+      "tools.ci_release_evidence",
+      "tools.github_release",
+      "tools.release_acceptance_report",
+      "tools.release_asset_acceptance"
+    ],
+    "tools.run_ci_stage": [
+      "tools.app_version",
+      "tools.ci_stage_artifacts",
+      "tools.ci_stage_cache",
+      "tools.ci_stage_environment",
+      "tools.ci_timing"
+    ],
+    "tools.run_dmg_contracts": [],
+    "tools.sanitizer_runtime": [],
+    "tools.sdk_approval_bridge": [
+      "tools.ci_producer_trust"
+    ],
+    "tools.sdk_build_recipe": [],
+    "tools.sdk_build_transport": [],
+    "tools.sdk_final_approval": [
+      "tools.ci_producer_trust"
+    ],
+    "tools.sdk_producer_trust": [
+      "tools.ci_producer_trust"
+    ],
+    "tools.sdk_workflow_recipe": [],
+    "tools.service_ui_report": [],
+    "tools.smoke_bundle": [
+      "tools.evaluate_models",
+      "tools.helper_protocol"
+    ],
+    "tools.smoke_macos_bundle": [
+      "tools.install_macos",
+      "tools.installed_desktop_approval",
+      "tools.macos_bundle"
+    ],
+    "tools.sqlite_preflight": [],
+    "tools.test_capture_device_recovery": [],
+    "tools.test_capture_terminal_state": [],
+    "tools.test_default_model_startup": [
+      "tools.evaluate_models"
+    ],
+    "tools.test_gemma_models": [],
+    "tools.test_global_shortcut": [],
+    "tools.test_global_shortcut_private": [],
+    "tools.test_helper_worker": [
+      "tools.evaluate_models"
+    ],
+    "tools.test_installed_persistence": [
+      "tools.installed_desktop_approval",
+      "tools.installed_runtime",
+      "tools.smoke_macos_bundle"
+    ],
+    "tools.test_installed_release": [
+      "tools.build_macos_runtimes",
+      "tools.installed_documents",
+      "tools.installed_runtime",
+      "tools.smoke_macos_bundle",
+      "tools.test_macos_release_models"
+    ],
+    "tools.test_litert_status_abi": [],
+    "tools.test_litert_stop_sequences": [],
+    "tools.test_live_transcription_gap": [],
+    "tools.test_macos_release_models": [
+      "tools.build_macos_runtimes",
+      "tools.model_pins",
+      "tools.verify_macos_release_runtime"
+    ],
+    "tools.test_meeting_workflow": [],
+    "tools.test_native_inference": [],
+    "tools.test_native_service": [
+      "tools.installed_desktop_approval",
+      "tools.installed_runtime",
+      "tools.test_packaged_model_runtime"
+    ],
+    "tools.test_packaged_model_runtime": [
+      "tools.model_pins"
+    ],
+    "tools.test_packaged_note_enhancement": [
+      "tools.install_macos",
+      "tools.installed_desktop_approval",
+      "tools.installed_runtime",
+      "tools.smoke_macos_bundle",
+      "tools.test_packaged_model_runtime"
+    ],
+    "tools.test_packaged_query_worker": [
+      "tools.macos_bundle"
+    ],
+    "tools.test_packaged_sentencepiece_coload": [
+      "tools.litert_extensions"
+    ],
+    "tools.test_release_dmg": [
+      "tools.install_macos",
+      "tools.installed_documents",
+      "tools.release_asset_acceptance",
+      "tools.release_upgrade",
+      "tools.test_installed_persistence"
+    ],
+    "tools.test_vision_model_runtime": [
+      "tools.test_packaged_model_runtime"
+    ],
+    "tools.test_whisper_gpu": [],
+    "tools.update_ubuntu_snapshot": [],
+    "tools.verify_app_dependency_reuse": [],
+    "tools.verify_application_no_build": [],
+    "tools.verify_descriptor": [],
+    "tools.verify_macos_cmake_cache": [],
+    "tools.verify_macos_release_runtime": [],
+    "tools.verify_native_sanitizers": [
+      "tools.sanitizer_runtime"
+    ],
+    "tools.verify_preview_cloud": [],
+    "tools.verify_thread_sanitizer": [
+      "tools.sanitizer_runtime"
+    ],
+    "tools.verify_toolchain_pins": [],
+    "tools.web_search_release": []
+  },
+  "method": "Conservative static imports plus literal alternatives in dynamic call expressions; excludes unresolved computed targets. SCCs show possible dependency cycles, not proof they execute at import time."
+}

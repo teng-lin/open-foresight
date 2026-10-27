@@ -1,3 +1,8 @@
+import 'sql_support_test_bootstrap.dart';
+import 'package:foresight_core/src/generated/transcript_index.pb.dart'
+    as transcript;
+import 'package:foresight_test_support/transcript_index_service.dart';
+import 'package:foresight_test_support/google_connections.dart';
 import 'package:foresight_test_support/native_fixture.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -15,11 +20,27 @@ import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 
-class _Domain extends Domain {
+class _Domain extends AdapterDomain {
   _Domain(super.store, super.helper, this.detector);
   final QueryCompletionRuntime detector;
   Completer<void>? indexGate, indexEntered, indexParked;
   bool productionIndex = false;
+  @override
+  bool get useProductionTranscriptIndex => productionIndex;
+  @override
+  Future<transcript.TranscriptDeltaResult> applyTranscriptDelta(
+    transcript.TranscriptDelta delta, {
+    bool Function()? current,
+  }) async {
+    if (productionIndex) {
+      if (indexEntered != null && !indexEntered!.isCompleted) {
+        indexEntered!.complete();
+      }
+      await indexGate?.future;
+    }
+    return super.applyTranscriptDelta(delta, current: current);
+  }
+
   @override
   Future<void> index(String id, {bool Function()? current}) async {
     if (indexEntered != null && !indexEntered!.isCompleted) {
@@ -86,10 +107,14 @@ class _Detector implements QueryCompletionRuntime {
   final prompts = <String>[];
   String output = ' Who owns the draft?';
   Object? failure;
+  final entered = Completer<void>();
+  Completer<void>? gate;
   @override
   Future<String> complete(String prompt, String requestId) async {
     requests.add(requestId);
     prompts.add(prompt);
+    if (!entered.isCompleted) entered.complete();
+    if (gate != null) await gate!.future;
     if (failure != null) throw failure!;
     return output;
   }
@@ -126,6 +151,7 @@ class _Runtime extends NativeRuntime {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory directory;
   late Store store;
   late Server server;
@@ -139,7 +165,7 @@ void main() {
     store = Store('${directory.path}/app.db');
     final socket = '${directory.path}/helper.sock';
     rag = _Rag(store);
-    server = Server.create(services: [rag]);
+    server = Server.create(services: [rag, TranscriptIndexService(rag)]);
     await server.serve(
       address: InternetAddress(socket, type: InternetAddressType.unix),
       port: 0,
@@ -155,9 +181,13 @@ void main() {
   });
   setUp(() {
     addTearDown(() async {
+      final held = detector.gate;
+      if (held != null && !held.isCompleted) held.complete();
       await app.close();
       domain.close();
+      await domain.drain();
       runtime.close();
+      await runtime.closed;
       await domain.helper.close();
       await server.shutdown();
       store.close();
@@ -169,6 +199,15 @@ void main() {
     'missing dedicated model reports not ready without chat substitution',
     () async {
       await app.close();
+      domain.close();
+      await domain.drain();
+      await domain.helper.close();
+      runtime = _Runtime();
+      domain = _Domain(
+        store,
+        Helper('${directory.path}/helper.sock', '${directory.path}/helper'),
+        detector,
+      )..generator = runtime;
       app = Application(domain);
       try {
         final id = store.meeting('Detector unavailable');
@@ -216,8 +255,14 @@ void main() {
         1000,
         'microphone',
       );
+      detector.gate = Completer<void>();
       queue.notify(id);
-      await queue.process();
+      final detecting = queue.process();
+      await detector.entered.future;
+      expect(runtime.requests, isEmpty);
+      expect(store.rows('SELECT * FROM answers'), isEmpty);
+      detector.gate!.complete();
+      await detecting;
       await queue.process();
       await queue.process();
       expect(queue.errors, isEmpty);
@@ -257,7 +302,13 @@ void main() {
       store.transcript(id, 'Who owns the draft?', true, 0, 1000, 'microphone');
       queue.notify(id);
       detector.failure = StateError('Dedicated detector failed');
-      await queue.process();
+      detector.gate = Completer<void>();
+      final detecting = queue.process();
+      await detector.entered.future;
+      expect(runtime.requests, isEmpty);
+      expect(queue.errors, isEmpty);
+      detector.gate!.complete();
+      await detecting;
       expect(queue.errors[id], contains('Dedicated detector failed'));
       expect(runtime.requests, isEmpty);
       expect(store.rows('SELECT * FROM meeting_questions'), isEmpty);
@@ -300,7 +351,9 @@ void main() {
       queue.notify(id);
       await queue.process();
       domain.indexGate = Completer<void>();
+      domain.indexEntered = Completer<void>();
       final answer = queue.process();
+      await domain.indexEntered!.future;
       await queue.close().timeout(const Duration(seconds: 2));
       await answer;
       expect(runtime.requests, isEmpty);
@@ -310,9 +363,12 @@ void main() {
       );
       expect(domain.indexGate!.isCompleted, false);
       expect(app.proactiveWork, 0);
-      expect(app.backgroundBusy, false);
+      expect(app.backgroundBusy, true);
+      expect(store.rows('SELECT * FROM meeting_index_jobs'), hasLength(1));
       domain.indexGate!.complete();
-      await Future<void>.delayed(Duration.zero);
+      await app.indexMeeting(id);
+      expect(app.backgroundBusy, false);
+      expect(store.rows('SELECT * FROM meeting_index_jobs'), isEmpty);
       expect(store.rows('SELECT * FROM answers'), isEmpty);
     },
   );
@@ -409,7 +465,7 @@ void main() {
   }
 
   test(
-    'cancelled proactive preparation leaves a real paused shared index durable and not busy',
+    'cancelled proactive preparation leaves a real paused shared producer owned until resume',
     () async {
       final id = store.meeting('Paused preparation');
       final queue = app.proactive;
@@ -438,12 +494,16 @@ void main() {
       expect(queue.running, false);
       expect(app.proactiveWork, 0);
       expect(domain.mutating, 0);
-      expect(app.backgroundBusy, false);
-      expect(store.sources.single['state'], 'pending');
-      expect(domain.cancellationWatchCount, 0);
+      expect(app.backgroundBusy, true);
+      expect(store.rows('SELECT * FROM meeting_index_jobs'), hasLength(1));
+      expect(store.sources.single['state'], 'indexing');
+      expect(domain.cancellationWatchCount, greaterThan(0));
       domain.resumeSources();
-      await eventually(() => store.sources.single['state'] == 'indexed');
+      await app.indexMeeting(id);
+      expect(store.sources.single['state'], 'indexed');
+      expect(domain.cancellationWatchCount, 0);
       expect(app.backgroundBusy, false);
+      expect(store.rows('SELECT * FROM answers'), isEmpty);
     },
   );
 
@@ -484,6 +544,7 @@ void main() {
             'volume': .02,
             'data': base64Encode(bytes.buffer.asUint8List()),
           }).toNativeUtf8();
+          detector.gate = Completer<void>();
           expect(
             fixture.lookupFunction<
               Int32 Function(Int32, Pointer<Utf8>),
@@ -495,15 +556,10 @@ void main() {
           if (!interim) {
             await app.call(Operation.meetingsPause.wire, {'id': id});
           }
-          final deadline = DateTime.now().add(const Duration(seconds: 3));
-          while ((interim
-                  ? app.provisionalTranscript.values.every(
-                      (text) => text.isEmpty,
-                    )
-                  : store.rows('SELECT * FROM transcript').isEmpty) &&
-              DateTime.now().isBefore(deadline)) {
-            await Future<void>.delayed(const Duration(milliseconds: 10));
-          }
+          // The native callback must reach automatic detection. Hold its
+          // completion while checking capture state; do not race a wall clock.
+          await detector.entered.future;
+          final detecting = app.proactive.process();
           if (interim) {
             expect(store.rows('SELECT * FROM transcript'), isEmpty);
             expect(
@@ -530,7 +586,8 @@ void main() {
           }
           final queue = app.proactive;
           // The capture callback, not this test, called notify().
-          await queue.process();
+          detector.gate!.complete();
+          await detecting;
           await queue.process();
           await queue.process();
           expect(queue.errors, isEmpty);

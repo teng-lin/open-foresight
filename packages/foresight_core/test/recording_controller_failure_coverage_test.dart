@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -14,6 +15,7 @@ import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root, profile;
   late String library;
   late DynamicLibrary fixture;
@@ -170,6 +172,7 @@ void main() {
       );
       expect(app.captureState['active'], isFalse);
       expect(app.provisionalTranscript, isEmpty);
+      await app.indexMeeting(meeting);
       expect(domain.indexed, isNotEmpty);
     },
   );

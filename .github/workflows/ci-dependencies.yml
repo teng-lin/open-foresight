@@ -8,6 +8,7 @@ name: Reusable CI dependencies
     - tools/ci_artifacts.py
     - tools/pins.json
     - tools/ci_registry.py
+    - tools/__init__.py
     - tools/build_linux_sdk_local.sh
     - tools/linux_sdk_artifacts.py
     - tools/sdk_build_recipe.py
@@ -37,6 +38,7 @@ name: Reusable CI dependencies
     - tools/ci_artifacts.py
     - tools/pins.json
     - tools/ci_registry.py
+    - tools/__init__.py
     - tools/build_linux_sdk_local.sh
     - tools/linux_sdk_artifacts.py
     - tools/sdk_build_recipe.py
@@ -305,7 +307,8 @@ jobs:
       if: steps.shared.outputs.hit != 'true'
     - name: Inspect immutable dependency image
       id: lookup
-      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+      working-directory: ${{ github.workspace }}
+      run: python -m tools.ci_registry "${{ steps.tag.outputs.image }}"
     - name: Free hosted-runner space for retained image promotion
       if: steps.shared.outputs.hit != 'true' && steps.lookup.outputs.build == 'true'
       run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -327,7 +330,8 @@ jobs:
     # sdk-recipe: linux-core end
     - name: Resolve immutable component digest
       id: resolved
-      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
+      working-directory: ${{ github.workspace }}
+      run: python -m tools.ci_registry "${{ steps.tag.outputs.image }}" --require
     - name: Publish qualified SDK descriptor
       env:
         SDK_IMAGE: ${{ steps.resolved.outputs.image }}
@@ -449,7 +453,8 @@ jobs:
       if: steps.shared.outputs.hit != 'true'
     - name: Inspect immutable dependency image
       id: lookup
-      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+      working-directory: ${{ github.workspace }}
+      run: python -m tools.ci_registry "${{ steps.tag.outputs.image }}"
     - name: Free hosted-runner space for retained image promotion
       if: steps.shared.outputs.hit != 'true' && steps.lookup.outputs.build == 'true'
       run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -471,7 +476,8 @@ jobs:
     # sdk-recipe: linux-litert end
     - name: Resolve immutable component digest
       id: resolved
-      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
+      working-directory: ${{ github.workspace }}
+      run: python -m tools.ci_registry "${{ steps.tag.outputs.image }}" --require
     - name: Publish qualified SDK descriptor
       env:
         SDK_IMAGE: ${{ steps.resolved.outputs.image }}
@@ -593,7 +599,8 @@ jobs:
       if: steps.shared.outputs.hit != 'true'
     - name: Inspect immutable dependency image
       id: lookup
-      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+      working-directory: ${{ github.workspace }}
+      run: python -m tools.ci_registry "${{ steps.tag.outputs.image }}"
     - name: Free hosted-runner space for retained image promotion
       if: steps.shared.outputs.hit != 'true' && steps.lookup.outputs.build == 'true'
       run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -615,7 +622,8 @@ jobs:
     # sdk-recipe: linux-whisper end
     - name: Resolve immutable component digest
       id: resolved
-      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
+      working-directory: ${{ github.workspace }}
+      run: python -m tools.ci_registry "${{ steps.tag.outputs.image }}" --require
     - name: Publish qualified SDK descriptor
       env:
         SDK_IMAGE: ${{ steps.resolved.outputs.image }}
@@ -739,7 +747,8 @@ jobs:
       if: steps.shared.outputs.hit != 'true'
     - name: Inspect immutable dependency image
       id: lookup
-      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+      working-directory: ${{ github.workspace }}
+      run: python -m tools.ci_registry "${{ steps.tag.outputs.image }}"
     - name: Free hosted-runner space for retained image promotion
       if: steps.shared.outputs.hit != 'true' && steps.lookup.outputs.build == 'true'
       run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -764,7 +773,8 @@ jobs:
     # sdk-recipe: linux-sdk end
     - name: Resolve immutable component digest
       id: resolved
-      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
+      working-directory: ${{ github.workspace }}
+      run: python -m tools.ci_registry "${{ steps.tag.outputs.image }}" --require
     - name: Publish qualified SDK descriptor
       env:
         SDK_IMAGE: ${{ steps.resolved.outputs.image }}

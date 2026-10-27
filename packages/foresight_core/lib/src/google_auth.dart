@@ -1,3 +1,5 @@
+import 'granola_return_failure.dart';
+export 'granola_return_failure.dart';
 import 'rpc_error.dart';
 import 'desktop_connection.dart';
 import 'desktop_status.dart';

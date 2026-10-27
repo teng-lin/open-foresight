@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:open_foresight/desktop_visuals.dart';
 import 'package:open_foresight/features/integrations/widgets.dart';
 import 'package:open_foresight/features/onboarding/onboarding_view.dart';
@@ -88,25 +89,28 @@ void main() {
     );
   }
 
-  testWidgets('meeting-list preview Generate sends the preview meeting', (
-    tester,
-  ) async {
-    final (connection, WorkspaceTestAccess shell, store) = await mount(tester);
-    final id = store.meeting('Preview meeting');
-    shell.update(() {
-      shell.meetingFeature.meetingPreviewId = id;
-      shell.meetingFeature.meetingPreviewTab = 'AI summary';
-    });
-    await tester.pumpAndSettle();
-    expect(shell.meetingFeature.meetingId, isNull);
-    await tester.tap(find.byTooltip('Generate Summary'));
-    await tester.pumpAndSettle();
-    final calls = connection.calls.where(
-      (call) => call.$1 == Operation.meetingsGenerate,
-    );
-    expect(calls, hasLength(1));
-    expect(calls.single.$2['id'], id);
-  });
+  testWidgets(
+    'meeting-list preview Generate sends the preview meeting',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final (connection, WorkspaceTestAccess shell, store) = await mount(
+        tester,
+      );
+      final id = store.meeting('Preview meeting');
+      shell.update(() {
+        shell.meetingFeature.meetingPreviewId = id;
+        shell.meetingFeature.meetingPreviewTab = 'AI summary';
+      });
+      await tester.pumpAndSettle();
+      expect(shell.meetingFeature.meetingId, isNull);
+      await tester.tap(find.byTooltip('Generate Summary'));
+      await tester.pumpAndSettle();
+      final calls = connection.calls.where(
+        (call) => call.$1 == Operation.meetingsGenerate,
+      );
+      expect(calls, hasLength(1));
+      expect(calls.single.$2['id'], id);
+    }),
+  );
 
   for (final create in [false, true]) {
     for (final target in [
@@ -116,7 +120,7 @@ void main() {
     ]) {
       testWidgets(
         'slow ${create ? 'create' : 'save'} reply cannot retarget $target',
-        (tester) async {
+        (tester) async => withDesktopFixtures(tester, () async {
           final (connection, WorkspaceTestAccess shell, store) = await mount(
             tester,
           );
@@ -163,70 +167,73 @@ void main() {
           if (target == 'different note') expect(expectedId, second);
           expect(shell.sourceFeature.noteTitle.text, expectedTitle);
           expect(shell.sourceFeature.noteBaseline, expectedBaseline);
-        },
+        }),
       );
     }
   }
 
-  testWidgets('successful onboarding retry marks the runtime ready', (
-    tester,
-  ) async {
-    final (connection, WorkspaceTestAccess shell, _) = await mount(
-      tester,
-      failInitialize: true,
-    );
-    expect(shell.onboardingFeature.ready, isFalse);
-    expect(shell.error, contains('First initialization failed'));
-    final view = shell.onboardingFeature.build() as OnboardingView;
-    await view.retryRuntime();
-    await tester.pumpAndSettle();
-    expect(shell.onboardingFeature.ready, isTrue);
-    expect(connection.resumes, 1);
-    expect(shell.error, isEmpty);
-  });
+  testWidgets(
+    'successful onboarding retry marks the runtime ready',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final (connection, WorkspaceTestAccess shell, _) = await mount(
+        tester,
+        failInitialize: true,
+      );
+      expect(shell.onboardingFeature.ready, isFalse);
+      expect(shell.error, contains('First initialization failed'));
+      final view = shell.onboardingFeature.build() as OnboardingView;
+      await view.retryRuntime();
+      await tester.pumpAndSettle();
+      expect(shell.onboardingFeature.ready, isTrue);
+      expect(connection.resumes, 1);
+      expect(shell.error, isEmpty);
+    }),
+  );
 
-  testWidgets('onboarding retry becomes ready after reconnecting its client', (
-    tester,
-  ) async {
-    final (connection, WorkspaceTestAccess shell, _) = await mount(
-      tester,
-      failInitialize: true,
-    );
-    connection.replaceOnResume = true;
-    final original = connection.clientSessionGeneration;
-    final view = shell.onboardingFeature.build() as OnboardingView;
-    await view.retryRuntime();
-    await tester.pumpAndSettle();
-    expect(connection.clientSessionGeneration, isNot(same(original)));
-    expect(shell.onboardingFeature.ready, isTrue);
-    expect(shell.error, isEmpty);
-  });
+  testWidgets(
+    'onboarding retry becomes ready after reconnecting its client',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final (connection, WorkspaceTestAccess shell, _) = await mount(
+        tester,
+        failInitialize: true,
+      );
+      connection.replaceOnResume = true;
+      final original = connection.clientSessionGeneration;
+      final view = shell.onboardingFeature.build() as OnboardingView;
+      await view.retryRuntime();
+      await tester.pumpAndSettle();
+      expect(connection.clientSessionGeneration, isNot(same(original)));
+      expect(shell.onboardingFeature.ready, isTrue);
+      expect(shell.error, isEmpty);
+    }),
+  );
 
   for (final key in ['serviceIdleMinutes', 'noteStyle', 'inactivity']) {
-    testWidgets('settings callback reports failed $key requests', (
-      tester,
-    ) async {
-      final (connection, WorkspaceTestAccess shell, _) = await mount(tester);
-      shell.update(() => shell.navigate(WorkspaceTab.settings));
-      await tester.pumpAndSettle();
-      connection.failures[Operation.preferencesSet] = StateError(
-        'Preference rejected',
-      );
-      if (key == 'noteStyle') {
-        final widget = tester.widget<SegmentedButton<String>>(
-          find.byType(SegmentedButton<String>),
+    testWidgets(
+      'settings callback reports failed $key requests',
+      (tester) async => withDesktopFixtures(tester, () async {
+        final (connection, WorkspaceTestAccess shell, _) = await mount(tester);
+        shell.update(() => shell.navigate(WorkspaceTab.settings));
+        await tester.pumpAndSettle();
+        connection.failures[Operation.preferencesSet] = StateError(
+          'Preference rejected',
         );
-        widget.onSelectionChanged!({'Concise'});
-      } else {
-        final widget = tester.widget<DesktopSettingSelect<String>>(
-          find.byKey(Key(key)),
-        );
-        widget.onChanged!('60');
-      }
-      await tester.pumpAndSettle();
-      expect(shell.error, contains('Preference rejected'));
-      expect(tester.takeException(), isNull);
-    });
+        if (key == 'noteStyle') {
+          final widget = tester.widget<SegmentedButton<String>>(
+            find.byType(SegmentedButton<String>),
+          );
+          widget.onSelectionChanged!({'Concise'});
+        } else {
+          final widget = tester.widget<DesktopSettingSelect<String>>(
+            find.byKey(Key(key)),
+          );
+          widget.onChanged!('60');
+        }
+        await tester.pumpAndSettle();
+        expect(shell.error, contains('Preference rejected'));
+        expect(tester.takeException(), isNull);
+      }),
+    );
   }
 
   for (final boundary in [
@@ -236,43 +243,44 @@ void main() {
     'clear',
     'dispose',
   ]) {
-    testWidgets('held callback failure respects $boundary ownership', (
-      tester,
-    ) async {
-      final (connection, WorkspaceTestAccess shell, store) = await mount(
-        tester,
-      );
-      shell.update(() => shell.navigate(WorkspaceTab.settings));
-      await tester.pumpAndSettle();
-      connection.holdPreference = true;
-      final control = tester.widget<DesktopSettingSelect<String>>(
-        find.byKey(const Key('serviceIdleMinutes')),
-      );
-      control.onChanged!('60');
-      await tester.pump();
-      expect(connection.entered.isCompleted, isTrue);
-      switch (boundary) {
-        case 'selection':
-          shell.update(() => shell.navigate(WorkspaceTab.meetings));
-        case 'session':
-          connection.replaceClientSessionForTesting();
-        case 'clear':
-          store.renewWorkspaceEpoch();
-        case 'dispose':
-          await tester.pumpWidget(const SizedBox());
-      }
-      connection.release.complete();
-      await tester.pumpAndSettle();
-      if (boundary != 'dispose') {
-        expect(
-          shell.error,
-          boundary == 'current'
-              ? contains('Held preference rejected')
-              : isEmpty,
+    testWidgets(
+      'held callback failure respects $boundary ownership',
+      (tester) async => withDesktopFixtures(tester, () async {
+        final (connection, WorkspaceTestAccess shell, store) = await mount(
+          tester,
         );
-      }
-      expect(tester.takeException(), isNull);
-    });
+        shell.update(() => shell.navigate(WorkspaceTab.settings));
+        await tester.pumpAndSettle();
+        connection.holdPreference = true;
+        final control = tester.widget<DesktopSettingSelect<String>>(
+          find.byKey(const Key('serviceIdleMinutes')),
+        );
+        control.onChanged!('60');
+        await tester.pump();
+        expect(connection.entered.isCompleted, isTrue);
+        switch (boundary) {
+          case 'selection':
+            shell.update(() => shell.navigate(WorkspaceTab.meetings));
+          case 'session':
+            connection.replaceClientSessionForTesting();
+          case 'clear':
+            store.renewWorkspaceEpoch();
+          case 'dispose':
+            await tester.pumpWidget(const SizedBox());
+        }
+        connection.release.complete();
+        await tester.pumpAndSettle();
+        if (boundary != 'dispose') {
+          expect(
+            shell.error,
+            boundary == 'current'
+                ? contains('Held preference rejected')
+                : isEmpty,
+          );
+        }
+        expect(tester.takeException(), isNull);
+      }),
+    );
   }
 
   for (final action in [
@@ -282,74 +290,78 @@ void main() {
     'live enhance',
     'automatic answers',
   ]) {
-    testWidgets('$action callback reports request failures', (tester) async {
-      final (connection, WorkspaceTestAccess shell, store) = await mount(
-        tester,
-      );
-      final id = store.meeting('Callback meeting');
-      connection.account = SignedInAccount(
-        createTestTempDirectorySync('account-'),
-      );
-      shell.update(() {
-        shell.navigate(
-          action == 'google refresh' || action == 'device'
-              ? WorkspaceTab.settings
-              : WorkspaceTab.meetings,
+    testWidgets(
+      '$action callback reports request failures',
+      (tester) async => withDesktopFixtures(tester, () async {
+        final (connection, WorkspaceTestAccess shell, store) = await mount(
+          tester,
         );
-        if (shell.tab == WorkspaceTab.meetings) {
-          shell.meetingFeature.meetingId = id;
-          shell.meetingFeature.meetingPanel = 'Live Q&A';
-        }
-      });
-      await tester.pumpAndSettle();
-      connection.failures[Operation.preferencesSet] = StateError(
-        'Callback rejected',
-      );
-      switch (action) {
-        case 'google refresh':
-          final control = tester
-              .widgetList<DropdownButton<String>>(
-                find.byWidgetPredicate(
-                  (widget) =>
-                      widget is DropdownButton<String> && widget.value == '4',
-                ),
-              )
-              .first;
-          control.onChanged!('8');
-        case 'device':
-          final control =
-              shell.integrationFeature.deviceChoice(false)
-                  as IntegrationDeviceChoice;
-          control.onChanged!('auto');
-        case 'meeting style':
-          final control = tester
-              .widgetList<DropdownButton<String>>(
-                find.byType(DropdownButton<String>),
-              )
-              .firstWhere((widget) => widget.value == 'Standard');
-          control.onChanged!('Concise');
-        case 'live enhance':
-          final control = tester.widget<FilledButton>(
-            find.byKey(const ValueKey('meeting-live-enhance')),
+        final id = store.meeting('Callback meeting');
+        connection.account = SignedInAccount(
+          createTestTempDirectorySync('account-'),
+        );
+        shell.update(() {
+          shell.navigate(
+            action == 'google refresh' || action == 'device'
+                ? WorkspaceTab.settings
+                : WorkspaceTab.meetings,
           );
-          control.onPressed!();
-        case 'automatic answers':
-          final control = tester
-              .widgetList<SwitchListTile>(find.byType(SwitchListTile))
-              .firstWhere(
-                (widget) => (widget.title as Text).data == 'Automatic answers',
-              );
-          control.onChanged!(true);
-      }
-      await tester.pumpAndSettle();
-      expect(shell.error, contains('Callback rejected'));
-      expect(tester.takeException(), isNull);
-    });
+          if (shell.tab == WorkspaceTab.meetings) {
+            shell.meetingFeature.meetingId = id;
+            shell.meetingFeature.meetingPanel = 'Live Q&A';
+          }
+        });
+        await tester.pumpAndSettle();
+        connection.failures[Operation.preferencesSet] = StateError(
+          'Callback rejected',
+        );
+        switch (action) {
+          case 'google refresh':
+            final control = tester
+                .widgetList<DropdownButton<String>>(
+                  find.byWidgetPredicate(
+                    (widget) =>
+                        widget is DropdownButton<String> && widget.value == '4',
+                  ),
+                )
+                .first;
+            control.onChanged!('8');
+          case 'device':
+            final control =
+                shell.integrationFeature.deviceChoice(false)
+                    as IntegrationDeviceChoice;
+            control.onChanged!('auto');
+          case 'meeting style':
+            final control = tester
+                .widgetList<DropdownButton<String>>(
+                  find.byType(DropdownButton<String>),
+                )
+                .firstWhere((widget) => widget.value == 'Standard');
+            control.onChanged!('Concise');
+          case 'live enhance':
+            final control = tester.widget<FilledButton>(
+              find.byKey(const ValueKey('meeting-live-enhance')),
+            );
+            control.onPressed!();
+          case 'automatic answers':
+            final control = tester
+                .widgetList<SwitchListTile>(find.byType(SwitchListTile))
+                .firstWhere(
+                  (widget) =>
+                      (widget.title as Text).data == 'Automatic answers',
+                );
+            control.onChanged!(true);
+        }
+        await tester.pumpAndSettle();
+        expect(shell.error, contains('Callback rejected'));
+        expect(tester.takeException(), isNull);
+      }),
+    );
   }
 
   testWidgets(
     'Google completion removes its own route beneath another dialog',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('signin-route-');
       final auth = PendingGoogleAuth(root);
       late BuildContext home;
@@ -385,6 +397,6 @@ void main() {
       await tester.pumpAndSettle();
       await top;
       expect(find.byType(GoogleSignInDialog), findsNothing);
-    },
+    }),
   );
 }

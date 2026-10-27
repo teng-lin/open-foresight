@@ -18,7 +18,7 @@ void main() {
         (_, _, _, _) {},
       );
       try {
-        recorder.start(
+        await recorder.start(
           '/usr/bin/true',
           model.path,
           playback: false,
@@ -41,6 +41,7 @@ void main() {
         expect(states.any((s) => s.startsWith('No speech detected')), false);
       } finally {
         recorder.dispose();
+        await recorder.closed;
         directory.deleteSync(recursive: true);
       }
     },

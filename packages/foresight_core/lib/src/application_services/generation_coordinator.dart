@@ -14,10 +14,12 @@ final class GenerationCoordinator
     required this.recording,
     required this.closed,
     required this.yieldAutomatic,
+    this.checkAvailable,
   });
 
   final bool Function() restoring, generating, recording, closed;
   final Future<void> Function() yieldAutomatic;
+  final void Function()? checkAvailable;
   GenerationReservation? _reservation;
   bool _closed = false;
 
@@ -68,6 +70,7 @@ final class GenerationCoordinator
     if (_closed || closed()) {
       throw RpcError(RpcErrorCode.unavailable, 'Application closed');
     }
+    checkAvailable?.call();
   }
 
   /// Whether this exact producer still owns the reservation.

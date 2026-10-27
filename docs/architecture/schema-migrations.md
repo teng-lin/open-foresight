@@ -28,7 +28,10 @@ uncertain layouts fail actionably; only after compatibility and final
 file-identity checks may SQLite recover the original files. The format authority is SQLite's [file format](https://sqlite.org/fileformat.html)
 and `pager.c` (`readJournalHdr`, `pager_cksum`, `pager_playback_one_page`).
 
-Writable opens hold `BEGIN IMMEDIATE` while re-reading the version and applying
+When an existing non-empty profile is behind, the writable open first takes
+SQLite's exclusive locking mode, finishes any pending privacy maintenance (or
+refuses the upgrade), and creates a migration backup of the original version.
+Writable opens then hold `BEGIN IMMEDIATE` while re-reading the version and applying
 all pending steps. Each step advances `PRAGMA user_version` inside the same
 transaction. A failure or process exit before commit rolls back schema, backfills,
 and version together; reopening retries the pending steps. No per-open table or
@@ -56,6 +59,17 @@ the schema.
 | 15 | Normalize all action artifact aliases, durable meeting tasks, document-summary cache |
 | 16 | Repair legacy Google modification timestamps exactly once for live unedited sources |
 | 17 | Canonical ordered document labels and transactional removal of duplicate labels JSON |
+| 18 | `content_revisions` with retain/erase triggers for notes, meeting notes, artifacts, meeting tasks and sources |
+| 19 | `meetings.title_manually_edited` flag |
+| 20 | `sources.generated` and `meeting_notes.enhanced_generated` ownership, meeting index job/state tables, bounded content history and privacy-maintenance markers |
+| 21 | Ordinary deletion routes history erasure to `internal.backupErasurePending`; legacy privacy markers keep their full-cleanup meaning |
+| 22 | Meeting transcript index outbox: source mapping, progress, changes, segments, deletes, batches, triggers, `source_contents` view and lookup indexes |
+| 23 | Typed answer metadata, conversation and proactive scopes, and ordered source selections with foreign keys; malformed and orphan legacy values use a bounded compatibility quarantine |
+
+`ApplicationMigrations.run` defines steps 1–23 and throws for any other
+version. `Store.schemaVersion` aliases `applicationSchemaVersion` from
+`persistence/application_schema.dart`; `tools/check_architecture_facts.py`
+checks this table against the defined steps.
 
 Historical builds used version 1 for multiple additive schemas. Versions 2–6
 therefore probe for columns only while adopting those profiles. New stored-data
@@ -122,7 +136,7 @@ failure rolls back all members and a later start retries. Already-current member
 are not reconverted. Recurring revision/generation pruning remains runtime policy
 after migration. No index reset or silent rebuild is introduced.
 
-`tools/migrate_profile.py` qualifies application/helper versions before opening
+`python3.13 -m tools.migrate_profile` (from the repository root) qualifies application/helper versions before opening
 live writable connections or rewriting settings, and preserves every version.
 Native tests exercise real hot attached transactions immediately before and after
 superjournal deletion, hidden future page-1 states, WAL-only future versions,

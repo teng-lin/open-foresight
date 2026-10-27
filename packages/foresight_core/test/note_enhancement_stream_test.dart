@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
@@ -122,6 +123,7 @@ class QueuedNoteGenerator extends ControlledNoteGenerator {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Application app;
   late Directory directory;
   late Domain domain;
@@ -154,7 +156,9 @@ void main() {
     addTearDown(() async {
       await app.close();
       domain.close();
+      await domain.drain();
       generator.close();
+      await generator.closed;
       await generator.events.close();
       await domain.helper.close();
       domain.store.close();
@@ -316,6 +320,7 @@ void main() {
       final queued = QueuedNoteGenerator();
       generator = queued;
       domain.generator = queued;
+      await domain.generationRuntimes.drain();
       domain.store.setPreference('liveEnhance', 'true');
       domain.store.saveMeetingNotes(id, 'First raw');
       domain.store.saveMeetingEnhancedDraft(id, '');
@@ -381,6 +386,7 @@ void main() {
       final batched = BatchedNoteGenerator();
       generator = batched;
       domain.generator = generator;
+      await domain.generationRuntimes.drain();
       final raw = [
         'one',
         'two',
@@ -490,6 +496,7 @@ void main() {
       generator.close();
       generator = ControlledNoteGenerator();
       domain.generator = generator;
+      await domain.generationRuntimes.drain();
       final second = app.enhanceNotes(id);
       await generator.entered.future;
       expect(

@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import pwd
 import shutil
 import subprocess
 import sys
@@ -219,44 +220,101 @@ def copy_application(source, destination):
 
 def installation_lock_path(app):
     identity = hashlib.sha256(str(Path(app).resolve()).encode("utf-8")).hexdigest()[:24]
-    return Path(f"/tmp/of-install-{os.getuid()}-{identity}/lock")  # noqa: S108 - Installation lock path is owned and checked before use.
+    home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    cache = (
+        home / "Library/Caches/io.openforesight.App"
+        if sys.platform == "darwin"
+        else home / ".cache/open-foresight"
+    )
+    return cache / "install-locks" / identity / "lock"
+
+
+def legacy_installation_lock_path(app):
+    identity = hashlib.sha256(str(Path(app).resolve()).encode("utf-8")).hexdigest()[:24]
+    # macOS /tmp is the system alias for /private/tmp. Start at its fixed
+    # canonical directory so every untrusted descendant remains O_NOFOLLOW.
+    temporary = Path("/private/tmp" if sys.platform == "darwin" else "/tmp")  # noqa: S108 - Released lock protocol bridge only.
+    return temporary / f"of-install-{os.getuid()}-{identity}" / "lock"
 
 
 @contextmanager
-def installation_lock(app, *, exclusive=True):
-    path = installation_lock_path(app)
-    path.parent.mkdir(mode=0o700, exist_ok=True)
-    directory = path.parent.lstat()
-    if (
-        not stat.S_ISDIR(directory.st_mode)
-        or directory.st_uid != os.getuid()
-        or directory.st_mode & 0o077
-    ):
-        raise ValueError(
-            f"Installation lock directory must be private and user-owned: {path.parent}"
-        )
-    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+def _installation_lock_file(path):
+    """Open each ancestor without following links; validate the opened inode."""
+    directory = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    fd = None
     try:
+        for index, component in enumerate(path.parts[1:-1]):
+            try:
+                os.mkdir(component, mode=0o700, dir_fd=directory)
+            except FileExistsError:
+                pass
+            child = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=directory,
+            )
+            os.close(directory)
+            directory = child
+            info = os.fstat(directory)
+            private = index == len(path.parts) - 3
+            writable = info.st_mode & (0o077 if private else 0o022)
+            shared_temporary = (
+                not private and info.st_uid == 0 and info.st_mode & stat.S_ISVTX
+            )
+            if info.st_uid not in {0, os.getuid()} or (
+                writable and not shared_temporary
+            ):
+                raise ValueError(
+                    "Installation lock directory must be private and user-owned"
+                )
+        fd = os.open(
+            path.name,
+            os.O_CREAT | os.O_RDWR | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=directory,
+        )
         info = os.fstat(fd)
         if (
             not stat.S_ISREG(info.st_mode)
             or info.st_uid != os.getuid()
             or info.st_mode & 0o077
+            or info.st_nlink != 1
         ):
             raise ValueError(
-                f"Installation lock must be a private user-owned regular file: {path}"
+                "Installation lock must be a private user-owned regular file"
             )
+        yield fd
+    finally:
+        if fd is not None:
+            os.close(fd)
+        os.close(directory)
+
+
+@contextmanager
+def installation_lock(app, *, exclusive=True):
+    # Incoming installers hold the legacy lock too: an old service racing an
+    # upgrade must refuse to launch before the application exchange finishes.
+    # New services never allocate locks in shared temporary storage.
+    with _installation_lock_file(installation_lock_path(app)) as fd:
         try:
-            fcntl.lockf(
+            fcntl.flock(
                 fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB
             )
         except BlockingIOError as error:
             raise Deferred(
                 "Application service or another installer acquired the installation lock; retry after it exits"
             ) from error
-        yield
-    finally:
-        os.close(fd)
+        if not exclusive:
+            yield
+            return
+        with _installation_lock_file(legacy_installation_lock_path(app)) as legacy:
+            try:
+                fcntl.lockf(legacy, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise Deferred(
+                    "A released application service holds the legacy installation lock; retry after it exits"
+                ) from error
+            yield
 
 
 def atomic_swap(first, second):

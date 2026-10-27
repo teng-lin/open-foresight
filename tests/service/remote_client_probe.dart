@@ -1,3 +1,4 @@
+import '../../packages/foresight_core/test/sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -70,6 +71,7 @@ Future<String?> noteBody(DesktopConnection domain, int id) async {
 Future<void> main() async => print(jsonEncode(await runRemoteClientProbe()));
 
 Future<Map<String, Object?>> runRemoteClientProbe() async {
+  bootstrapSqlSupportFixture();
   final profile = ProfilePaths.resolve(Platform.environment);
   final domain = await connectDesktop(profile);
   int? replacementPid;

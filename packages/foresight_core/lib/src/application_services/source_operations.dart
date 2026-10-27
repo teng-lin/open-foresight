@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../agent_access.dart';
-import '../domain.dart';
+import 'service_workspace_ports.dart';
 import '../generated/rag_service.pb.dart';
 import '../graph_labels.dart';
 import '../graph_persistence.dart';
@@ -12,7 +12,7 @@ import '../operation_requests.dart';
 import '../operations.dart';
 import '../persistence/source_admission_queries.dart';
 import '../rpc_error.dart';
-import '../source_type.dart';
+import '../import_directory.dart';
 import '../store.dart';
 import '../web_import.dart';
 import 'google_maintenance.dart';
@@ -20,11 +20,15 @@ import 'google_maintenance.dart';
 /// Source import, revision admission and organization share the existing domain
 /// queue. Import policy is injected by composition, never discovered globally.
 final class SourceOperations {
-  SourceOperations({required this.domain, required this.accounts})
-    : queries = SourceAdmissionQueries(domain.store);
-  final Domain domain;
+  SourceOperations({
+    required this.domain,
+    required this.accounts,
+    this.awaitSearchReadiness,
+  }) : queries = SourceAdmissionQueries(domain.store);
+  final SourceOperationsPort domain;
   final GoogleMaintenance accounts;
   final SourceAdmissionQueries queries;
+  final Future<void> Function({bool Function()? current})? awaitSearchReadiness;
   ImportPolicy? importPolicy;
   Store get store => domain.store;
 
@@ -93,6 +97,10 @@ final class SourceOperations {
     SourcesSearchRequest request, {
     bool Function()? current,
   }) async {
+    await awaitSearchReadiness?.call(current: current);
+    if (!(current?.call() ?? true)) {
+      throw RpcError(RpcErrorCode.cancelled, 'Search cancelled');
+    }
     final allowed = {
       for (final source in queries.summaries)
         if (source.state == 'indexed') source.id: source.revision,
@@ -186,7 +194,9 @@ final class SourceOperations {
         file.lengthSync() > ImportPolicy.maxFileBytes) {
       throw StateError('Import requires a regular file no larger than 10 MiB');
     }
-    final (text, provenance) = await Parser().extract(file.path);
+    final (text, provenance) = await Parser(
+      configuration: domain.configuration,
+    ).extract(file.path);
     final modified = (await file.stat()).modified.millisecondsSinceEpoch;
     domain.checkWorkspace(generation);
     if (current != null && !current()) {
@@ -197,15 +207,13 @@ final class SourceOperations {
     }
 
     final uri = Uri.file(file.path).toString();
-    final existing = queries.documents
-        .where((s) => s.sourceUri == uri)
-        .firstOrNull;
+    final existing = queries.importIdForUri(uri);
     final id = store.importText(
       file.uri.pathSegments.last,
       text,
       path.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'text/plain',
       '$provenance; ${file.path}',
-      id: existing?.id,
+      id: existing,
       modifiedAtMs: modified,
       sourceUri: uri,
     );
@@ -232,19 +240,13 @@ final class SourceOperations {
     if (current != null && !current()) {
       throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
     }
-    final existing = queries.documents
-        .where(
-          (s) =>
-              s.sourceUri == uri.toString() &&
-              sourceType(s.toRow()) == SourceType.url,
-        )
-        .firstOrNull;
+    final existing = queries.importIdForUri(uri.toString(), urlOnly: true);
     final id = store.importText(
       uri.host + uri.path,
       text,
       'text/plain',
       'url:$uri',
-      id: existing?.id,
+      id: existing,
       sourceUri: uri.toString(),
     );
     await domain.index(id, current: indexing ?? current);
@@ -255,16 +257,13 @@ final class SourceOperations {
     final generation = domain.workspaceGeneration;
     final files = importPolicy != null
         ? (await importPolicy!.directoryFiles(path)).map(File.new).toList()
-        : Directory(path)
-              .listSync(recursive: true, followLinks: false)
-              .whereType<File>()
-              .where(
-                (file) => RegExp(
-                  r'\.(txt|md|pdf|rtf)$',
-                  caseSensitive: false,
-                ).hasMatch(file.path),
-              )
-              .toList();
+        : await enumerateImportFiles(
+            path,
+            current: () =>
+                !domain.closed &&
+                generation == domain.workspaceGeneration &&
+                (current?.call() ?? true),
+          );
     final failures = <String>[];
     for (final file in files) {
       domain.checkWorkspace(generation);

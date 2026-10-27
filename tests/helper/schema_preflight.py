@@ -105,10 +105,10 @@ class SchemaPreflight(legacy_schema.LegacyHelperDatabases):
         for name in MEMBERS:
             with self.subTest(member=name):
                 with sqlite3.connect(self.root / name) as db:
-                    db.execute("PRAGMA user_version=2")
+                    db.execute("PRAGMA user_version=3")
                 diagnostic = self.qualify(succeeds=False)
                 self.assertIn(name, diagnostic)
-                self.assertIn("maximum 1", diagnostic)
+                self.assertIn("maximum 2", diagnostic)
                 with sqlite3.connect(self.root / name) as db:
                     db.execute("PRAGMA user_version=0")
 
@@ -129,7 +129,7 @@ class SchemaPreflight(legacy_schema.LegacyHelperDatabases):
         for name in MEMBERS:
             with self.subTest(member=name):
                 with sqlite3.connect(self.root / name) as db:
-                    db.execute("PRAGMA user_version=2")
+                    db.execute("PRAGMA user_version=3")
                 before = self.snapshot()
                 self.start(succeeds=False)
                 after = self.snapshot()
@@ -149,7 +149,7 @@ class SchemaPreflight(legacy_schema.LegacyHelperDatabases):
         expected = self.vectors()
         for name in MEMBERS:
             with sqlite3.connect(self.root / name) as db:
-                self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (1,))
+                self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (2,))
         self.start()
         self.assertEqual(self.vectors(), expected)
 
@@ -162,12 +162,12 @@ class SchemaPreflight(legacy_schema.LegacyHelperDatabases):
         self.assertEqual(self.vectors(), [(0, "blob", binary)])
         for name in MEMBERS:
             with sqlite3.connect(self.root / name) as db:
-                self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (1,))
+                self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (2,))
 
     def test_future_last_member_never_creates_missing_first_member(self):
         (self.root / "agent_metadata.db").unlink()
         with sqlite3.connect(self.root / "rag_vector.db") as db:
-            db.execute("PRAGMA user_version=2")
+            db.execute("PRAGMA user_version=3")
         self.qualify(succeeds=False)
         self.start(succeeds=False)
         self.assertFalse((self.root / "agent_metadata.db").exists())
@@ -207,7 +207,7 @@ class SchemaPreflight(legacy_schema.LegacyHelperDatabases):
                 nested = SchemaPreflight()
                 nested.setUp()
                 try:
-                    nested.crash(boundary=boundary, original=2)
+                    nested.crash(boundary=boundary, original=3)
                     for name in MEMBERS:
                         self.assertEqual(
                             struct.unpack_from(
@@ -216,7 +216,7 @@ class SchemaPreflight(legacy_schema.LegacyHelperDatabases):
                             0,
                         )
                     diagnostic = nested.qualify(succeeds=False)
-                    self.assertIn("schema version 2", diagnostic)
+                    self.assertIn("schema version 3", diagnostic)
                 finally:
                     nested.doCleanups()
 
@@ -244,7 +244,7 @@ os._exit(0)
                     nested = SchemaPreflight()
                     nested.setUp()
                     try:
-                        nested.wal(name, 2)
+                        nested.wal(name, 3)
                         self.assertEqual(
                             struct.unpack_from(
                                 ">I", (nested.root / name).read_bytes(), 60
@@ -309,7 +309,7 @@ os._exit(0)
     def test_source_change_after_whole_set_qualification_is_rejected(self):
         def change():
             with sqlite3.connect(self.root / "linux_state.db") as db:
-                db.execute("PRAGMA user_version=2")
+                db.execute("PRAGMA user_version=3")
 
         self.reject_source_change(change)
 

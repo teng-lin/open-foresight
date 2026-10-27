@@ -1417,11 +1417,12 @@ seed provenance and verify ABI compatibility. The tooling identity contains the
 SDK image identity, pinned snapshot and recipe bytes plus Git executable mode;
 application changes and checkout umask do not change it.
 
-Main push and half-hourly schedules run read-only cache reconciliation, then
+Main push and the hourly fallback schedule run read-only cache reconciliation, then
 dispatch the dedicated main-only publisher when necessary. Language/model caches
 warm only missing exact keys. Registry maintenance runs after a new main source,
 a failed publisher, explicit consumer qualification or a 24-hour freshness miss;
-an active publisher suppresses duplicates for at most 30 minutes. This metadata
+an active publisher suppresses duplicates for at most 30 minutes (see
+[fallback cadence](#scheduled-fallback-cadence-f24) for recovery bounds). This metadata
 only schedules maintenance and never establishes that restored bytes are valid.
 Scheduled reconciliation itself does not write shared caches. Legacy guarded
 writers and restore fallbacks remain until replacement qualification permits
@@ -1446,6 +1447,73 @@ do not impersonate a fork event or authorize PR bytes for main consumers.
 The unused `dependency-seed-current` producer allowlist row had no consumers
 and was removed. The legacy `dependency-seed` row,
 its attempt-1 qualification and existing guarded publication jobs remain.
+
+### Scheduled fallback cadence (F24)
+
+Three main-only maintenance duties used to poll every 30 minutes. Main evidence and
+cache reconciliation both fired at `:17`/`:47`, and the index fired at `:23`/`:53`.
+Every completed cache-publish run, scheduled no-ops included, also wakes the index
+through `workflow_run`. That made about 192 scheduled-origin runs a day. The
+normal path for each duty is event-driven and immediate. Schedules only recover
+lost events, transient failures and time-based staleness. None of the freshness
+limits below requires polling more often than hourly:
+
+| Duty (owner) | Immediate triggers | Freshness actually required | Fallback (UTC) |
+| --- | --- | --- | --- |
+| Observe/reconcile main validation (`main-evidence.yml`, `ci_main_evidence.py`, `ci_main_coordinator.py`) | `push` to main; `workflow_run` completion of Platform candidates and checks on main (push, sweep dispatch and failed-job rerun); `workflow_dispatch` | No time-based expiry below the 90-day receipt retention. Lost completions, transient coordinator failures and an index activation change have no event of their own. | `17 * * * *` |
+| Cache/registry reconciliation (`linux-cache-publish.yml`, `ci_cache_reconcile.py`) | `push` to main (new source: no executed publisher, so registry needed); `workflow_dispatch` | 24-hour registry renewal; 30-minute active-publisher suppression; failed publisher; actions/cache keys evicted after 7 days without access or by repository-size LRU at any time | `41 * * * *` |
+| Qualification index (`ci-qualification-index.yml`, `ci_qualification_index.py`) | `workflow_run` completion of CI candidate qualification, Preview packages, Arch rolling toolchain drift, Publish Linux application caches; `workflow_dispatch` | Main-evidence observer descriptors have no wakeup. Index runs that fail because main advanced need a retry. Stale or absent indexes fail safe to broader validation; 90-day index retention. | `11 * * * *`, plus the hourly cache-publish wakeup |
+
+Each duty now polls once an hour. The three duties produce 72 direct scheduled
+runs a day, plus 24 index wakeups from scheduled cache-publish completions:
+96 nominal invocations instead of 192, excluding conditional dispatches and
+retries. The minutes are spread out: index `:11`, main evidence `:17`, cache
+reconciliation `:41`, and the cache-publish wakeup follows its reconciliation
+and dispatch steps (up to `:51` from their configured timeouts, before queue delay).
+No poll lands on the busy top of the hour. Different duties' polls are at least
+five minutes apart, and the index's own poll stays out of the cache-publish wakeup
+window. When preceding runs finish promptly, main evidence at `:17` reads the
+`:11` index and the `:41` wakeup indexes its descriptors. Longer runs can leave
+that update for the next index poll or wakeup.
+Dispatched publishers and producer completions keep waking the index on demand.
+This is a structural count of scheduled runs, not a measured runner-minute
+saving. Each scheduled run's duration is unchanged and has not been re-measured.
+
+Stale-recovery behavior per delivered tick, with GitHub schedule delay added to
+every bound. GitHub can also drop a scheduled tick; a dropped tick adds another
+hour until the following poll, unless an event or manual run recovers it first:
+
+- **Main evidence.** The hourly run observes current main HEAD (`github.sha`).
+  When the qualification index authorizes `main_receipts`, it reconciles that
+  HEAD. It writes a verified receipt, or it reports an active sweep as `waiting`.
+  It dispatches a missing or cancelled-latest production sweep (dispatch is
+  idempotent against an active sweep). It reruns failed jobs once only on attempt
+  1, and otherwise reports `failed` and updates the `ci-main` issue. A lost event
+  is therefore recovered within 60 minutes. Missed observations of sources that
+  are no longer HEAD are not replayed; the coordinator always owns current HEAD.
+- **Cache reconciliation.** A missing exact cache key is dispatched at the next
+  poll, so within 60 minutes of eviction. Consumers stay restore-only in the
+  meantime. A retry for a failed latest publisher is dispatched within 60 minutes.
+  For a publisher still active after 30 minutes, a new run is dispatched within
+  90 minutes of its start. A renewal is dispatched between 24 and 25 hours after
+  the previous successful publisher finished. Queueing and execution add to
+  these dispatch bounds. If main advanced, the poll reports `current=false` and does nothing;
+  the new source's push owns publication. Only `workflow_dispatch` jobs write,
+  so the schedule itself never writes shared caches.
+- **Qualification index.** Polls and wakeups on a superseded HEAD fail with
+  "Main advanced" and are recovered by the next poll or wakeup, within 60
+  minutes. A main-evidence observer descriptor reaches the index at the next
+  successful cache-completion wakeup or hourly index poll, within 60 minutes. Until
+  then, consumers keep the broader production routes; a stale index never
+  widens trust.
+
+These workflow and cadence-test edits change the CI control closure. Existing
+capabilities therefore need renewed reviewed-main qualification before reuse.
+
+`tests/test_ci_cadence.py` protects these event triggers, the 60-minute fallback
+bound, the offsets, and the derived registry recovery bounds by driving
+`ci_cache_reconcile.registry_schedule` at the actual poll times. Raising a poll
+rate again needs a new freshness requirement in this table.
 
 ### Frozen reliability and runtime observations
 

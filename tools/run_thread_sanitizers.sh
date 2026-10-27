@@ -12,7 +12,12 @@ task_result=0
 ctest --test-dir "$task_build" --output-on-failure --timeout 120 \
   --output-junit "$task_output/junit.xml" > "$task_output/ctest.log" 2>&1 || task_result=$?
 cat "$task_output/ctest.log"
-if compgen -G "$task_output/tsan.*" > /dev/null; then
+for task_report in "$task_build"/sanitizer-reports/tsan.*; do
+  [[ -e "$task_report" || -L "$task_report" ]] || continue
+  [[ -f "$task_report" && ! -L "$task_report" ]] || exit 1
+  cp -- "$task_report" "$task_output/clean-child-${task_report##*/}"
+done
+if compgen -G "$task_output/tsan.*" > /dev/null || compgen -G "$task_output/clean-child-tsan.*" > /dev/null; then
   echo 'ThreadSanitizer reported an error; inspect retained reports.' >&2
   exit 1
 fi

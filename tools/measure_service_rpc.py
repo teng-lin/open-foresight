@@ -25,8 +25,10 @@ outside those directories may also be named with --runtime-file. In addition,
 file-backed mappings across the owned service session and optional native host.
 New mapped objects are pinned and hashed after workload/cleanup; snapshot and
 hashing costs are recorded outside RPC sample windows. Deleted file/memfd
-mappings intentionally fail closed: generated executable-memory mappings are
-not silently exempted. Already qualified model
+mappings fail closed. An independently verified source-cohort API caller may
+explicitly supply expected diagnostic IDs to validate its sealed shared DATA
+through a read-only kernel handle; no payload hash or executable exemption is
+permitted. The CLI's default export-verification boundary is unchanged. Qualified model
 hashes are reused only when full file identity metadata is unchanged.
 Child environment inheritance is allowlisted and loader injection is refused.
 --desktop-host opts into a hashed native stdio/socket relay for a synthetic visible
@@ -41,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import fcntl
 import hashlib
 import importlib
 from io import BufferedReader
@@ -56,6 +59,7 @@ import shutil
 import socket
 import stat
 import statistics
+import struct
 import subprocess
 import sys
 import tempfile
@@ -78,6 +82,9 @@ MODEL_NAMES = {
     "embedding": "embeddinggemma-2-740m.litertlm",
     "speech": "ggml-medium.bin",
 }
+# Linux UAPI F_LINUX_SPECIFIC_BASE + 10; some supported standalone CPython
+# builds expose fcntl() but omit the named constant. This path is Linux-only.
+DIAGNOSTIC_GET_SEALS = getattr(fcntl, "F_GET_SEALS", 1034)
 EVIDENCE_TEXT = (
     "Alice owns the Apollo migration. She ships the design Friday. Bob reviews "
     "Tuesday. The implementation has three stages: schema safety, typed service "
@@ -320,15 +327,30 @@ class DesktopHostPeer(Peer):
         self.writer = cast(BinaryIO, self.process.stdin)
         self.reader = cast(BinaryIO, self.process.stdout)
         try:
-            image = file_identity(Path(f"/proc/{self.process.pid}/exe"))
+            image = self._executed_image(identity)
             evidence["executed_image"] = image
-            if image["sha256"] != identity["sha256"]:
-                raise ValueError("Native desktop relay executed a different image")
             os.set_blocking(self.writer.fileno(), False)
             os.set_blocking(self.reader.fileno(), False)
         except BaseException:
             self.close()
             raise
+
+    def _executed_image(self, declared: dict[str, Any]) -> dict[str, Any]:
+        # Bound qualification while the sampled bytes match the invoking parent.
+        # Require the declared native bytes before using the relay, and reject
+        # every unrelated image immediately; this does not establish the cause
+        # of a mismatched initial procfs observation.
+        parent = file_identity(Path(f"/proc/{os.getpid()}/exe"))
+        deadline = time.monotonic() + min(self.timeout, 1.0)
+        while True:
+            image = file_identity(Path(f"/proc/{self.process.pid}/exe"))
+            if image["sha256"] == declared["sha256"]:
+                return image
+            if (image["sha256"] != parent["sha256"]
+                    or self.process.poll() is not None
+                    or time.monotonic() >= deadline):
+                raise ValueError("Native desktop relay executed a different image")
+            self.interrupted.wait(.001)
 
     def _check(self, deadline: float, method: str) -> float:
         if self.interrupted.is_set():
@@ -525,6 +547,8 @@ def environment(args: argparse.Namespace, run: Path) -> dict[str, str]:
 
 
 def host_state() -> dict[str, Any]:
+    if sys.platform != "linux":
+        raise RuntimeError("Native process measurement requires Linux")
     def read(path: str) -> str | None:
         file = Path(path)
         return file.read_text() if file.is_file() else None
@@ -539,16 +563,19 @@ def host_state() -> dict[str, Any]:
 def session_members(session: int) -> list[int]:
     """Include owned worker process groups while the live supervisor pins SID."""
     members = []
-    for entry in Path("/proc").iterdir():
-        if not entry.name.isdecimal() or int(entry.name) == session:
-            continue
-        try:
-            # comm is parenthesized and may itself contain spaces or ')'.
-            fields = (entry / "stat").read_text().rpartition(")")[2].split()
-        except (FileNotFoundError, ProcessLookupError):
-            continue
-        if int(fields[3]) == session:
-            members.append(int(entry.name))
+    # Query the kernel SID without opening every process's stat file. Multiple
+    # host-wide stat scans can exhaust cleanup's deadline on a busy host even
+    # after the owned service and descendants have already settled.
+    with os.scandir("/proc") as entries:
+        for entry in entries:
+            if not entry.name.isdecimal() or int(entry.name) == session:
+                continue
+            member = int(entry.name)
+            try:
+                if os.getsid(member) == session:
+                    members.append(member)
+            except ProcessLookupError:
+                continue
     return members
 
 
@@ -573,6 +600,8 @@ def signal_session_members(session: int, kind: int, *,
     Open the pidfd before checking SID: if a numeric PID is recycled during the
     check, sending through the fd can only reach the original (now dead) task.
     """
+    if sys.platform != "linux":
+        raise RuntimeError("Native process measurement requires Linux")
     for member in session_members(session):
         try:
             descriptor = os.pidfd_open(member)
@@ -671,8 +700,20 @@ class RuntimeInventory:
     mappings cannot silently qualify. Snapshots include all owned session PGIDs.
     """
 
-    def __init__(self, report: dict[str, Any], *, private_roots: tuple[Path, ...] = ()):
+    def __init__(self, report: dict[str, Any], *, private_roots: tuple[Path, ...] = (),
+                 diagnostic_context: dict[str, str] | None = None):
         self.report = report
+        # Optional only for a caller that independently verified its source/Worker
+        # cohort. Header identifiers never authenticate their own expected values.
+        context = diagnostic_context
+        if context is not None and (
+            not isinstance(context, dict) or set(context) != {"native_id", "worker_id", "catalog_id"}
+            or any(not isinstance(v, str) or re.fullmatch(r"[0-9a-f]{64}", v) is None for v in context.values())
+        ):
+            raise ValueError("Invalid expected diagnostic context")
+        self.diagnostic_context = dict(context) if context is not None else None
+        self.diagnostic_handles: dict[tuple[int, int], tuple[int, bytes]] = {}
+        self.diagnostic_objects: dict[tuple[int, int], dict[str, Any]] = {}
         self.private_roots = tuple(path.absolute() for path in private_roots)
         self.declared_paths: dict[str, dict[str, Any]] = {}
         self.objects: dict[tuple[int, ...], dict[str, Any]] = {}
@@ -680,6 +721,118 @@ class RuntimeInventory:
         self.known: dict[tuple[int, ...], dict[str, Any]] = {}
         self.finished = False
         self.mounts: list[dict[str, Any]] | None = None
+
+    @staticmethod
+    def diagnostic_metadata(descriptor: int) -> dict[str, int]:
+        metadata = os.fstat(descriptor)
+        seals = fcntl.fcntl(descriptor, DIAGNOSTIC_GET_SEALS)
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_nlink != 0
+                or metadata.st_size != 16384 or seals != 7
+                or fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY):
+            raise ValueError("Unsafe diagnostic data handle")
+        return {**file_metadata(metadata), "uid": metadata.st_uid, "gid": metadata.st_gid,
+                "mode": stat.S_IMODE(metadata.st_mode), "seals": seals}
+
+    @staticmethod
+    def diagnostic_key(metadata: dict[str, Any]) -> tuple[int, ...]:
+        return tuple(metadata[key] for key in ("device", "inode", "bytes", "links", "uid", "gid", "mode", "seals"))
+
+    def diagnostic_header(self, descriptor: int) -> tuple[bytes, dict[str, int | str]]:
+        header = os.pread(descriptor, 256, 0)
+        if len(header) != 256 or self.diagnostic_context is None:
+            raise ValueError("Incomplete diagnostic header context")
+        magic, version, size, generation, parent, child = struct.unpack_from("<IHHQQQ", header)
+        identifiers = {name: header[offset:offset + 32].hex() for name, offset in
+                       (("native_id", 64), ("worker_id", 96), ("catalog_id", 128))}
+        if (magic != 0x5044464F or version != 1 or size != 256 or generation != 1
+                or not 1 < parent <= 0x7FFFFFFF or not 1 < child <= 0x7FFFFFFF or parent == child
+                or not any(header[32:64]) or any(header[232:256])
+                or identifiers != self.diagnostic_context):
+            raise ValueError("Unqualified diagnostic header")
+        words = struct.unpack_from("<9Q", header, 160)
+        if any(word > 0x7FFFFFFFFFFFFFFF for word in words):
+            raise ValueError("Invalid diagnostic counters")
+        kinds = []
+        for word in words[1:3]:
+            kind, challenge = word & ~0x1FFFFFFFFFFFFFFF, word & 0x1FFFFFFFFFFFFFFF
+            if word and (kind not in (0x2000000000000000, 0x4000000000000000) or not challenge):
+                raise ValueError("Invalid diagnostic control kind")
+            kinds.append("none" if not word else "probe" if kind == 0x2000000000000000 else "force")
+        values: dict[str, int | str] = dict(zip(
+            ("parent_heartbeat", "request_published", "request_consumed", "reply_published",
+             "reply_consumed", "state", "child_heartbeat"), (words[0], *words[3:]), strict=True,
+        ))
+        values.update(parent_pid=parent, child_pid=child, control_command_kind=kinds[0], control_ack_kind=kinds[1])
+        # Retain the immutable prefix only in memory, including the nonce. Never
+        # serialize it or inspect/hash either queue payload.
+        return header[:160], values
+
+    @staticmethod
+    def diagnostic_peers(parent: int, child: int, pid: int, session: int) -> None:
+        if pid not in (parent, child):
+            raise ValueError("Diagnostic mapping is not owned by either protocol peer")
+        descriptors = []
+        try:
+            for peer in (parent, child):
+                descriptor = os.pidfd_open(peer)
+                descriptors.append(descriptor)
+                if os.getsid(peer) != session or Path(f"/proc/{peer}").stat().st_uid != os.geteuid():
+                    raise ValueError("Diagnostic peer left owned session")
+            fields = Path(f"/proc/{child}/stat").read_text().rpartition(")")[2].split()
+            if int(fields[1]) != parent or int(fields[3]) != session:
+                raise ValueError("Diagnostic child is not the owned direct child")
+            for descriptor in descriptors:
+                signal.pidfd_send_signal(descriptor, 0)
+        finally:
+            for descriptor in descriptors:
+                os.close(descriptor)
+
+    def mapped_diagnostic(self, pid: int, session: int, fields: list[str]) -> dict[str, Any]:
+        if self.finished:
+            raise RuntimeError("Runtime inventory is already finished")
+        if (self.diagnostic_context is None or fields[1] != "rw-s" or int(fields[2], 16) != 0
+                or re.fullmatch(r"[0-9a-f]+-[0-9a-f]+", fields[0]) is None):
+            raise ValueError("Unqualified diagnostic data mapping")
+        first, last = (int(part, 16) for part in fields[0].split("-"))
+        if last - first != 16384:
+            raise ValueError("Unexpected diagnostic mapping size")
+        device = tuple(int(part, 16) for part in fields[3].split(":"))
+        descriptor = -1
+        retained = False
+        try:
+            # This kernel-provided symlink is intentionally followed. The narrow
+            # observer capability may permit it; failures never become exemptions.
+            descriptor = os.open(f"/proc/{pid}/map_files/{fields[0]}", os.O_RDONLY | os.O_CLOEXEC)
+            metadata = self.diagnostic_metadata(descriptor)
+            if ((os.major(metadata["device"]), os.minor(metadata["device"])) != device
+                    or metadata["inode"] != int(fields[4])):
+                raise ValueError("Diagnostic mapping identity changed")
+            immutable, counters = self.diagnostic_header(descriptor)
+            self.diagnostic_peers(int(counters["parent_pid"]), int(counters["child_pid"]), pid, session)
+            if (self.diagnostic_header(descriptor)[0] != immutable
+                    or self.diagnostic_key(self.diagnostic_metadata(descriptor)) != self.diagnostic_key(metadata)):
+                raise ValueError("Diagnostic identity changed during snapshot")
+            key = (metadata["device"], metadata["inode"])
+            if key in self.diagnostic_handles:
+                if (self.diagnostic_handles[key][1] != immutable
+                        or self.diagnostic_key(metadata) != self.diagnostic_key(self.diagnostic_objects[key])):
+                    raise ValueError("Diagnostic immutable header changed")
+            else:
+                self.diagnostic_handles[key] = (descriptor, immutable)
+                retained = True
+                identity = {**metadata, "kind": "sealed diagnostic data", "mapping_permissions": ["rw-s"],
+                            "mutable_shared_data": True, "payload_hashed": False, "nonce_nonzero": True,
+                            "expected_context": dict(self.diagnostic_context)}
+                self.diagnostic_objects[key] = identity
+                self.report.setdefault("mapped_diagnostic_data", []).append(identity)
+            return {**self.diagnostic_objects[key], "observed_pid": pid, "counters": counters}
+        except OSError as error:
+            # Do not emit a kernel address, raw header, nonce or payload on error.
+            raise ValueError(f"Diagnostic data observation unavailable (errno {error.errno})") from None
+        finally:
+            if descriptor >= 0 and not retained:
+                os.close(descriptor)
 
     @staticmethod
     def key(identity: dict[str, Any]) -> tuple[int, ...]:
@@ -760,6 +913,10 @@ class RuntimeInventory:
                 stream.close()
 
     def capture(self, session: int, condition: str) -> None:
+        if self.finished:
+            raise RuntimeError("Runtime inventory is already finished")
+        if sys.platform != "linux":
+            raise RuntimeError("Native process measurement requires Linux")
         self.seed(self.report.get("inputs", {}))
         started = time.perf_counter_ns()
         snapshot: dict[str, Any] = {"condition": condition, "session": session,
@@ -786,6 +943,7 @@ class RuntimeInventory:
                     signal.pidfd_send_signal(descriptor, 0)
                     process.update(maps_sha256=hashlib.sha256(maps.encode()).hexdigest(), files=[], special_mappings=[])
                     seen = set()
+                    diagnostic_seen = set()
                     for line in maps.splitlines():
                         fields = line.split(None, 5)
                         if len(fields) < 6 or fields[5].startswith("["):
@@ -793,6 +951,13 @@ class RuntimeInventory:
                             continue
                         name = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), fields[5])
                         if name.endswith(" (deleted)"):
+                            if name == "/memfd:foresight-diagnostic (deleted)" and self.diagnostic_context is not None:
+                                identity = self.mapped_diagnostic(pid, session, fields)
+                                diagnostic_identity_key = (identity["device"], identity["inode"])
+                                if diagnostic_identity_key not in diagnostic_seen:
+                                    process.setdefault("diagnostic_data", []).append(identity)
+                                    diagnostic_seen.add(diagnostic_identity_key)
+                                continue
                             raise ValueError(f"Deleted mapped file cannot be qualified: {name}")
                         if not name.startswith("/"):
                             raise ValueError(f"Unsupported mapped file path: {name}")
@@ -819,7 +984,13 @@ class RuntimeInventory:
             return
         self.finished = True
         started = time.perf_counter_ns()
+        failure: BaseException | None = None
         try:
+            for diagnostic_identity_key, (descriptor, immutable) in self.diagnostic_handles.items():
+                if self.diagnostic_key(self.diagnostic_metadata(descriptor)) != self.diagnostic_key(self.diagnostic_objects[diagnostic_identity_key]):
+                    raise ValueError("Diagnostic handle identity changed before finish")
+                if self.diagnostic_header(descriptor)[0] != immutable:
+                    raise ValueError("Diagnostic immutable header changed before finish")
             for key, stream in self.pending.items():
                 identity = self.objects[key]
                 before = file_metadata(os.fstat(stream.fileno()))
@@ -839,14 +1010,30 @@ class RuntimeInventory:
                                 hash_source="private mutable shared data, post-run hash" if identity["mutable_shared_data"] else "pinned mapped file, hashed after workloads",
                                 hashed_metadata=before, changed_since_snapshot=self.key(before) != key)
         except BaseException as error:
+            failure = error
             self.report["mapped_runtime_error"] = repr(error)
             self.report["status"] = "incomplete"
             raise
         finally:
             self.report["mapped_runtime_hash_ms"] = (time.perf_counter_ns() - started) / 1e6
-            for stream in self.pending.values():
-                stream.close()
-            self.pending.clear()
+            try:
+                for stream in self.pending.values():
+                    stream.close()
+            finally:
+                self.pending.clear()
+                close_failed = False
+                for descriptor, _ in self.diagnostic_handles.values():
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        close_failed = True
+                self.diagnostic_handles.clear()
+                if close_failed:
+                    self.report["status"] = "incomplete"
+                    if failure is not None:
+                        failure.add_note("Diagnostic data handle cleanup failed")
+                    else:
+                        raise ValueError("Diagnostic data handle cleanup failed")
 
 
 class Measurement:

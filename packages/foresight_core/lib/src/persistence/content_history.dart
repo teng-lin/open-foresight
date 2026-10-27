@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'source_contents.dart';
 
 import 'package:sqlite3/sqlite3.dart';
 
@@ -21,6 +22,10 @@ final class ContentHistory {
         supportedVersion: supportedVersion,
       );
 
+  static const maximumRevisions = 20;
+  static const maximumBytes = 32 * 1024 * 1024;
+  static const maximumAge = Duration(days: 90);
+
   static const entities = {
     'notes',
     'meeting_notes',
@@ -33,8 +38,12 @@ final class ContentHistory {
     if (!entities.contains(entity)) throw ArgumentError.value(entity, 'entity');
     return [
       for (final row in _rows(
-        'SELECT id,snapshot,created FROM content_revisions WHERE entity=? AND entity_id=? ORDER BY id DESC',
-        [entity, '$id'],
+        'SELECT id,snapshot,created FROM content_revisions WHERE entity=? AND entity_id=? AND created>=? ORDER BY id DESC',
+        [
+          entity,
+          '$id',
+          DateTime.now().subtract(maximumAge).millisecondsSinceEpoch,
+        ],
       ))
         {
           'id': row['id'],
@@ -47,10 +56,16 @@ final class ContentHistory {
   List<Map<String, Object?>> row(String entity, Object id) {
     if (!entities.contains(entity)) throw ArgumentError.value(entity, 'entity');
     final column = entity == 'meeting_notes' ? 'meeting_id' : 'id';
-    return [
-      for (final row in _rows('SELECT * FROM $entity WHERE $column=?', [id]))
-        Map<String, Object?>.from(row),
-    ];
+    return readSnapshot(
+      db,
+      () => [
+        for (final row in _rows('SELECT * FROM $entity WHERE $column=?', [id]))
+          entity == 'sources'
+              ? materializeSource(db, Map<String, Object?>.from(row))
+              : Map<String, Object?>.from(row),
+      ],
+      supportedVersion: supportedVersion,
+    );
   }
 
   List<Map<String, Object?>> meetingArtifacts(int id, String kind) => [

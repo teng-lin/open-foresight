@@ -7,16 +7,84 @@ extern "C" {
 /* ABI v1. Handles are owned, single caller controls lifecycle. Poll may run on
  * another thread. Each poll result is owned UTF-8 JSON, release with
  * string_free. Destroy cancels, joins workers and drains queues: no callbacks
- * after release. Poll may overlap destroy: destroy wakes and joins existing
- * polls, and a poll of a retired handle returns null. The lifecycle owner must
- * prevent new calls once destroy starts and finish every non-poll call before
- * destruction. Only polling may overlap destruction; cancellation can overlap
- * worker execution, and must return before destroy starts. Other API calls on
- * one handle are serialized by the caller. Handle addresses must not be reused
- * by a stale caller after release.
- * All status codes: 0 success, -1 invalid/busy/unavailable. No
- * fake inference. */
+ * after release, except pending Mac startup as documented below. Poll may
+ * overlap destroy: destroy wakes and joins existing polls, and a poll of a
+ * retired handle returns null. The lifecycle owner must prevent new calls once
+ * destroy starts and finish every non-poll call before destruction. Only
+ * polling may overlap destruction; cancellation can overlap worker execution,
+ * and must return before destroy starts. Other API calls on one handle are
+ * serialized by the caller. Handle addresses must not be reused by a stale
+ * caller after release. All status codes: 0 success, -1
+ * invalid/busy/unavailable. No fake inference. */
 int fs_abi_version(void);
+/* Optional lifetime v2. Published base ABI v1 above is unchanged. New owned
+ * handles are positive, monotonic 63-bit IDs, never resource addresses. Only
+ * this native mapping resolves an ID. A retired ID cannot alias a new owner.
+ * All owned creation is refused before physical work at 32 live execution
+ * groups or 4096 retained operation records. Idle groups retain no resource.
+ * Callers must serialize ordinary calls on one owner; retire may overlap them
+ * and atomically revokes admission. It never waits for physical cleanup inline.
+ * Legacy pointer entrypoints cannot operate on these owners or acknowledge
+ * their tokens. Legacy creation/cleanup consumes no owned-API capacity.
+ * Pending Mac legacy capture uses a separate bounded quarantine (see below).
+ * Engine retire also revokes and joins all owned children. Successful retire
+ * means actual callback/poll/worker/child reap and resource destruction. */
+int fs_lifetime_version(void); /* currently 2 */
+/* Mapping-wide admission is shared across Dart isolates. Status3 latches
+ * refusal before publication; uncertain Dart acknowledgements explicitly
+ * quarantine. There is no reset. Poll/state/cancel/cleanup and legacy retry
+ * remain available. Admission returns1 while healthy,0 when process restart is
+ * required. Its first successful call pins this exact loaded image and can
+ * perform loader work. Quarantine and status3 publication only set the atomic
+ * latch; neither performs that loader work or allocates. */
+int fs_lifetime_admission(void);
+void fs_lifetime_quarantine(void);
+uint64_t fs_owned_engine_create(const char *runtime, const char *model,
+                                int backend, int model_type);
+uint64_t fs_owned_conversation_create(uint64_t engine);
+uint64_t fs_owned_speech_create(const char *runtime, const char *model);
+uint64_t fs_owned_capture_start(const char *target, int playback, int rate,
+                                int echo);
+char *fs_owned_engine_state(uint64_t owner);
+char *fs_owned_event_poll(uint64_t owner, int timeout_ms);
+int fs_owned_generate_options(uint64_t owner, const char *id,
+                              const char *prompt, const char *schema,
+                              int max_output_tokens);
+int fs_owned_generate_tools(uint64_t owner, const char *id, const char *prompt,
+                            const char *tools, int max_output_tokens);
+int fs_owned_generation_tool_reply(uint64_t owner, const char *id,
+                                   const char *message);
+int fs_owned_generation_cancel(uint64_t owner);
+int fs_owned_speech_push(uint64_t owner, const int16_t *samples, size_t count,
+                         int rate);
+int fs_owned_speech_finish(uint64_t owner, const char *id);
+int fs_owned_speech_cancel(uint64_t owner);
+int fs_owned_capture_set_echo_cancellation(uint64_t owner, int enabled);
+/* Requests return a monotonic completion token, or0 on refusal. Repeated retire
+ * by owner ID recovers the same token even after actual destruction. A probe
+ * after completion starts fresh work. Speech reuse is refused natively until
+ * the exact accepted request has actually joined. Capture finish retains final
+ * queued PCM; separate retire destroys it. */
+uint64_t fs_engine_probe_async(uint64_t owner);
+uint64_t fs_engine_retire(uint64_t owner);
+uint64_t fs_conversation_retire(uint64_t owner);
+uint64_t fs_speech_retire(uint64_t owner);
+uint64_t fs_speech_join_async(uint64_t owner);
+uint64_t fs_capture_finish_async(uint64_t owner);
+uint64_t fs_capture_retire(uint64_t owner);
+/* 0 pending,1 success,2 known failure,3 cleanup unconfirmed/ownership retained,
+ * -1 unknown/released. Unexpected cleanup failure publishes3 without releasing
+ * resource authority. Retire may be explicitly retried by the same owner ID;
+ * it reuses its idempotent cleanup state/token. Never hot-loop retries.
+ * Probe/join/finish release is independent from owner retirement. */
+int fs_operation_status(uint64_t token);
+int fs_operation_release(uint64_t token);
+/* Only confirmed successful retirement permits owner release. This acknowledges
+ * its retirement metadata; other issued results keep independent
+ * acknowledgements. Generic token release cannot consume retirement. Lost
+ * release acknowledgement never authorizes pointer retry or false success.
+ */
+int fs_owner_release(uint64_t owner);
 /* Before the first handle is created only (permanently sealed thereafter);
  * 0 success, -1 sealed/unsupported key/invalid value. Hosts must also avoid
  * external setenv/unsetenv while any native/runtime threads exist. */
@@ -67,6 +135,10 @@ int fs_conversation_destroy(void *conversation, int cancel_and_drain);
 void *fs_speech_create(const char *runtime_executable, const char *model_path);
 int fs_speech_push(void *speech, const int16_t *samples, size_t count,
                    int sample_rate);
+// State events announce phase=speech_queued before admission and
+// phase=speech_running once this request owns its speech worker. A queued
+// cancellation never stops a sibling's active request. Existing event consumers
+// can ignore these metadata-only state events; no ABI signature changes.
 int fs_speech_finish(void *speech, const char *request_id);
 int fs_speech_cancel(void *speech);
 void fs_speech_destroy(void *speech);
@@ -84,7 +156,11 @@ void *fs_capture_start_with_options(const char *target, int playback,
 // capture.
 int fs_capture_set_echo_cancellation(void *capture, int enabled);
 /* Stops callbacks and flushes final PCM events, retaining handle for polling.
- * Call fs_capture_stop after draining to release the handle. */
+ * Call fs_capture_stop after draining to release the handle. If Mac startup is
+ * still pending, finish/stop revoke admission and retain cleanup asynchronously
+ * in a separate 32-owner/64-record quarantine; they cannot confirm physical
+ * completion to legacy callers. Use lifetime v2 for observable completion.
+ * Ready captures retain synchronous final-PCM/drain and release behavior. */
 void fs_capture_finish(void *capture);
 void fs_capture_stop(void *capture);
 /* Owned JSON string, release with fs_string_free. Discovery never prompts. */

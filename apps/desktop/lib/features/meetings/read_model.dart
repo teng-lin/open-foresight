@@ -404,3 +404,84 @@ Future<T> readCurrentMeeting<T>(StoreReader reader, ReadQuery<T> query) async {
   }
   return result.value as T;
 }
+
+/// Recording admission retains its query through transient preview replies.
+/// One overall budget bounds repeated invalidations; ownership is checked before
+/// accepting any reply, independently of ordinary data revisions.
+Future<T> readCurrentRecordingSetup<T>(
+  StoreReader reader,
+  ReadQuery<T> query, {
+  required bool Function() current,
+  required Iterable<Stream<void>> ownerChanges,
+}) async {
+  if (!current()) {
+    throw RpcError(RpcErrorCode.cancelled, 'Recording action was superseded.');
+  }
+  final result = Completer<T>();
+  final timer = Timer(const Duration(seconds: 30), () {
+    if (!result.isCompleted) {
+      result.completeError(
+        RpcError(RpcErrorCode.unavailable, 'Recording setup read timed out.'),
+      );
+    }
+  });
+  StreamSubscription<ReadResult<T>>? subscription;
+  final ownership = <StreamSubscription<void>>[];
+  void checkOwner() {
+    if (!result.isCompleted && !current()) {
+      result.completeError(
+        RpcError(RpcErrorCode.cancelled, 'Recording action was superseded.'),
+      );
+    }
+  }
+
+  try {
+    for (final changes in ownerChanges) {
+      ownership.add(changes.listen((_) => checkOwner(), onDone: checkOwner));
+    }
+    subscription = reader
+        .watch(query)
+        .listen(
+          (reply) {
+            if (result.isCompleted) return;
+            if (!current()) {
+              result.completeError(
+                RpcError(
+                  RpcErrorCode.cancelled,
+                  'Recording action was superseded.',
+                ),
+              );
+            } else if (reply.error != null) {
+              result.completeError(reply.error!);
+            } else if (reply.current) {
+              result.complete(reply.value as T);
+            } else if (reply.freshness == ReadFreshness.cancelled ||
+                reply.freshness == ReadFreshness.failed) {
+              result.completeError(
+                RpcError(RpcErrorCode.cancelled, 'Recording setup read ended.'),
+              );
+            }
+          },
+          onError: (Object error, StackTrace stack) {
+            if (!result.isCompleted) result.completeError(error, stack);
+          },
+          onDone: () {
+            if (!result.isCompleted) {
+              result.completeError(
+                RpcError(
+                  RpcErrorCode.unavailable,
+                  'Recording setup read closed.',
+                ),
+              );
+            }
+          },
+        );
+    return await result.future;
+  } finally {
+    timer.cancel();
+    await subscription?.cancel();
+    for (final observer in ownership) {
+      await observer.cancel();
+    }
+  }
+}

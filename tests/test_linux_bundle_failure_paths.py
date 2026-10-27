@@ -13,6 +13,103 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import package  # noqa: E402
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def diagnostic_products(build, sdk):
+    """Write the finished runtime-support and worker builds packaging consumes.
+
+    As in tests/test_runtime_package_support.py, product bytes, markers, modes and
+    receipt digests are real; only the two source verifiers, which need the actual
+    compiled products and AOT toolchain, are replaced by checks of the exact
+    roots they receive. Returns (owner, attribute, replacement) to patch.
+    """
+    support = sys.modules[package.prepare_worker.__module__]
+    native = build / "native"
+    native.mkdir(parents=True, exist_ok=True)
+    products = {
+        "schema": 1,
+        "kind": "runtime-support-build",
+        "target": "linux-x86_64",
+        "native_id": "a" * 64,
+        "sql_source_id": "b" * 64,
+        "artifacts": {},
+    }
+    for name in support._layout(products["target"]):
+        path = native / name
+        path.write_bytes(
+            b"synthetic byte fixture: " + name.encode() + support._marker(name, products)
+        )
+        path.chmod(0o755)
+        products["artifacts"][name] = support._read(path)[1]
+    metadata = {
+        "diagnostic-products.json": {
+            "schema": 1,
+            "available": True,
+            "native_id": products["native_id"],
+        },
+        "diagnostic-native-inputs.json": {"fixture": "not compiler evidence"},
+        "diagnostic-toolchain-metadata.json": {"fixture": "synthetic public metadata"},
+        "diagnostic-sql-inputs.json": {"fixture": "synthetic SQL record"},
+    }
+    for name, record in metadata.items():
+        (native / name).write_text(json.dumps(record) + "\n")
+    for name, field in (
+        ("diagnostic-native-inputs.json", "native_inputs_sha256"),
+        ("diagnostic-toolchain-metadata.json", "toolchain_metadata_sha256"),
+        ("diagnostic-sql-inputs.json", "sql_inputs_sha256"),
+    ):
+        products[field] = support._digest((native / name).read_bytes())
+    (native / "runtime-support-build.json").write_text(json.dumps(products) + "\n")
+
+    def verify_products(root, actual_native):
+        assert root == ROOT and actual_native == native
+        return json.loads(json.dumps(products))
+
+    target = build / "application/foresight-diagnostic-worker"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"synthetic AOT fixture, not product qualification")
+    target.chmod(0o755)
+    receipt = {
+        "schema": 1,
+        "kind": "standalone-worker-build",
+        "mode": "aot",
+        "native_id": "a" * 64,
+        "worker_id": "b" * 64,
+        "catalog_id": "c" * 64,
+        "artifact": {
+            "path": "application/foresight-diagnostic-worker",
+            **support._read(target)[1],
+        },
+        "defines": {"fixture": "exact recipe owned by source verifier"},
+    }
+    (build / "application/diagnostic-worker-build.json").write_bytes(
+        support._canonical(receipt) + b"\n"
+    )
+    (native / "diagnostic-worker-inputs.json").write_bytes(b'{"synthetic":"context"}\n')
+    dart = sdk / "bin/dart"
+    dart.parent.mkdir(parents=True)
+    dart.write_text(f"#!{sys.executable}\nprint({str(dart)!r})\n")
+    dart.chmod(0o755)
+    which = support.shutil.which
+
+    def select(name, *args, **kwargs):
+        return str(dart) if name == "dart" else which(name, *args, **kwargs)
+
+    def verify(root, actual_build, actual_sdk):
+        assert (
+            root == ROOT
+            and actual_build == build
+            and actual_sdk == sdk.resolve(strict=True)
+        )
+        return json.loads(json.dumps(receipt))
+
+    return [
+        (support, "verify_products", verify_products),
+        (support.shutil, "which", select),
+        (support, "_verify_worker", verify),
+    ]
+
 
 @pytest.fixture
 def bundle(tmp_path, monkeypatch):
@@ -37,6 +134,8 @@ def bundle(tmp_path, monkeypatch):
         path = build / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(relative.encode())
+    for target, name, value in diagnostic_products(build, tmp_path / "sdk"):
+        monkeypatch.setattr(target, name, value)
     flutter.mkdir()
     (flutter / "open-foresight").write_bytes(b"desktop")
     library = build / "lib/liblitert-lm.so"
@@ -45,8 +144,11 @@ def bundle(tmp_path, monkeypatch):
     monkeypatch.setattr(package, "read_version", lambda: ("1.2.3", 42))
     monkeypatch.delenv("FORESIGHT_GOOGLE_CLIENT_JSON", raising=False)
     commands = []
+    real_run = subprocess.run
 
     def run(command, **kwargs):
+        if command[0] == str(tmp_path / "sdk/bin/dart"):
+            return real_run(command, **kwargs)
         commands.append((command, kwargs))
         return subprocess.CompletedProcess(command, 0)
 
@@ -228,3 +330,20 @@ def test_complete_gpu_bundle_keeps_dependency_closure_and_receipts(
         )
     assert probe.called is extensions
     assert case.commands[0][0][-1] == "--check"
+
+
+def test_model_and_diagnostic_workers_keep_their_own_source_bytes(bundle):
+    case = bundle
+    package.main()
+    manifest = {
+        entry["path"]: entry["sha256"]
+        for entry in json.loads((case.output / "manifest.json").read_text())["files"]
+    }
+    for packaged, source in (
+        ("bin/foresight-model", "services/inference/foresight-model"),
+        ("bin/foresight-diagnostic-worker", "application/foresight-diagnostic-worker"),
+    ):
+        data = (case.build / source).read_bytes()
+        assert (case.output / packaged).read_bytes() == data
+        assert manifest[packaged] == hashlib.sha256(data).hexdigest()
+    assert (case.output / "bin/foresight-diagnostic-worker").stat().st_mode & 0o777 == 0o755

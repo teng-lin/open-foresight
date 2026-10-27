@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'package:foresight_core/src/mcp/rpc_tools.dart';
 import 'package:foresight_core/src/service.dart';
@@ -21,6 +22,7 @@ Iterable<RegExpMatch> rawRpcCalls(
 ).allMatches(source);
 
 void main() {
+  bootstrapSqlSupportFixture();
   test('wire names and MCP tool names are unique and round-trip', () {
     expect(
       Operation.values.map((operation) => operation.wire).toSet(),

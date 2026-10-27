@@ -1,3 +1,4 @@
+import 'native_lifetime.dart';
 import 'helper_protocol_version.dart';
 import 'platform_services.dart';
 import 'version.dart';
@@ -19,7 +20,7 @@ void validateHelperCompatibility(
   control.State value, {
   RuntimeConfiguration? configuration,
 }) {
-  final config = configuration ?? runtimeConfiguration;
+  final config = runtimeSnapshot(configuration);
   if (!ping.success ||
       ping.version != helperProtocolVersion ||
       value.referenceVersion != helperProtocolVersion) {
@@ -119,12 +120,21 @@ class Helper {
   void Function()? changed;
   Future<void> Function()? onReady;
   final bool manageProcess;
+
+  /// An explicit or bound owner snapshot is fixed at construction. Outside any
+  /// owner scope this is a legacy direct construction: each access returns a
+  /// fresh immutable snapshot of the boundary, as it read it before injection.
+  RuntimeConfiguration get configuration =>
+      _configuration ?? legacyRuntimeSnapshot();
+  final RuntimeConfiguration? _configuration;
   Helper(
     this.socket,
     this.storage, {
     this.manageProcess = true,
     this.startupProbeTimeout = const Duration(milliseconds: 400),
-  }) {
+    RuntimeConfiguration? configuration,
+  }) : _configuration =
+           configuration?.snapshot() ?? currentOwnerRuntimeSnapshot {
     channel = helperChannel(socket);
     client = helperClient(channel);
   }
@@ -187,7 +197,9 @@ class Helper {
         'Restart the application service to replace the incompatible helper',
       );
     }
-    final executable = runtimeConfiguration['FORESIGHT_HELPER'];
+    // One snapshot covers this start's executable, compatibility and child.
+    final config = configuration;
+    final executable = config['FORESIGHT_HELPER'];
     if (manageProcess && executable != null && process == null) {
       if (_launching != null) {
         try {
@@ -217,7 +229,11 @@ class Helper {
           options: CallOptions(timeout: const Duration(seconds: 3)),
         );
         try {
-          validateHelperCompatibility(existing, snapshot!);
+          validateHelperCompatibility(
+            existing,
+            snapshot!,
+            configuration: config,
+          );
         } catch (error) {
           incompatible = true;
           state = 'incompatible helper: $error';
@@ -235,7 +251,7 @@ class Helper {
           process = await (_launching = Process.start(executable, [
             socket,
             storage,
-          ], environment: runtimeConfiguration.environment));
+          ], environment: nativeHelperEnvironment(config.environment)));
         } finally {
           _launchingNow = false;
         }
@@ -330,7 +346,9 @@ class Helper {
       return AdoptedIdentity.unknown;
     }
     try {
-      final library = DynamicLibrary.open(runtimeConfiguration.nativeLibrary);
+      final library = NativeLibrary(
+        DynamicLibrary.open(configuration.nativeLibrary),
+      ).library;
       final matches = library
           .lookupFunction<
             Int32 Function(Int64, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>),

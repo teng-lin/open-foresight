@@ -1,7 +1,11 @@
 #include "foresight_native.h"
+#include "capture_pcm_pipe.h"
+#include "diagnostic_queue_internal.h"
 #include "exception_barrier.h"
+#include "image_pin.h"
 #include "json_string.h"
 #include "one_shot_launch.h"
+#include "owned_operations.h"
 #include "portable_process.h"
 #include "speech_audio.h"
 #include "speech_cpu.h"
@@ -9,6 +13,7 @@
 #ifdef __APPLE__
 #include "macos_audio.h"
 #include <libproc.h>
+#include <mach-o/dyld.h>
 #include <sys/sysctl.h>
 #endif
 #include <algorithm>
@@ -20,6 +25,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <dlfcn.h>
+#ifndef __APPLE__
+#include <link.h>
+#endif
 #include <fcntl.h>
 #include <fstream>
 #include <functional>
@@ -53,19 +62,36 @@ struct PollLifetime {
   std::shared_mutex gate;
   std::atomic<bool> closed{false};
 };
-std::mutex poll_registry_mutex;
-std::unordered_map<void *, std::shared_ptr<PollLifetime>> poll_registry;
+std::mutex &poll_registry_mutex() {
+  static auto *value = new std::mutex;
+  return *value;
+}
+auto &poll_registry() {
+  static auto *value =
+      new std::unordered_map<void *, std::shared_ptr<PollLifetime>>;
+  return *value;
+}
+#if FORESIGHT_ENABLE_TEST_HOOKS
+struct PollWaitBoundary {
+  std::atomic<bool> pause{false}, entered{false}, release{false};
+};
+PollWaitBoundary poll_wait_boundary;
+std::atomic<bool> capture_start_lock_probe{false},
+    capture_start_lock_observed{false};
+#endif
 struct Events {
+  const std::shared_ptr<PollLifetime> poll_lifetime =
+      std::make_shared<PollLifetime>();
   std::mutex mu;
   std::condition_variable cv;
   std::deque<std::string> events;
   Events() {
-    std::lock_guard lock(poll_registry_mutex);
-    poll_registry[this] = std::make_shared<PollLifetime>();
+    std::lock_guard lock(poll_registry_mutex());
+    poll_registry()[this] = poll_lifetime;
   }
   virtual ~Events() {
-    std::lock_guard lock(poll_registry_mutex);
-    poll_registry.erase(this);
+    std::lock_guard lock(poll_registry_mutex());
+    poll_registry().erase(this);
   }
   void emit(std::string s) {
     std::lock_guard lock(mu);
@@ -75,26 +101,31 @@ struct Events {
 };
 // Remove the handle before waiting, so late polls never dereference it. Wake
 // existing blocking polls, then join them before any derived fields are freed.
-void retire_events(Events *events) {
-  std::shared_ptr<PollLifetime> lifetime;
+void revoke_events(Events *events) {
   {
-    std::lock_guard lock(poll_registry_mutex);
-    auto found = poll_registry.find(events);
-    if (found == poll_registry.end())
-      return;
-    lifetime = found->second;
-    poll_registry.erase(found);
+    std::lock_guard lock(poll_registry_mutex());
+    poll_registry().erase(events);
   }
+  events->poll_lifetime->closed = true;
+  events->cv.notify_all();
+}
+void retire_events(Events *events) {
+  revoke_events(events);
   {
     std::lock_guard lock(events->mu);
-    lifetime->closed = true;
     events->cv.notify_all();
   }
-  std::unique_lock join(lifetime->gate);
+  std::unique_lock join(events->poll_lifetime->gate);
 }
 struct Worker : Events {
   std::thread thread;
   std::atomic<bool> cancel{false}, active{false};
+  std::atomic<bool> thread_finished{true};
+  std::atomic<const std::atomic<bool> *> owner_closing{nullptr};
+  bool cancelled() const {
+    const auto *owner = owner_closing.load(std::memory_order_acquire);
+    return cancel || (owner && owner->load());
+  }
   std::atomic<pid_t> pid{-1};
   foresight::OwnedSpawn *owned_process = nullptr;
   std::mutex life;
@@ -112,14 +143,25 @@ struct Worker : Events {
     if (thread.joinable())
       thread.join();
   }
-  ~Worker() {
-    stop();
-    join();
+  ~Worker() noexcept {
+    // Mandatory joins belong to observable cleanup before resource reset.
+    // Never hide a throwing/blocking join inside an implicit destructor.
+    if (thread.joinable())
+      std::terminate();
   }
 };
 template <class Fn>
-std::thread start_worker_thread(const char *operation, Fn run) {
+std::thread start_worker_thread(Worker &worker, const char *operation, Fn run) {
 #if FORESIGHT_ENABLE_TEST_HOOKS
+  if (capture_start_lock_probe && std::strcmp(operation, "capture") == 0) {
+    std::thread probe([&] {
+      const bool acquired = worker.life.try_lock();
+      capture_start_lock_observed = !acquired;
+      if (acquired)
+        worker.life.unlock();
+    });
+    probe.join();
+  }
   const char *failure = std::getenv("FORESIGHT_TEST_THREAD_FAILURE");
   if (failure && std::string(failure) == operation)
     throw std::system_error(EAGAIN, std::generic_category(),
@@ -127,7 +169,14 @@ std::thread start_worker_thread(const char *operation, Fn run) {
 #else
   (void)operation;
 #endif
-  return std::thread(std::move(run));
+  worker.thread_finished = false;
+  foresight::ScopeExit rollback([&] { worker.thread_finished = true; });
+  auto thread = std::thread([&worker, run = std::move(run)]() mutable {
+    foresight::ScopeExit finished([&] { worker.thread_finished = true; });
+    run();
+  });
+  rollback.release();
+  return thread;
 }
 // The probe is a synchronous FFI call. A separate timer must stop its owned
 // process even if stdout has closed and run() is waiting for the supervisor.
@@ -148,10 +197,20 @@ struct ProbeDeadline {
                              : 120000;
     timer = std::thread([this, timeout] {
       std::unique_lock lock(mutex);
-      if (!changed.wait_for(lock, std::chrono::milliseconds(timeout),
-                            [this] { return finished; })) {
-        expired = true;
-        worker.stop();
+      const auto deadline =
+          std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout);
+      while (!finished) {
+        changed.wait_for(lock, std::chrono::milliseconds(20),
+                         [this] { return finished; });
+        if (finished)
+          break;
+        if (worker.cancelled() ||
+            std::chrono::steady_clock::now() >= deadline) {
+          expired = !worker.cancelled();
+          lock.unlock();
+          worker.stop();
+          return;
+        }
       }
     });
   }
@@ -168,40 +227,7 @@ struct ProbeDeadline {
     finish();
   }
 };
-// pw-record's stdout contains unconnected/error diagnostics even without -v.
-// A private raw FIFO gives libsndfile a separate PCM destination. Keep one
-// nonblocking writer open here so a slow child open cannot look like EOF.
-struct CapturePcmPipe {
-  std::string directory, path;
-  int fd = -1, error = 0;
-  explicit CapturePcmPipe(bool enabled) {
-    if (!enabled)
-      return;
-    char pattern[] = "/tmp/foresight-capture-XXXXXX";
-    const char *created = mkdtemp(pattern);
-    if (!created) {
-      error = errno;
-      return;
-    }
-    directory = created;
-    path = directory + "/audio.raw";
-    if (mkfifo(path.c_str(), 0600) < 0) {
-      error = errno;
-      return;
-    }
-    fd = open(path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
-    if (fd < 0)
-      error = errno;
-  }
-  ~CapturePcmPipe() {
-    if (fd >= 0)
-      close(fd);
-    if (!path.empty())
-      unlink(path.c_str());
-    if (!directory.empty())
-      rmdir(directory.c_str());
-  }
-};
+using foresight::CapturePcmPipe;
 // posix_spawn avoids unsafe post-fork work inside a multi-threaded Flutter
 // host.
 int run(Worker &w, std::vector<std::string> args,
@@ -212,7 +238,7 @@ int run(Worker &w, std::vector<std::string> args,
     return -capture_pipe.error;
   if (raw_capture)
     args.back() = capture_pipe.path;
-  std::unique_lock launch(foresight::launch_mutex);
+  std::unique_lock launch(foresight::launch_mutex_for_process());
   int pipes[2];
   if (foresight::cloexec_pipe(pipes) < 0)
     return -1;
@@ -343,7 +369,7 @@ int run(Worker &w, std::vector<std::string> args,
     w.pid = owned.worker;
     w.owned_process = &owned;
   }
-  if (w.cancel) {
+  if (w.cancelled()) {
     std::lock_guard lock(w.process_mutex);
     owned.stop();
   }
@@ -356,7 +382,7 @@ int run(Worker &w, std::vector<std::string> args,
   };
   std::string pending_input;
   size_t sent = 0;
-  while (!w.cancel) {
+  while (!w.cancelled()) {
     if (duplex && input[1] >= 0 && pending_input.empty()) {
       std::lock_guard lock(w.input_mutex);
       if (!w.input.empty()) {
@@ -405,7 +431,7 @@ int run(Worker &w, std::vector<std::string> args,
       break;
     }
   }
-  if (w.cancel) {
+  if (w.cancelled()) {
     std::lock_guard lock(w.process_mutex);
     owned.stop();
   }
@@ -442,6 +468,7 @@ struct Engine {
 };
 struct Conversation : Worker {
   Engine *engine;
+  std::shared_ptr<Engine> engine_owner;
   std::set<std::string> requests;
   std::string request;
   uint64_t sequence = 0;
@@ -454,20 +481,32 @@ std::string event(const std::string &type, const std::string &id,
 }
 void failure(Worker &w, const std::string &id, uint64_t &seq,
              const std::string &code, const std::string &message) {
+  // Source-owned closed categories only. IDs, vendor output and free-text
+  // messages remain outside the diagnostic queue.
+  foresight::diagnostics::worker_failed(code == "tool_protocol" ? 6 : 10, 3, 0,
+                                        0);
   w.emit(event("error", id, seq++,
                ",\"code\":" + quote(code) + ",\"message\":" + quote(message) +
                    ",\"retryable\":false"));
 }
 #include "persistent_generation.h"
 Engine::~Engine() {
-  shutdown_persistent(*this);
+  if (persistent)
+    std::terminate();
 }
 struct SpeechEngine {
+  bool retiring = false;
   Engine engine;
   std::timed_mutex mutex;
 };
-std::mutex speech_engines_mutex;
-std::map<std::string, std::weak_ptr<SpeechEngine>> speech_engines;
+std::mutex &speech_engines_mutex() {
+  static auto *value = new std::mutex;
+  return *value;
+}
+auto &speech_engines() {
+  static auto *value = new std::map<std::string, std::weak_ptr<SpeechEngine>>;
+  return *value;
+}
 struct Speech : Worker {
   std::shared_ptr<SpeechEngine> worker_engine;
   std::string runtime, model;
@@ -507,12 +546,16 @@ std::string base64(const std::vector<unsigned char> &in) {
   return out;
 }
 struct Capture : Worker {
+#ifdef __APPLE__
+  std::shared_ptr<MacCaptureOwner> macos;
+#endif
   std::string target, runtime;
   bool playback = false;
   std::atomic<bool> echoCancellation{false};
   int rate = 48000;
   uint64_t dropped = 0, pending_dropped_bytes = 0;
 };
+#include "owned_handles.h"
 std::string capture_runtime_command(const std::string &configured) {
   return configured.empty() ? FORESIGHT_PW_RECORD_EXECUTABLE : configured;
 }
@@ -558,331 +601,376 @@ void audio_frame(Capture &c, const std::vector<unsigned char> &bytes) {
   c.events.push_back("{" + fields + "}");
   c.cv.notify_all();
 }
+int probe_engine(Engine &e, const std::atomic<bool> *closing) {
+  return foresight::ffi_barrier(
+      [&]() -> int {
+        {
+          std::lock_guard lock(e.mu);
+          if (e.busy)
+            return -1;
+          e.busy = true;
+          e.state = "loading";
+        }
+        struct ProbeLease {
+          Engine &engine;
+          ~ProbeLease() {
+            std::lock_guard lock(engine.mu);
+            if (engine.busy) {
+              engine.busy = false;
+              engine.state = "failed";
+              foresight::ffi_barrier_void(
+                  [&] { engine.error = "Model initialization probe aborted"; });
+            }
+          }
+        } probe_lease{e};
+        shutdown_persistent(e);
+        Worker probe;
+        probe.owner_closing = closing;
+        std::string diagnostics;
+        auto arguments =
+            e.backend == 1
+                ? std::vector<std::string>{e.runtime, "--model", e.model,
+                                           "--probe"}
+                : std::vector<std::string>{
+                      e.runtime, "-m", e.model, "-p",   "probe",
+                      "-n",      "0",  "-c",    "4096", "--no-warmup",
+                      "-no-cnv", "-t", "4"};
+        if (e.backend == 1 && e.model_type) {
+          arguments.push_back("--model-type");
+          arguments.push_back(std::to_string(e.model_type));
+        }
+        if (e.backend == 1 && e.cpu_fallback) {
+          arguments.push_back("--backend");
+          arguments.push_back("cpu");
+        }
+        ProbeDeadline deadline(probe);
+        int status = run(
+            probe, std::move(arguments), [&](const char *data, size_t size) {
+              if (e.backend == 1 && diagnostics.size() < 4096)
+                diagnostics.append(data,
+                                   std::min(size, 4096 - diagnostics.size()));
+            });
+        deadline.finish();
+        if (deadline.expired)
+          status = -ETIMEDOUT;
+        {
+          std::lock_guard lock(e.mu);
+          e.busy = false;
+          e.persistent_protocol =
+              status == 0 && e.backend == 1 &&
+              (diagnostics.find("\"worker_protocol\":1") != std::string::npos ||
+               diagnostics.find("\"worker_protocol\": 1") != std::string::npos);
+          e.native_stop_token_sequences =
+              status == 0 && e.backend == 1 &&
+              (diagnostics.find("\"native_stop_token_sequences\":true") !=
+                   std::string::npos ||
+               diagnostics.find("\"native_stop_token_sequences\": true") !=
+                   std::string::npos);
+          e.state = status == 0 ? "ready" : "failed";
+          e.error = status == 0 ? ""
+                    : deadline.expired
+                        ? "Model initialization probe timed out"
+                        : "Model initialization probe failed with status " +
+                              std::to_string(status) + diagnostics;
+        }
+        return status == 0 ? 0 : -1;
+      },
+      -1);
+}
 } // namespace
 extern "C" {
+int fs_lifetime_version() {
+  return 2;
+}
+int fs_lifetime_admission() {
+  return foresight::ffi_barrier(
+      [] {
+        // The process owner can retain these code capabilities before allowing
+        // another Dart isolate to create physical work. Pin this exact image,
+        // independent of the worker isolate or a later pathname replacement.
+        return !native_quarantine_state().load(std::memory_order_acquire) &&
+                       pin_native_mapping()
+                   ? 1
+                   : 0;
+      },
+      0);
+}
+void fs_lifetime_quarantine() {
+  foresight::ffi_barrier_void(
+      [] { native_quarantine_state().store(true, std::memory_order_release); });
+}
+uint64_t fs_engine_probe_async(uint64_t h) {
+  return foresight::ffi_barrier(
+      [&] { return request_native_work(h, NativeKind::engine, true); },
+      uint64_t{0});
+}
+uint64_t fs_speech_join_async(uint64_t h) {
+  return foresight::ffi_barrier(
+      [&] { return request_native_work(h, NativeKind::speech, false); },
+      uint64_t{0});
+}
+uint64_t fs_capture_finish_async(uint64_t h) {
+  return foresight::ffi_barrier(
+      [&] { return request_native_work(h, NativeKind::capture, false); },
+      uint64_t{0});
+}
+uint64_t fs_engine_retire(uint64_t h) {
+  return foresight::ffi_barrier(
+      [&] { return retire_native(h, NativeKind::engine); }, uint64_t{0});
+}
+uint64_t fs_conversation_retire(uint64_t h) {
+  return foresight::ffi_barrier(
+      [&] { return retire_native(h, NativeKind::conversation); }, uint64_t{0});
+}
+uint64_t fs_speech_retire(uint64_t h) {
+  return foresight::ffi_barrier(
+      [&] { return retire_native(h, NativeKind::speech); }, uint64_t{0});
+}
+uint64_t fs_capture_retire(uint64_t h) {
+  return foresight::ffi_barrier(
+      [&] { return retire_native(h, NativeKind::capture); }, uint64_t{0});
+}
+int fs_operation_status(uint64_t token) {
+  return foresight::ffi_barrier(
+      [&] { return native_handles().operations.status(token); }, -1);
+}
+int fs_operation_release(uint64_t token) {
+  return foresight::ffi_barrier(
+      [&] { return native_handles().operations.release(token) ? 0 : -1; }, -1);
+}
+#include "owned_exports.h"
 int fs_abi_version() {
-  try {
-    return 1;
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return 1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return 1;
-  }
+  return foresight::ffi_barrier([&]() -> int { return 1; }, 1);
 }
 char *fs_audio_capabilities() {
-  try {
+  return foresight::ffi_barrier(
+      [&]() -> char * {
 #ifdef __APPLE__
-    return owned(fs_macos_capabilities());
+        return owned(fs_macos_capabilities());
 #else
-    return owned("{\"backend\":\"pipewire\"}");
+        return owned("{\"backend\":\"pipewire\"}");
 #endif
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return nullptr;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return nullptr;
-  }
+      },
+      static_cast<char *>(nullptr));
 }
 char *fs_audio_request_system(int32_t timeout_ms) {
-  try {
+  return foresight::ffi_barrier(
+      [&]() -> char * {
 #ifdef __APPLE__
-    return owned(fs_macos_request_system(timeout_ms));
+        if (!pin_native_mapping())
+          return nullptr;
+        return owned(fs_macos_request_system(timeout_ms));
 #else
-    (void)timeout_ms;
-    return owned("{\"system_audio\":\"unavailable\",\"system_audio_request\":"
-                 "\"failed\",\"permission_verified\":false,\"code\":"
-                 "\"unsupported_platform\",\"message\":\"System audio "
-                 "permission requests are specific to macOS.\"}");
+        (void)timeout_ms;
+        return owned(
+            "{\"system_audio\":\"unavailable\",\"system_audio_request\":"
+            "\"failed\",\"permission_verified\":false,\"code\":"
+            "\"unsupported_platform\",\"message\":\"System audio "
+            "permission requests are specific to macOS.\"}");
 #endif
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return nullptr;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return nullptr;
-  }
+      },
+      static_cast<char *>(nullptr));
 }
 int fs_audio_request_microphone() {
-  try {
+  return foresight::ffi_barrier(
+      [&]() -> int {
 #ifdef __APPLE__
-    return fs_macos_request_microphone() ? 0 : 1;
+        if (!pin_native_mapping())
+          return -1;
+        return fs_macos_request_microphone() ? 0 : 1;
 #else
-    return 0;
+        return 0;
 #endif
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+      },
+      -1);
 }
 void fs_string_free(char *p) {
-  try {
-    free(p);
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-  }
+  foresight::ffi_barrier_void([&] { free(p); });
 }
 char *fs_event_poll(void *h, int timeout) {
-  try {
-    if (!h)
-      return nullptr;
-    std::shared_ptr<PollLifetime> lifetime;
-    {
-      std::lock_guard registry(poll_registry_mutex);
-      const auto found = poll_registry.find(h);
-      if (found == poll_registry.end())
-        return nullptr;
-      lifetime = found->second;
-    }
-    std::shared_lock poll(lifetime->gate);
-    if (lifetime->closed)
-      return nullptr;
-    auto &e = *static_cast<Events *>(h);
-    std::unique_lock lock(e.mu);
-    e.cv.wait_for(lock,
-                  std::chrono::milliseconds(std::clamp(timeout, 0, 60000)),
-                  [&] { return lifetime->closed || !e.events.empty(); });
-    if (lifetime->closed)
-      return nullptr;
-    if (e.events.empty()) {
-      if (auto *capture = dynamic_cast<Capture *>(&e);
-          capture && capture->pending_dropped_bytes)
-        return owned(capture_overflow(*capture));
-      return nullptr;
-    }
-    auto s = std::move(e.events.front());
-    e.events.pop_front();
-    return owned(s);
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return nullptr;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return nullptr;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> char * {
+        if (!h)
+          return nullptr;
+        {
+          auto &registry = native_handles();
+          std::lock_guard lock(registry.mutex);
+          const auto found = registry.handles.find(h);
+          if (found == registry.handles.end() ||
+              (found->second->identity &&
+               owned_native_bridge != found->second.get()))
+            return nullptr;
+        }
+        std::shared_ptr<PollLifetime> lifetime;
+        {
+          std::lock_guard registry(poll_registry_mutex());
+          const auto found = poll_registry().find(h);
+          if (found == poll_registry().end())
+            return nullptr;
+          lifetime = found->second;
+        }
+        std::shared_lock poll(lifetime->gate);
+        if (lifetime->closed)
+          return nullptr;
+        auto &e = *static_cast<Events *>(h);
+        std::unique_lock lock(e.mu);
+        const auto deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(std::clamp(timeout, 0, 60000));
+        while (!lifetime->closed && e.events.empty() &&
+               std::chrono::steady_clock::now() < deadline) {
+#if FORESIGHT_ENABLE_TEST_HOOKS
+          if (poll_wait_boundary.pause.exchange(false)) {
+            poll_wait_boundary.entered = true;
+            while (!poll_wait_boundary.release)
+              std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          }
+#endif
+          e.cv.wait_until(
+              lock, std::min(deadline, std::chrono::steady_clock::now() +
+                                           std::chrono::milliseconds(20)));
+        }
+        if (lifetime->closed)
+          return nullptr;
+        if (e.events.empty()) {
+          if (auto *capture = dynamic_cast<Capture *>(&e);
+              capture && capture->pending_dropped_bytes)
+            return owned(capture_overflow(*capture));
+          return nullptr;
+        }
+        auto s = std::move(e.events.front());
+        e.events.pop_front();
+        return owned(s);
+      },
+      static_cast<char *>(nullptr));
 }
 void *fs_engine_create(const char *runtime, const char *model) {
-  try {
-    return fs_engine_create_backend(runtime, model, 0);
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return nullptr;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return nullptr;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> void * { return fs_engine_create_backend(runtime, model, 0); },
+      static_cast<void *>(nullptr));
 }
 void *fs_engine_create_backend(const char *runtime, const char *model,
                                int backend) {
-  try {
-    if (backend != 0 && backend != 1)
-      return nullptr;
-    if (!valid_asset(runtime, model))
-      return nullptr;
-    foresight::seal_runtime_environment();
-    auto *e = new Engine;
-    e->runtime = runtime;
-    e->model = model;
-    e->backend = backend;
-    return e;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return nullptr;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return nullptr;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> void * {
+        if (backend != 0 && backend != 1)
+          return nullptr;
+        if (!valid_asset(runtime, model))
+          return nullptr;
+        foresight::seal_runtime_environment();
+        auto e = std::make_unique<Engine>();
+        e->runtime = runtime;
+        e->model = model;
+        e->backend = backend;
+        return publish_native(std::move(e), NativeKind::engine);
+      },
+      static_cast<void *>(nullptr));
 }
 void *fs_engine_create_model_type(const char *runtime, const char *model,
                                   int model_type) {
-  try {
-    if (model_type < 0 || model_type > 17)
-      return nullptr;
-    auto *engine =
-        static_cast<Engine *>(fs_engine_create_backend(runtime, model, 1));
-    if (engine)
-      engine->model_type = model_type;
-    return engine;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return nullptr;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return nullptr;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> void * {
+        if (model_type < 0 || model_type > 17)
+          return nullptr;
+        auto *engine =
+            static_cast<Engine *>(fs_engine_create_backend(runtime, model, 1));
+        if (engine)
+          engine->model_type = model_type;
+        return engine;
+      },
+      static_cast<void *>(nullptr));
 }
 char *fs_engine_state(void *h) {
-  try {
-    if (!h)
-      return nullptr;
-    auto &e = *static_cast<Engine *>(h);
-    std::lock_guard lock(e.mu);
-    if (e.backend == 1)
-      return owned(
-          "{\"state\":" + quote(e.state) + ",\"backend\":" +
-          quote(!e.cpu_fallback && std::getenv("FORESIGHT_LITERT_BACKEND") &&
-                        std::string(std::getenv("FORESIGHT_LITERT_BACKEND")) ==
-                            "gpu"
-                    ? "litert-lm-gpu-native"
-                    : "litert-lm-cpu-native") +
-          ",\"load_policy\":" +
-          quote(e.persistent_protocol ? "persistent_worker" : "per_request") +
-          ","
-          "\"native_stop_token_sequences\":" +
-          std::string(e.native_stop_token_sequences ? "true" : "false") +
-          ","
-          "\"context_length\":4096,\"temperature\":0.4,\"top_k\":40,\"top_p\":"
-          "0.9,"
-          "\"thinking\":false,\"json\":\"ll_guidance_and_application_"
-          "validation\",\"text\":true,\"tools\":true,\"error\":" +
-          quote(e.error) + "}");
-    return owned("{\"state\":" + quote(e.state) +
-                 ",\"backend\":\"llama.cpp-cpu-cli\",\"load_policy\":\"per_"
-                 "request\",\"context_length\":4096,\"max_output_tokens\":256,"
-                 "\"temperature\":0,\"text\":true,\"tools\":false,\"error\":" +
-                 quote(e.error) + "}");
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return nullptr;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return nullptr;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> char * {
+        NativeUse use(h, NativeKind::engine);
+        if (!use)
+          return nullptr;
+        if (!h)
+          return nullptr;
+        auto &e = *static_cast<Engine *>(h);
+        std::lock_guard lock(e.mu);
+        if (e.backend == 1)
+          return owned(
+              "{\"state\":" + quote(e.state) + ",\"backend\":" +
+              quote(!e.cpu_fallback &&
+                            std::getenv("FORESIGHT_LITERT_BACKEND") &&
+                            std::string(std::getenv(
+                                "FORESIGHT_LITERT_BACKEND")) == "gpu"
+                        ? "litert-lm-gpu-native"
+                        : "litert-lm-cpu-native") +
+              ",\"load_policy\":" +
+              quote(e.persistent_protocol ? "persistent_worker"
+                                          : "per_request") +
+              ","
+              "\"native_stop_token_sequences\":" +
+              std::string(e.native_stop_token_sequences ? "true" : "false") +
+              ","
+              "\"context_length\":4096,\"temperature\":0.4,\"top_k\":40,\"top_"
+              "p\":"
+              "0.9,"
+              "\"thinking\":false,\"json\":\"ll_guidance_and_application_"
+              "validation\",\"text\":true,\"tools\":true,\"error\":" +
+              quote(e.error) + "}");
+        return owned(
+            "{\"state\":" + quote(e.state) +
+            ",\"backend\":\"llama.cpp-cpu-cli\",\"load_policy\":\"per_"
+            "request\",\"context_length\":4096,\"max_output_tokens\":256,"
+            "\"temperature\":0,\"text\":true,\"tools\":false,\"error\":" +
+            quote(e.error) + "}");
+      },
+      static_cast<char *>(nullptr));
 }
 int fs_engine_probe(void *h) {
-  try {
-    if (!h)
-      return -1;
-    auto &e = *static_cast<Engine *>(h);
-    {
-      std::lock_guard lock(e.mu);
-      if (e.busy)
-        return -1;
-      e.busy = true;
-      e.state = "loading";
-    }
-    struct ProbeLease {
-      Engine &engine;
-      ~ProbeLease() {
-        std::lock_guard lock(engine.mu);
-        if (engine.busy) {
-          engine.busy = false;
-          engine.state = "failed";
-          engine.error = "Model initialization probe aborted";
-        }
-      }
-    } probe_lease{e};
-    shutdown_persistent(e);
-    Worker probe;
-    std::string diagnostics;
-    auto arguments =
-        e.backend == 1
-            ? std::vector<std::string>{e.runtime, "--model", e.model, "--probe"}
-            : std::vector<std::string>{
-                  e.runtime, "-m", e.model, "-p",   "probe",
-                  "-n",      "0",  "-c",    "4096", "--no-warmup",
-                  "-no-cnv", "-t", "4"};
-    if (e.backend == 1 && e.model_type) {
-      arguments.push_back("--model-type");
-      arguments.push_back(std::to_string(e.model_type));
-    }
-    if (e.backend == 1 && e.cpu_fallback) {
-      arguments.push_back("--backend");
-      arguments.push_back("cpu");
-    }
-    ProbeDeadline deadline(probe);
-    int status =
-        run(probe, std::move(arguments), [&](const char *data, size_t size) {
-          if (e.backend == 1 && diagnostics.size() < 4096)
-            diagnostics.append(data, std::min(size, 4096 - diagnostics.size()));
-        });
-    deadline.finish();
-    if (deadline.expired)
-      status = -ETIMEDOUT;
-    {
-      std::lock_guard lock(e.mu);
-      e.busy = false;
-      e.persistent_protocol =
-          status == 0 && e.backend == 1 &&
-          (diagnostics.find("\"worker_protocol\":1") != std::string::npos ||
-           diagnostics.find("\"worker_protocol\": 1") != std::string::npos);
-      e.native_stop_token_sequences =
-          status == 0 && e.backend == 1 &&
-          (diagnostics.find("\"native_stop_token_sequences\":true") !=
-               std::string::npos ||
-           diagnostics.find("\"native_stop_token_sequences\": true") !=
-               std::string::npos);
-      e.state = status == 0 ? "ready" : "failed";
-      e.error = status == 0 ? ""
-                : deadline.expired
-                    ? "Model initialization probe timed out"
-                    : "Model initialization probe failed with status " +
-                          std::to_string(status) + diagnostics;
-    }
-    return status == 0 ? 0 : -1;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+  return foresight::ffi_barrier(
+      [&] {
+        NativeUse use(h, NativeKind::engine);
+        return use ? probe_engine(*static_cast<Engine *>(h),
+                                  &use.control->closing)
+                   : -1;
+      },
+      -1);
 }
-int fs_engine_destroy(void *h) {
-  try {
-    if (!h)
-      return 0;
-    auto *e = static_cast<Engine *>(h);
-    {
-      std::lock_guard lock(e->mu);
-      if (e->refs || e->busy)
-        return -1;
-    }
-    delete e;
-    return 0;
 
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+int fs_engine_destroy(void *h) {
+  return foresight::ffi_barrier(
+      [&] {
+        if (!h)
+          return 0;
+        if (legacy_closing(h, NativeKind::engine))
+          return retire_legacy(h, NativeKind::engine) ? 0 : -1;
+        {
+          NativeUse use(h, NativeKind::engine);
+          if (!use)
+            return -1;
+          auto &engine = *static_cast<Engine *>(h);
+          std::lock_guard lock(engine.mu);
+          if (engine.refs || engine.busy)
+            return -1;
+        }
+        return retire_legacy(h, NativeKind::engine) ? 0 : -1;
+      },
+      -1);
 }
 void *fs_conversation_create(void *h) {
-  try {
-    if (!h)
-      return nullptr;
-    auto *e = static_cast<Engine *>(h);
-    std::lock_guard lock(e->mu);
-    auto c = std::make_unique<Conversation>();
-    c->engine = e;
-    ++e->refs;
-    return c.release();
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return nullptr;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return nullptr;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> void * {
+        NativeUse use(h, NativeKind::engine);
+        if (!use)
+          return nullptr;
+        if (!h)
+          return nullptr;
+        auto *e = static_cast<Engine *>(h);
+        std::lock_guard lock(e->mu);
+        auto c = std::make_unique<Conversation>();
+        c->engine = e;
+        auto *result =
+            publish_native(std::move(c), NativeKind::conversation, use.control);
+        if (result)
+          ++e->refs;
+        return result;
+      },
+      static_cast<void *>(nullptr));
 }
 static int generate_with_schema(void *h, const char *id, const char *prompt,
                                 const char *schema, int max_output_tokens = 256,
@@ -893,6 +981,9 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
     return -1;
   if (!h || !id || !*id || !prompt ||
       (schema && !foresight::single_line_json(schema)))
+    return -1;
+  NativeUse use(h, NativeKind::conversation);
+  if (!use)
     return -1;
   auto &c = *static_cast<Conversation *>(h);
   std::lock_guard life(c.life);
@@ -910,6 +1001,7 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
     previous_state = e.state;
     e.busy = true;
   }
+  auto inserted_request = c.requests.end();
   foresight::ScopeExit rollback([&] {
     {
       std::lock_guard lock(e.mu);
@@ -917,7 +1009,8 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
       e.state.swap(previous_state);
     }
     c.active = false;
-    c.requests.erase(id);
+    if (inserted_request != c.requests.end())
+      c.requests.erase(inserted_request);
     c.request.clear();
     c.finish_input = false;
   });
@@ -925,7 +1018,7 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
     std::lock_guard lock(e.mu);
     e.state = "loading";
   }
-  c.requests.insert(id);
+  inserted_request = c.requests.insert(id).first;
   c.request = id;
   c.sequence = 0;
   c.cancel = false;
@@ -938,888 +1031,928 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
   c.active = true;
   std::string text = prompt;
   std::string json_schema = schema ? schema : "";
-  c.thread = start_worker_thread("generation", [&c, text, json_schema,
-                                                max_output_tokens, tools] {
-    auto &e = *c.engine;
-    bool settled = false;
-    foresight::guarded_worker(
-        [&] {
-          uint64_t seq = 0;
-          // Completion mode avoids runner UI/chat banners; app assembles
-          // structured prompt.
-          std::string utf8;
-          bool tool_answer_received = false;
-          bool tool_protocol_failed = false;
-          bool worker_error_received = false;
-          bool plain_text_received = false;
-          auto tool_line = [&](const std::string &line) {
-            bool request = line.starts_with("tool ");
-            bool model = line.starts_with("model ");
-            bool answer = line.starts_with("answer ");
-            bool delta = line.starts_with("delta ");
-            if (line.starts_with("error ") && !tool_answer_received) {
-              worker_error_received = true;
-              failure(c, c.request, seq, "runtime_failure", line.substr(6));
-              return;
-            }
-            if ((!request && !model && !answer && !delta) ||
-                tool_answer_received || (delta && c.awaiting_tool)) {
-              tool_protocol_failed = true;
-              failure(c, c.request, seq, "tool_protocol",
-                      "Invalid tool worker frame");
-              c.stop();
-              return;
-            }
-            if (answer)
-              tool_answer_received = true;
-            if (request || model)
-              c.awaiting_tool = true;
-            c.emit(event(delta     ? "model_delta"
-                         : model   ? "model_response"
-                         : request ? "tool_request"
-                                   : "tool_answer",
-                         c.request, seq++,
-                         ",\"text\":" + quote(line.substr(model || delta ? 6
-                                                          : request ? 5
-                                                                    : 7))));
-          };
-          std::vector<std::string> args;
-          bool duplex = tools;
-          // Keep request files alive through run(), including cancellation and
-          // exceptions. Destruction follows the child's owned cleanup/reap.
-          auto launch = foresight::one_shot_launch(
-              e.backend, e.runtime, e.model, text, max_output_tokens,
-              e.model_type, json_schema, tools);
-          {
-            args = std::move(launch.arguments);
-            if (e.backend == 1 && e.cpu_fallback) {
-              args.push_back("--backend");
-              args.push_back("cpu");
-            }
-            {
-              std::lock_guard lock(c.input_mutex);
-              c.input.push_back(std::move(launch.standard_input));
-            }
-            c.finish_input = e.backend != 1;
-            duplex = true;
-          }
-          int status;
-          if (e.persistent_protocol) {
-            // A persistent request owns its input; discard the one-shot stdin
-            // envelope.
-            {
-              std::lock_guard lock(c.input_mutex);
-              c.input.clear();
-            }
-            const auto payload =
-                "{\"prompt\":" + quote(text) +
-                (tools ? ",\"tools\":" : ",\"schema\":") +
-                (json_schema.empty() ? "null" : json_schema) +
-                ",\"max_output_tokens\":" + std::to_string(max_output_tokens) +
-                "}";
-            status =
-                run_persistent(e, c, payload, [&](const std::string &line) {
-                  if (tools) {
-                    tool_line(line);
-                    return;
-                  }
-                  if (line.starts_with("text ") &&
-                      foresight::json_string_literal(line.substr(5))) {
-                    plain_text_received = true;
-                    // The worker frames text as a JSON string, preserving
-                    // Unicode/newlines.
-                    c.emit(event("delta", c.request, seq++,
-                                 ",\"text\":" + line.substr(5)));
-                  } else {
-                    worker_error_received = true;
-                    failure(c, c.request, seq, "runtime_failure", line);
-                  }
-                });
-            if (tool_protocol_failed)
-              shutdown_persistent(e, false);
-          } else {
-            // A one-shot mode must not load another model alongside the
-            // retained worker.
-            shutdown_persistent(e);
-            status = run(
-                c, std::move(args),
-                [&](const char *data, size_t n) {
-                  utf8.append(data, n);
-                  if (tools) {
-                    size_t newline;
-                    while ((newline = utf8.find('\n')) != std::string::npos) {
-                      auto line = utf8.substr(0, newline);
-                      utf8.erase(0, newline + 1);
-                      tool_line(line);
-                      if (tool_protocol_failed)
-                        return;
-                    }
-                    return;
-                  }
-                  size_t complete = utf8.size() > 32 ? utf8.size() - 32 : 0;
-                  if (complete) {
-                    size_t lead = complete - 1;
-                    while (lead > 0 && (static_cast<unsigned char>(utf8[lead]) &
-                                        0xc0) == 0x80)
-                      --lead;
-                    unsigned char byte = utf8[lead];
-                    size_t width = byte < 128              ? 1
-                                   : (byte & 0xe0) == 0xc0 ? 2
-                                   : (byte & 0xf0) == 0xe0 ? 3
-                                                           : 4;
-                    if (complete - lead < width)
-                      complete = lead;
-                  }
-                  if (complete && !c.cancel) {
-                    c.emit(
-                        event("delta", c.request, seq++,
-                              ",\"text\":" + quote(utf8.substr(0, complete))));
-                    utf8.erase(0, complete);
-                  }
-                },
-                duplex);
-          }
-          c.finish_input = false;
-          if (!c.cancel && !tools) {
-            size_t marker = utf8.find(" [end of text]");
-            if (marker != std::string::npos)
-              utf8.erase(marker);
-            if (!utf8.empty())
-              c.emit(
-                  event("delta", c.request, seq++, ",\"text\":" + quote(utf8)));
-          }
-          std::string terminal =
-              (tool_protocol_failed || worker_error_received ||
-               (!tools && e.persistent_protocol && !plain_text_received &&
-                !c.cancel))
-                  ? "failed"
-              : c.cancel    ? "cancelled"
-              : status == 0 ? "completed"
-                            : "failed";
-          if (tools && (!utf8.empty() || !tool_answer_received) && !c.cancel)
-            terminal = "failed";
-          bool cpu_recovered = false;
-          if (terminal == "failed" && !c.cancel && !tool_protocol_failed &&
-              e.backend == 1 && !e.cpu_fallback &&
-              std::getenv("FORESIGHT_LITERT_BACKEND") &&
-              std::string(std::getenv("FORESIGHT_LITERT_BACKEND")) == "gpu") {
-            {
-              std::lock_guard lock(e.mu);
-              e.cpu_fallback = true;
-              e.state = "loading";
-            }
-            shutdown_persistent(e, false);
-            if (e.persistent_protocol) {
-              cpu_recovered = start_persistent(e, c);
-            } else {
-              std::vector<std::string> probe{e.runtime, "--model",   e.model,
-                                             "--probe", "--backend", "cpu"};
-              if (e.model_type) {
-                probe.push_back("--model-type");
-                probe.push_back(std::to_string(e.model_type));
+  c.thread = start_worker_thread(
+      c, "generation", [&c, text, json_schema, max_output_tokens, tools] {
+        auto &e = *c.engine;
+        bool settled = false;
+        foresight::guarded_worker(
+            [&] {
+              uint64_t seq = 0;
+              // Completion mode avoids runner UI/chat banners; app assembles
+              // structured prompt.
+              std::string utf8;
+              bool tool_answer_received = false;
+              bool tool_protocol_failed = false;
+              bool worker_error_received = false;
+              bool plain_text_received = false;
+              auto tool_line = [&](const std::string &line) {
+                bool request = line.starts_with("tool ");
+                bool model = line.starts_with("model ");
+                bool answer = line.starts_with("answer ");
+                bool delta = line.starts_with("delta ");
+                if (line.starts_with("error ") && !tool_answer_received) {
+                  worker_error_received = true;
+                  failure(c, c.request, seq, "runtime_failure", line.substr(6));
+                  return;
+                }
+                if ((!request && !model && !answer && !delta) ||
+                    tool_answer_received || (delta && c.awaiting_tool)) {
+                  tool_protocol_failed = true;
+                  failure(c, c.request, seq, "tool_protocol",
+                          "Invalid tool worker frame");
+                  c.stop();
+                  return;
+                }
+                if (answer)
+                  tool_answer_received = true;
+                if (request || model)
+                  c.awaiting_tool = true;
+                c.emit(event(delta     ? "model_delta"
+                             : model   ? "model_response"
+                             : request ? "tool_request"
+                                       : "tool_answer",
+                             c.request, seq++,
+                             ",\"text\":" + quote(line.substr(model || delta ? 6
+                                                              : request ? 5
+                                                                        : 7))));
+              };
+              std::vector<std::string> args;
+              bool duplex = tools;
+              // Keep request files alive through run(), including cancellation
+              // and exceptions. Destruction follows the child's owned
+              // cleanup/reap.
+              auto launch = foresight::one_shot_launch(
+                  e.backend, e.runtime, e.model, text, max_output_tokens,
+                  e.model_type, json_schema, tools);
+              {
+                args = std::move(launch.arguments);
+                if (e.backend == 1 && e.cpu_fallback) {
+                  args.push_back("--backend");
+                  args.push_back("cpu");
+                }
+                {
+                  std::lock_guard lock(c.input_mutex);
+                  c.input.push_back(std::move(launch.standard_input));
+                }
+                c.finish_input = e.backend != 1;
+                duplex = true;
               }
-              cpu_recovered =
-                  run(c, std::move(probe), [](const char *, size_t) {}) == 0;
-            }
-            if (cpu_recovered)
-              c.emit(event("state", c.request, seq++,
-                           ",\"state\":\"ready\",\"backend\":\"cpu\","
-                           "\"message\":\"GPU generation failed; CPU runtime "
-                           "rebuilt. Retry the answer.\""));
-          }
-          c.awaiting_tool = false;
-          if (terminal == "failed" && !tool_protocol_failed &&
-              !worker_error_received)
-            failure(c, c.request, seq, "runtime_failure",
-                    tools && status == 0
-                        ? "Tool worker exited without a complete answer"
-                        : "Generation runner exited with status " +
-                              std::to_string(status));
-          settled = true;
-          c.emit(event("done", c.request, seq++,
-                       ",\"status\":" + quote(terminal)));
-          {
-            std::lock_guard lock(e.mu);
-            e.busy = false;
-            e.state =
-                terminal == "failed" && !cpu_recovered ? "failed" : "ready";
-            e.error = terminal == "failed"
-                          ? (cpu_recovered ? "GPU generation failed; CPU "
-                                             "runtime ready for retry"
-                                           : "runtime_failure")
-                          : "";
-          }
-          c.active = false;
-        },
-        [&](const std::string &message) {
-          if (settled)
-            return;
-          uint64_t seq = 0;
-          failure(c, c.request, seq, "runtime_failure", message);
-          c.emit(
-              event("done", c.request, seq, ",\"status\":" + quote("failed")));
-          {
-            std::lock_guard lock(e.mu);
-            e.busy = false;
-            e.state = "failed";
-            e.error = "runtime_failure";
-          }
-          c.finish_input = false;
-          c.active = false;
-        });
-  });
+              int status;
+              if (e.persistent_protocol) {
+                // A persistent request owns its input; discard the one-shot
+                // stdin envelope.
+                {
+                  std::lock_guard lock(c.input_mutex);
+                  c.input.clear();
+                }
+                const auto payload =
+                    "{\"prompt\":" + quote(text) +
+                    (tools ? ",\"tools\":" : ",\"schema\":") +
+                    (json_schema.empty() ? "null" : json_schema) +
+                    ",\"max_output_tokens\":" +
+                    std::to_string(max_output_tokens) + "}";
+                status =
+                    run_persistent(e, c, payload, [&](const std::string &line) {
+                      if (tools) {
+                        tool_line(line);
+                        return;
+                      }
+                      if (line.starts_with("text ") &&
+                          foresight::json_string_literal(line.substr(5))) {
+                        plain_text_received = true;
+                        // The worker frames text as a JSON string, preserving
+                        // Unicode/newlines.
+                        c.emit(event("delta", c.request, seq++,
+                                     ",\"text\":" + line.substr(5)));
+                      } else {
+                        worker_error_received = true;
+                        failure(c, c.request, seq, "runtime_failure", line);
+                      }
+                    });
+                if (tool_protocol_failed)
+                  shutdown_persistent(e, false);
+              } else {
+                // A one-shot mode must not load another model alongside the
+                // retained worker.
+                shutdown_persistent(e);
+                status = run(
+                    c, std::move(args),
+                    [&](const char *data, size_t n) {
+                      utf8.append(data, n);
+                      if (tools) {
+                        size_t newline;
+                        while ((newline = utf8.find('\n')) !=
+                               std::string::npos) {
+                          auto line = utf8.substr(0, newline);
+                          utf8.erase(0, newline + 1);
+                          tool_line(line);
+                          if (tool_protocol_failed)
+                            return;
+                        }
+                        return;
+                      }
+                      size_t complete = utf8.size() > 32 ? utf8.size() - 32 : 0;
+                      if (complete) {
+                        size_t lead = complete - 1;
+                        while (lead > 0 &&
+                               (static_cast<unsigned char>(utf8[lead]) &
+                                0xc0) == 0x80)
+                          --lead;
+                        unsigned char byte = utf8[lead];
+                        size_t width = byte < 128              ? 1
+                                       : (byte & 0xe0) == 0xc0 ? 2
+                                       : (byte & 0xf0) == 0xe0 ? 3
+                                                               : 4;
+                        if (complete - lead < width)
+                          complete = lead;
+                      }
+                      if (complete && !c.cancelled()) {
+                        c.emit(event("delta", c.request, seq++,
+                                     ",\"text\":" +
+                                         quote(utf8.substr(0, complete))));
+                        utf8.erase(0, complete);
+                      }
+                    },
+                    duplex);
+              }
+              c.finish_input = false;
+              if (!c.cancelled() && !tools) {
+                size_t marker = utf8.find(" [end of text]");
+                if (marker != std::string::npos)
+                  utf8.erase(marker);
+                if (!utf8.empty())
+                  c.emit(event("delta", c.request, seq++,
+                               ",\"text\":" + quote(utf8)));
+              }
+              std::string terminal =
+                  (tool_protocol_failed || worker_error_received ||
+                   (!tools && e.persistent_protocol && !plain_text_received &&
+                    !c.cancelled()))
+                      ? "failed"
+                  : c.cancelled() ? "cancelled"
+                  : status == 0   ? "completed"
+                                  : "failed";
+              if (tools && (!utf8.empty() || !tool_answer_received) &&
+                  !c.cancelled())
+                terminal = "failed";
+              bool cpu_recovered = false;
+              if (terminal == "failed" && !c.cancelled() &&
+                  !tool_protocol_failed && e.backend == 1 && !e.cpu_fallback &&
+                  std::getenv("FORESIGHT_LITERT_BACKEND") &&
+                  std::string(std::getenv("FORESIGHT_LITERT_BACKEND")) ==
+                      "gpu") {
+                {
+                  std::lock_guard lock(e.mu);
+                  e.cpu_fallback = true;
+                  e.state = "loading";
+                }
+                shutdown_persistent(e, false);
+                if (e.persistent_protocol) {
+                  cpu_recovered = start_persistent(e, c);
+                } else {
+                  std::vector<std::string> probe{e.runtime,   "--model",
+                                                 e.model,     "--probe",
+                                                 "--backend", "cpu"};
+                  if (e.model_type) {
+                    probe.push_back("--model-type");
+                    probe.push_back(std::to_string(e.model_type));
+                  }
+                  cpu_recovered = run(c, std::move(probe),
+                                      [](const char *, size_t) {}) == 0;
+                }
+                if (cpu_recovered)
+                  c.emit(
+                      event("state", c.request, seq++,
+                            ",\"state\":\"ready\",\"backend\":\"cpu\","
+                            "\"message\":\"GPU generation failed; CPU runtime "
+                            "rebuilt. Retry the answer.\""));
+              }
+              c.awaiting_tool = false;
+              if (terminal == "failed" && !tool_protocol_failed &&
+                  !worker_error_received)
+                failure(c, c.request, seq, "runtime_failure",
+                        tools && status == 0
+                            ? "Tool worker exited without a complete answer"
+                            : "Generation runner exited with status " +
+                                  std::to_string(status));
+              settled = true;
+              c.emit(event("done", c.request, seq++,
+                           ",\"status\":" + quote(terminal)));
+              {
+                std::lock_guard lock(e.mu);
+                e.busy = false;
+                e.state =
+                    terminal == "failed" && !cpu_recovered ? "failed" : "ready";
+                e.error = terminal == "failed"
+                              ? (cpu_recovered ? "GPU generation failed; CPU "
+                                                 "runtime ready for retry"
+                                               : "runtime_failure")
+                              : "";
+              }
+              c.active = false;
+            },
+            [&](const std::string &message) {
+              if (settled)
+                return;
+              uint64_t seq = 0;
+              failure(c, c.request, seq, "runtime_failure", message);
+              c.emit(event("done", c.request, seq,
+                           ",\"status\":" + quote("failed")));
+              {
+                std::lock_guard lock(e.mu);
+                e.busy = false;
+                e.state = "failed";
+                e.error = "runtime_failure";
+              }
+            },
+            [&] {
+              c.finish_input = false;
+              c.awaiting_tool = false;
+              c.active = false;
+              std::lock_guard lock(e.mu);
+              e.busy = false;
+            });
+      });
   rollback.release();
   return 0;
 }
 int fs_generate(void *h, const char *id, const char *prompt) {
-  try {
-    return generate_with_schema(h, id, prompt, nullptr);
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> int { return generate_with_schema(h, id, prompt, nullptr); },
+      -1);
 }
 int fs_generate_json(void *h, const char *id, const char *prompt,
                      const char *schema) {
-  try {
-    if (!schema || !*schema)
-      return -1;
-    return generate_with_schema(h, id, prompt, schema);
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> int {
+        if (!schema || !*schema)
+          return -1;
+        return generate_with_schema(h, id, prompt, schema);
+      },
+      -1);
 }
 int fs_generate_options(void *h, const char *id, const char *prompt,
                         const char *schema, int max_output_tokens) {
-  try {
-    return generate_with_schema(h, id, prompt, schema, max_output_tokens);
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> int {
+        return generate_with_schema(h, id, prompt, schema, max_output_tokens);
+      },
+      -1);
 }
 int fs_generate_tools(void *h, const char *id, const char *prompt,
                       const char *tools, int max_output_tokens) {
-  try {
-    if (!tools || !*tools || std::strpbrk(tools, "\r\n"))
-      return -1;
-    return generate_with_schema(h, id, prompt, tools, max_output_tokens, true);
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> int {
+        if (!tools || !*tools || std::strpbrk(tools, "\r\n"))
+          return -1;
+        return generate_with_schema(h, id, prompt, tools, max_output_tokens,
+                                    true);
+      },
+      -1);
 }
 int fs_generation_tool_reply(void *h, const char *id, const char *message) {
-  try {
-    if (!h || !id || !message || std::strpbrk(message, "\r\n"))
-      return -1;
-    auto &c = *static_cast<Conversation *>(h);
-    std::lock_guard life(c.life);
-    if (!c.active || c.cancel || c.request != id ||
-        !c.awaiting_tool.exchange(false))
-      return -1;
-    std::lock_guard lock(c.input_mutex);
-    c.input.push_back(std::string(message) + "\n");
-    return 0;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> int {
+        NativeUse use(h, NativeKind::conversation);
+        if (!use)
+          return -1;
+        if (!h || !id || !message || std::strpbrk(message, "\r\n"))
+          return -1;
+        auto &c = *static_cast<Conversation *>(h);
+        std::lock_guard life(c.life);
+        if (!c.active || c.cancelled() || c.request != id ||
+            !c.awaiting_tool.load())
+          return -1;
+        std::lock_guard lock(c.input_mutex);
+        c.input.push_back(std::string(message) + "\n");
+        c.awaiting_tool = false;
+        return 0;
+      },
+      -1);
 }
 int fs_generation_cancel(void *h) {
-  try {
-    if (!h)
-      return -1;
-    auto &c = *static_cast<Conversation *>(h);
-    std::lock_guard life(c.life);
-    if (c.active)
-      c.stop();
-    return 0;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> int {
+        NativeUse use(h, NativeKind::conversation);
+        if (!use)
+          return -1;
+        if (!h)
+          return -1;
+        auto &c = *static_cast<Conversation *>(h);
+        std::lock_guard life(c.life);
+        if (c.active)
+          c.stop();
+        return 0;
+      },
+      -1);
 }
 int fs_conversation_destroy(void *h, int drain) {
-  try {
-    if (!h)
-      return 0;
-    auto *c = static_cast<Conversation *>(h);
-    {
-      std::lock_guard life(c->life);
-      if (c->active && !drain)
-        return -1;
-      c->stop();
-      c->join();
-    }
-    {
-      std::lock_guard lock(c->engine->mu);
-      --c->engine->refs;
-    }
-    retire_events(c);
-    delete c;
-    return 0;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+  return foresight::ffi_barrier(
+      [&] {
+        if (!h)
+          return 0;
+        if (legacy_closing(h, NativeKind::conversation))
+          return retire_legacy(h, NativeKind::conversation) ? 0 : -1;
+        {
+          NativeUse use(h, NativeKind::conversation);
+          if (!use)
+            return -1;
+          auto &conversation = *static_cast<Conversation *>(h);
+          std::lock_guard lock(conversation.life);
+          if (conversation.active && !drain)
+            return -1;
+        }
+        return retire_legacy(h, NativeKind::conversation) ? 0 : -1;
+      },
+      -1);
 }
 void *fs_speech_create(const char *runtime, const char *model) {
-  try {
-    foresight::seal_runtime_environment();
-    const char *override_runtime = std::getenv("FORESIGHT_WHISPER_RUNTIME");
-    if (override_runtime && *override_runtime)
-      runtime = override_runtime;
-    if (!valid_asset(runtime, model))
-      return nullptr;
-    auto *s = new Speech;
-    s->runtime = runtime;
-    s->model = model;
-    // Bundles install the speech server beside the diagnostic CLI. Explicit
-    // worker overrides are also supported for external runtime installations.
-    auto server = std::filesystem::path(runtime).parent_path() /
-                  "foresight-whisper-worker";
-    if (const char *configured = std::getenv("FORESIGHT_WHISPER_WORKER");
-        configured && *configured)
-      server = configured;
-    if (access(server.c_str(), X_OK) == 0) {
-      const char *backend = std::getenv("FORESIGHT_WHISPER_BACKEND");
-      const char *device = std::getenv("FORESIGHT_WHISPER_DEVICE");
-      const auto key = quote(server.string()) + quote(model) +
-                       quote(backend ? backend : "") +
-                       quote(device ? device : "");
-      std::lock_guard lock(speech_engines_mutex);
-      for (auto i = speech_engines.begin(); i != speech_engines.end();) {
-        if (i->second.expired())
-          i = speech_engines.erase(i);
-        else
-          ++i;
-      }
-      s->worker_engine = speech_engines[key].lock();
-      if (!s->worker_engine) {
-        s->worker_engine = std::make_shared<SpeechEngine>();
-        auto &engine = s->worker_engine->engine;
-        engine.runtime = server.string();
-        engine.model = model;
-        engine.backend = 2;
-        engine.cpu_fallback = backend && std::string(backend) == "cpu";
-        speech_engines[key] = s->worker_engine;
-      }
-    }
-    return s;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return nullptr;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return nullptr;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> void * {
+        foresight::seal_runtime_environment();
+        const char *override_runtime = std::getenv("FORESIGHT_WHISPER_RUNTIME");
+        if (override_runtime && *override_runtime)
+          runtime = override_runtime;
+        if (!valid_asset(runtime, model))
+          return nullptr;
+        auto s = std::make_unique<Speech>();
+        s->runtime = runtime;
+        s->model = model;
+        // Prepare all metadata before acquiring an existing physical shared
+        // model lease. After assignment below, only nonthrowing publication
+        // remains, so allocation rollback cannot become the last model closer
+        // on the FFI caller's thread.
+        auto server = std::filesystem::path(runtime).parent_path() /
+                      "foresight-whisper-worker";
+        if (const char *configured = std::getenv("FORESIGHT_WHISPER_WORKER");
+            configured && *configured)
+          server = configured;
+        const bool persistent = access(server.c_str(), X_OK) == 0;
+        const char *backend = std::getenv("FORESIGHT_WHISPER_BACKEND");
+        const char *device = std::getenv("FORESIGHT_WHISPER_DEVICE");
+        const auto key = persistent ? quote(server.string()) + quote(model) +
+                                          quote(backend ? backend : "") +
+                                          quote(device ? device : "")
+                                    : std::string{};
+        auto *published = publish_native(std::move(s), NativeKind::speech);
+        if (!published)
+          return nullptr;
+        foresight::ScopeExit rollback(
+            [&] { rollback_unpublished_native(published); });
+        if (persistent) {
+          std::lock_guard lock(speech_engines_mutex());
+          for (auto it = speech_engines().begin();
+               it != speech_engines().end();)
+            if (it->second.expired())
+              it = speech_engines().erase(it);
+            else
+              ++it;
+          auto &entry = speech_engines()[key]; // last fallible map insertion
+          auto shared = entry.lock();
+          if (shared && shared->retiring)
+            shared.reset();
+          if (!shared) {
+            shared = std::make_shared<SpeechEngine>();
+            auto &engine = shared->engine;
+            engine.runtime = server.string();
+            engine.model = model;
+            engine.backend = 2;
+            engine.cpu_fallback = backend && std::string(backend) == "cpu";
+          }
+          // No allocation or physical-model destruction after this transfer.
+          entry = shared;
+          published->worker_engine = std::move(shared);
+        }
+        rollback.release();
+        return published;
+      },
+      static_cast<void *>(nullptr));
 }
 int fs_speech_push(void *h, const int16_t *samples, size_t count, int rate) {
-  try {
-    if (!h || (!samples && count) || rate < 8000 || rate > 192000)
-      return -1;
-    auto &s = *static_cast<Speech *>(h);
-    std::lock_guard life(s.life);
-    if (s.active)
-      return -1;
-    if (s.input_rate && s.input_rate != rate)
-      return -1;
-    if (s.samples.size() + uint64_t(count) * 16000 / rate > 16000 * 60 * 60 * 2)
-      return -1;
-    s.input_rate = rate;
-    if (count)
-      s.pending.insert(s.pending.end(), samples, samples + count);
-    while (size_t(s.phase) + 1 < s.pending.size()) {
-      size_t a = size_t(s.phase);
-      s.samples.push_back(int16_t(std::lround(
-          s.pending[a] + (s.pending[a + 1] - s.pending[a]) * (s.phase - a))));
-      s.phase += rate / 16000.0;
-    }
-    size_t consumed = std::min(size_t(s.phase), s.pending.size());
-    s.pending.erase(s.pending.begin(), s.pending.begin() + consumed);
-    s.phase -= consumed;
-    return 0;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> int {
+        NativeUse use(h, NativeKind::speech);
+        if (!use)
+          return -1;
+        if (!h || (!samples && count) || rate < 8000 || rate > 192000)
+          return -1;
+        auto &s = *static_cast<Speech *>(h);
+        std::lock_guard life(s.life);
+        if (s.active || !speech_request_available(use.control))
+          return -1;
+        if (s.input_rate && s.input_rate != rate)
+          return -1;
+        if (s.samples.size() + uint64_t(count) * 16000 / rate >
+            16000 * 60 * 60 * 2)
+          return -1;
+        s.input_rate = rate;
+        if (count)
+          s.pending.insert(s.pending.end(), samples, samples + count);
+        while (size_t(s.phase) + 1 < s.pending.size()) {
+          size_t a = size_t(s.phase);
+          s.samples.push_back(int16_t(
+              std::lround(s.pending[a] +
+                          (s.pending[a + 1] - s.pending[a]) * (s.phase - a))));
+          s.phase += rate / 16000.0;
+        }
+        size_t consumed = std::min(size_t(s.phase), s.pending.size());
+        s.pending.erase(s.pending.begin(), s.pending.begin() + consumed);
+        s.phase -= consumed;
+        return 0;
+      },
+      -1);
 }
 int fs_speech_finish(void *h, const char *id) {
-  try {
-    if (!h || !id || !*id)
-      return -1;
-    auto &s = *static_cast<Speech *>(h);
-    std::lock_guard life(s.life);
-    if (s.active)
-      return -1;
-    s.join();
-    auto previous_pending = s.pending;
-    const auto previous_phase = s.phase;
-    const auto previous_rate = s.input_rate;
-    std::shared_ptr<std::vector<int16_t>> samples;
-    bool finalized_tail = false;
-    foresight::ScopeExit rollback([&] {
-      s.active = false;
-      if (samples) {
-        s.samples = std::move(*samples);
-      }
-      if (finalized_tail && !s.samples.empty())
-        s.samples.pop_back();
-      s.pending = std::move(previous_pending);
-      s.phase = previous_phase;
-      s.input_rate = previous_rate;
-    });
-    s.cancel = false;
-    s.active = true;
-    std::string request = id;
-    if (!s.pending.empty()) {
-      s.samples.push_back(s.pending.back());
-      finalized_tail = true;
-    }
-    samples = std::make_shared<std::vector<int16_t>>(std::move(s.samples));
-    s.pending.clear();
-    s.phase = 0;
-    s.input_rate = 0;
-    s.thread = start_worker_thread("speech", [&s, request, samples] {
-      bool settled = false;
-      foresight::guarded_worker(
-          [&] {
-            uint64_t seq = 0;
-            if (const auto blocked = linux_speech_cpu_block()) {
-              failure(s, request, seq, "speech_runtime_failure", *blocked);
-              s.emit(event("done", request, seq++, ",\"status\":\"failed\""));
-              s.active = false;
-              settled = true;
-              return;
-            }
-            int status = -1;
-            std::string transcript;
-            {
-              auto audio = foresight::create_speech_audio();
-              if (audio.fd >= 0) {
-                close(audio.fd);
-                audio.fd = -1;
-              }
-              wav(audio.path, *samples);
-              const char *speech_backend =
-                  std::getenv("FORESIGHT_WHISPER_BACKEND");
-              const bool cpu =
-                  speech_backend && std::string(speech_backend) == "cpu";
-              auto arguments = [&](bool cpu_only) {
-                std::vector<std::string> result{
-                    s.runtime, "-m",  s.model, "-f", audio.path, "-l",
-                    "auto",    "-nt", "-np",   "-t", "4"};
-                if (cpu_only)
-                  result.push_back("-ng");
-                else if (const char *device =
-                             std::getenv("FORESIGHT_WHISPER_DEVICE");
-                         device && *device) {
-                  result.push_back("-dev");
-                  result.push_back(device);
+  return foresight::ffi_barrier(
+      [&]() -> int {
+        NativeUse use(h, NativeKind::speech);
+        if (!use)
+          return -1;
+        if (!h || !id || !*id)
+          return -1;
+        auto &s = *static_cast<Speech *>(h);
+        std::lock_guard life(s.life);
+        if (s.active || !speech_request_available(use.control))
+          return -1;
+        s.join();
+        auto previous_pending = s.pending;
+        const auto previous_phase = s.phase;
+        const auto previous_rate = s.input_rate;
+        std::shared_ptr<std::vector<int16_t>> samples;
+        bool finalized_tail = false;
+        bool queued_published = false, join_prepared = false;
+        std::string queued_event;
+        foresight::ScopeExit rollback([&] {
+          s.active = false;
+          if (join_prepared) {
+            if (auto operation =
+                    native_handles().operations.find(use.control->finish))
+              native_handles().operations.discard(operation);
+            use.control->speech_joined = true;
+          }
+          if (samples) {
+            s.samples = std::move(*samples);
+          }
+          if (finalized_tail && !s.samples.empty())
+            s.samples.pop_back();
+          s.pending = std::move(previous_pending);
+          s.phase = previous_phase;
+          s.input_rate = previous_rate;
+          if (queued_published) {
+            std::lock_guard lock(s.mu);
+            if (!s.events.empty() && s.events.back() == queued_event)
+              s.events.pop_back();
+          }
+        });
+        if (!prepare_native_speech_join(use.control))
+          return -1;
+        join_prepared = true;
+        s.cancel = false;
+        s.active = true;
+        std::string request = id;
+        if (!s.pending.empty()) {
+          s.samples.push_back(s.pending.back());
+          finalized_tail = true;
+        }
+        samples = std::make_shared<std::vector<int16_t>>(std::move(s.samples));
+        s.pending.clear();
+        s.phase = 0;
+        s.input_rate = 0;
+        // Publish queue admission synchronously, before the worker can be
+        // delayed by scheduling. A refused thread launch rolls this frame back
+        // as well.
+        queued_event =
+            event("state", request, 0, ",\"phase\":\"speech_queued\"");
+        s.emit(queued_event);
+        queued_published = true;
+        s.thread = start_worker_thread(s, "speech", [&s, request, samples] {
+          bool settled = false;
+          uint64_t seq = 1;
+          foresight::guarded_worker(
+              [&] {
+                if (const auto blocked = linux_speech_cpu_block()) {
+                  failure(s, request, seq, "speech_runtime_failure", *blocked);
+                  s.emit(
+                      event("done", request, seq++, ",\"status\":\"failed\""));
+                  s.active = false;
+                  settled = true;
+                  return;
                 }
-                return result;
-              };
-              auto recognize = [&](bool cpu_only) {
-                if (s.worker_engine) {
-                  std::unique_lock lock(s.worker_engine->mutex,
-                                        std::defer_lock);
-                  while (!lock.try_lock_for(std::chrono::milliseconds(20))) {
-                    if (s.cancel)
+                int status = -1;
+                std::string transcript;
+                {
+                  auto audio = foresight::create_speech_audio();
+                  if (audio.fd >= 0) {
+                    close(audio.fd);
+                    audio.fd = -1;
+                  }
+                  wav(audio.path, *samples);
+                  const char *speech_backend =
+                      std::getenv("FORESIGHT_WHISPER_BACKEND");
+                  const bool cpu =
+                      speech_backend && std::string(speech_backend) == "cpu";
+                  auto arguments = [&](bool cpu_only) {
+                    std::vector<std::string> result{
+                        s.runtime, "-m",  s.model, "-f", audio.path, "-l",
+                        "auto",    "-nt", "-np",   "-t", "4"};
+                    if (cpu_only)
+                      result.push_back("-ng");
+                    else if (const char *device =
+                                 std::getenv("FORESIGHT_WHISPER_DEVICE");
+                             device && *device) {
+                      result.push_back("-dev");
+                      result.push_back(device);
+                    }
+                    return result;
+                  };
+                  bool admitted = false;
+                  auto admission = [&] {
+                    if (!admitted) {
+                      s.emit(event("state", request, seq++,
+                                   ",\"phase\":\"speech_running\""));
+                      admitted = true;
+                    }
+                  };
+                  auto recognize = [&](bool cpu_only) {
+                    if (s.worker_engine) {
+                      std::unique_lock lock(s.worker_engine->mutex,
+                                            std::defer_lock);
+                      while (
+                          !lock.try_lock_for(std::chrono::milliseconds(20))) {
+                        if (s.cancelled())
+                          return -1;
+                      }
+                      if (s.cancelled())
+                        return -1;
+                      admission();
+                      auto &engine = s.worker_engine->engine;
+                      if (cpu_only && !engine.cpu_fallback) {
+                        shutdown_persistent(engine, false);
+                        engine.cpu_fallback = true;
+                      }
+                      bool received = false, invalid = false;
+                      transcript = quote("");
+                      const auto result = run_persistent(
+                          engine, s, "{\"prompt\":" + quote(audio.path) + "}",
+                          [&](const std::string &line) {
+                            if (line.starts_with("text ") && !received &&
+                                line.size() >= 7 &&
+                                foresight::json_string_literal(
+                                    line.substr(5))) {
+                              transcript = line.substr(5);
+                              received = true;
+                            } else
+                              invalid = true;
+                          });
+                      return result == 0 && received && !invalid ? 0 : 1;
+                    }
+                    if (s.cancelled())
                       return -1;
+                    admission();
+                    return run(s, arguments(cpu_only),
+                               [&](const char *p, size_t n) {
+                                 transcript.append(p, n);
+                               });
+                  };
+                  status = recognize(cpu);
+                  if (status != 0 && !cpu && !s.cancelled()) {
+                    // The failed attempt must not contaminate the CPU
+                    // transcript.
+                    transcript.clear();
+                    s.emit(
+                        event("state", request, seq++,
+                              ",\"message\":\"GPU speech recognition failed; "
+                              "retrying on CPU\""));
+                    status = recognize(true);
                   }
-                  if (s.cancel)
-                    return -1;
-                  auto &engine = s.worker_engine->engine;
-                  if (cpu_only && !engine.cpu_fallback) {
-                    shutdown_persistent(engine, false);
-                    engine.cpu_fallback = true;
-                  }
-                  bool received = false, invalid = false;
-                  transcript = quote("");
-                  const auto result = run_persistent(
-                      engine, s, "{\"prompt\":" + quote(audio.path) + "}",
-                      [&](const std::string &line) {
-                        if (line.starts_with("text ") && !received &&
-                            line.size() >= 7 &&
-                            foresight::json_string_literal(line.substr(5))) {
-                          transcript = line.substr(5);
-                          received = true;
-                        } else
-                          invalid = true;
-                      });
-                  return result == 0 && received && !invalid ? 0 : 1;
                 }
-                return run(
-                    s, arguments(cpu_only),
-                    [&](const char *p, size_t n) { transcript.append(p, n); });
-              };
-              status = recognize(cpu);
-              if (status != 0 && !cpu && !s.cancel) {
-                // The failed attempt must not contaminate the CPU transcript.
-                transcript.clear();
-                s.emit(event("state", request, seq++,
-                             ",\"message\":\"GPU speech recognition failed; "
-                             "retrying on CPU\""));
-                status = recognize(true);
-              }
-            }
-            std::string terminal = s.cancel      ? "cancelled"
-                                   : status == 0 ? "completed"
-                                                 : "failed";
-            if (terminal == "completed")
-              s.emit(
-                  event("transcript", request, seq++,
-                        ",\"text\":" +
-                            (s.worker_engine ? transcript : quote(transcript)) +
-                            ",\"final\":true,\"start_ms\":0,\"end_ms\":" +
-                            std::to_string(samples->size() * 1000 / 16000) +
-                            ",\"sample_rate\":16000"));
-            if (terminal == "failed")
-              failure(
-                  s, request, seq, "speech_runtime_failure",
-                  "Speech runner failed; verify model, audio and executable");
-            settled = true;
-            s.active = false;
-            s.emit(event("done", request, seq++,
-                         ",\"status\":" + quote(terminal)));
-          },
-          [&](const std::string &message) {
-            if (settled)
-              return;
-            uint64_t seq = 0;
-            failure(s, request, seq, "speech_runtime_failure", message);
-            s.emit(
-                event("done", request, seq, ",\"status\":" + quote("failed")));
-            s.active = false;
-          });
-    });
-    rollback.release();
-    return 0;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+                std::string terminal = s.cancelled() ? "cancelled"
+                                       : status == 0 ? "completed"
+                                                     : "failed";
+                if (terminal == "completed")
+                  s.emit(event(
+                      "transcript", request, seq++,
+                      ",\"text\":" +
+                          (s.worker_engine ? transcript : quote(transcript)) +
+                          ",\"final\":true,\"start_ms\":0,\"end_ms\":" +
+                          std::to_string(samples->size() * 1000 / 16000) +
+                          ",\"sample_rate\":16000"));
+                if (terminal == "failed")
+                  failure(s, request, seq, "speech_runtime_failure",
+                          "Speech runner failed; verify model, audio and "
+                          "executable");
+                settled = true;
+                s.active = false;
+                s.emit(event("done", request, seq++,
+                             ",\"status\":" + quote(terminal)));
+              },
+              [&](const std::string &message) {
+                if (settled)
+                  return;
+                failure(s, request, seq, "speech_runtime_failure", message);
+                s.emit(event("done", request, seq,
+                             ",\"status\":" + quote("failed")));
+              },
+              [&] { s.active = false; });
+        });
+        rollback.release();
+        return 0;
+      },
+      -1);
 }
 int fs_speech_cancel(void *h) {
-  try {
-    if (!h)
-      return -1;
-    auto &s = *static_cast<Speech *>(h);
-    std::lock_guard life(s.life);
-    s.stop();
-    return 0;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> int {
+        NativeUse use(h, NativeKind::speech);
+        if (!use)
+          return -1;
+        if (!h)
+          return -1;
+        auto &s = *static_cast<Speech *>(h);
+        std::lock_guard life(s.life);
+        s.stop();
+        return 0;
+      },
+      -1);
 }
 void fs_speech_destroy(void *h) {
-  try {
-    if (!h)
-      return;
-    auto *s = static_cast<Speech *>(h);
-    {
-      std::lock_guard life(s->life);
-      s->stop();
-      s->join();
-    }
-    retire_events(s);
-    delete s;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-  }
+  foresight::ffi_barrier_void([&] {
+    if (h)
+      retire_legacy(h, NativeKind::speech);
+  });
 }
 void *fs_capture_start(const char *target, int playback, int rate) {
-  try {
-    return fs_capture_start_with_options(target, playback, rate, 0);
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return nullptr;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return nullptr;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> void * {
+        return fs_capture_start_with_options(target, playback, rate, 0);
+      },
+      static_cast<void *>(nullptr));
+}
+static int set_capture_echo(void *handle, int enabled) {
+  return foresight::ffi_barrier(
+      [&]() -> int {
+        if (!handle)
+          return 0;
+#ifdef __APPLE__
+        auto *capture = static_cast<Capture *>(handle);
+        if (!capture->playback && capture->runtime.empty()) {
+          capture->echoCancellation = enabled != 0;
+          return 1;
+        }
+#else
+        (void)enabled;
+#endif
+        return 0;
+      },
+      -1);
 }
 int fs_capture_set_echo_cancellation(void *handle, int enabled) {
-  try {
-    if (!handle)
-      return 0;
-#ifdef __APPLE__
-    auto *capture = static_cast<Capture *>(handle);
-    if (!capture->playback && capture->runtime.empty()) {
-      capture->echoCancellation = enabled != 0;
-      return 1;
-    }
-#else
-    (void)enabled;
-#endif
-    return 0;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+  return foresight::ffi_barrier(
+      [&] {
+        NativeUse use(handle, NativeKind::capture);
+        return use ? set_capture_echo(handle, enabled) : 0;
+      },
+      -1);
 }
 void *fs_capture_start_with_options(const char *target, int playback, int rate,
                                     int echo) {
-  try {
-    if (rate < 8000 || rate > 192000)
-      return nullptr;
-    foresight::seal_runtime_environment();
-    auto owned_capture = std::make_unique<Capture>();
-    auto *c = owned_capture.get();
-    c->target = target && *target ? target : "auto";
-    if (const char *runtime = getenv("FORESIGHT_CAPTURE_RUNTIME");
-        runtime && *runtime) {
-      if (runtime[0] != '/' || access(runtime, X_OK) != 0) {
-        return nullptr;
-      }
-      c->runtime = runtime;
-    }
-    c->playback = playback != 0;
-    if (echo && !fs_capture_set_echo_cancellation(c, echo)) {
-      return nullptr;
-    }
-    c->rate = rate;
-    c->active = true;
-    c->thread = start_worker_thread("capture", [c] {
-      foresight::guarded_worker(
-          [&] {
+  return foresight::ffi_barrier(
+      [&]() -> void * {
+        if (rate < 8000 || rate > 192000)
+          return nullptr;
+        foresight::seal_runtime_environment();
+        auto owned_capture = std::make_unique<Capture>();
+        auto *c = owned_capture.get();
+        c->target = target && *target ? target : "auto";
+        if (const char *runtime = getenv("FORESIGHT_CAPTURE_RUNTIME");
+            runtime && *runtime) {
+          if (runtime[0] != '/' || access(runtime, X_OK) != 0) {
+            return nullptr;
+          }
+          c->runtime = runtime;
+        }
+        c->playback = playback != 0;
+        if (echo && !set_capture_echo(c, echo)) {
+          return nullptr;
+        }
+        c->rate = rate;
 #ifdef __APPLE__
-            if (c->runtime.empty()) {
-              fs_macos_capture(
-                  c->target, c->playback, c->rate, c->cancel,
-                  [c](const auto &bytes) { audio_frame(*c, bytes); },
-                  [c](const auto &event) { c->emit(event); },
-                  &c->echoCancellation);
-              c->active = false;
-              c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
-                      "audio_state_v1\",\"state\":\"stopped\"}");
-              return;
-            }
+        if (c->runtime.empty()) {
+          if (!pin_native_mapping())
+            return nullptr;
+          native_handles().process_lifetime = true;
+          c->macos = fs_macos_capture_owner();
+        }
 #endif
-            int attempt = 0;
-            while (!c->cancel) {
-              c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
-                      "audio_state_v1\",\"state\":\"connecting\"}");
-              // PipeWire (including Ubuntu 24.04) has no --raw option. The
-              // production path writes to an owned .raw FIFO so stdout
-              // diagnostics cannot be PCM.
-              std::vector<std::string> args{capture_runtime_command(c->runtime),
-                                            "--format",
-                                            "s16",
-                                            "--rate",
-                                            std::to_string(c->rate),
-                                            "--channels",
-                                            "1",
-                                            "--target",
-                                            c->target};
-              if (c->playback || c->target != "auto") {
-                args.push_back("--properties");
-                std::string properties = "{ ";
-                if (c->playback)
-                  properties += "stream.capture.sink = true ";
-                // An explicitly selected device must not silently migrate to
-                // another microphone/output when it disappears. Auto continues
-                // following the session's default device; owned retries
-                // reconnect the named target.
-                if (c->target != "auto")
-                  properties +=
-                      "node.dont-fallback = true node.dont-reconnect = true ";
-                args.push_back(properties + "}");
-              }
-              args.push_back("-");
-              std::vector<unsigned char> residual;
-              bool announced = false;
-              int status = run(
-                  *c, args,
-                  [&](const char *data, size_t n) {
-                    if (!announced) {
-                      c->emit(
-                          "{\"type\":\"state\",\"channel\":\"foresight.linux/"
-                          "audio_state_v1\",\"state\":\"capturing\"}");
-                      announced = true;
-                      attempt = 0;
-                    }
-                    residual.insert(residual.end(), data, data + n);
-                    size_t frame = c->playback ? size_t(c->rate * 40 / 1000) * 2
-                                               : residual.size() & ~size_t(1);
-                    while (frame && residual.size() >= frame) {
-                      std::vector<unsigned char> bytes(
-                          residual.begin(), residual.begin() + frame);
-                      audio_frame(*c, bytes);
-                      residual.erase(residual.begin(),
-                                     residual.begin() + frame);
-                      if (!c->playback)
-                        break;
-                    }
-                  },
-                  false,
-                  c->runtime.empty() ||
-                      std::filesystem::path(c->runtime).filename() ==
-                          "pw-record");
-              if (c->cancel) {
-                residual.resize(residual.size() & ~size_t(1));
-                if (!residual.empty())
-                  audio_frame(*c, residual);
-                break;
-              }
-              c->emit("{\"type\":\"gap\",\"channel\":\"foresight.linux/"
+        c = publish_native(std::move(owned_capture), NativeKind::capture);
+        if (!c)
+          return nullptr;
+        // Admission, shared ownership and all registry allocations precede any
+        // physical capture. Thread creation failure rolls back this owner.
+        foresight::ScopeExit rollback_capture(
+            [&] { rollback_unpublished_native(c); });
+        std::lock_guard life(c->life);
+        c->active = true;
+        c->thread = start_worker_thread(*c, "capture", [c] {
+          foresight::diagnostics::capture_state(0, 0, 0, true);
+          foresight::guarded_worker(
+              [&] {
+#ifdef __APPLE__
+                if (c->runtime.empty()) {
+                  const auto outcome = fs_macos_capture(
+                      c->target, c->playback, c->rate, c->cancel, c->macos,
+                      [c](const auto &bytes) { audio_frame(*c, bytes); },
+                      [c](const auto &event) { c->emit(event); },
+                      &c->echoCancellation);
+                  c->active = false;
+                  const bool failed = outcome == MacCaptureOutcome::failed;
+                  const bool cancelled =
+                      outcome == MacCaptureOutcome::cancelled;
+                  foresight::diagnostics::capture_state(failed      ? 9
+                                                        : cancelled ? 2
+                                                                    : 0,
+                                                        failed      ? 3
+                                                        : cancelled ? 4
+                                                                    : 2,
+                                                        0, false);
+                  c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
+                          "audio_state_v1\",\"state\":\"stopped\"}");
+                  return;
+                }
+#endif
+                int attempt = 0;
+                bool exhausted = false;
+                while (!c->cancel) {
+                  c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
+                          "audio_state_v1\",\"state\":\"connecting\"}");
+                  // PipeWire (including Ubuntu 24.04) has no --raw option. The
+                  // production path writes to an owned .raw FIFO so stdout
+                  // diagnostics cannot be PCM.
+                  std::vector<std::string> args{
+                      capture_runtime_command(c->runtime),
+                      "--format",
+                      "s16",
+                      "--rate",
+                      std::to_string(c->rate),
+                      "--channels",
+                      "1",
+                      "--target",
+                      c->target};
+                  if (c->playback || c->target != "auto") {
+                    args.push_back("--properties");
+                    std::string properties = "{ ";
+                    if (c->playback)
+                      properties += "stream.capture.sink = true ";
+                    // An explicitly selected device must not silently migrate
+                    // to another microphone/output when it disappears. Auto
+                    // continues following the session's default device; owned
+                    // retries reconnect the named target.
+                    if (c->target != "auto")
+                      properties += "node.dont-fallback = true "
+                                    "node.dont-reconnect = true ";
+                    args.push_back(properties + "}");
+                  }
+                  args.push_back("-");
+                  std::vector<unsigned char> residual;
+                  bool announced = false;
+                  int status = run(
+                      *c, args,
+                      [&](const char *data, size_t n) {
+                        if (!announced) {
+                          c->emit("{\"type\":\"state\",\"channel\":\"foresight."
+                                  "linux/"
+                                  "audio_state_v1\",\"state\":\"capturing\"}");
+                          announced = true;
+                          attempt = 0;
+                        }
+                        residual.insert(residual.end(), data, data + n);
+                        size_t frame = c->playback
+                                           ? size_t(c->rate * 40 / 1000) * 2
+                                           : residual.size() & ~size_t(1);
+                        while (frame && residual.size() >= frame) {
+                          std::vector<unsigned char> bytes(
+                              residual.begin(), residual.begin() + frame);
+                          audio_frame(*c, bytes);
+                          residual.erase(residual.begin(),
+                                         residual.begin() + frame);
+                          if (!c->playback)
+                            break;
+                        }
+                      },
+                      false,
+                      c->runtime.empty() ||
+                          std::filesystem::path(c->runtime).filename() ==
+                              "pw-record");
+                  if (c->cancel) {
+                    residual.resize(residual.size() & ~size_t(1));
+                    if (!residual.empty())
+                      audio_frame(*c, residual);
+                    break;
+                  }
+                  foresight::diagnostics::worker_failed(10, 3, status, 0);
+                  c->emit(
+                      "{\"type\":\"gap\",\"channel\":\"foresight.linux/"
                       "audio_state_v1\",\"reason\":\"device_or_pipewire_lost\","
                       "\"discarded_bytes\":" +
                       std::to_string(residual.size()) +
                       ",\"exit_status\":" + std::to_string(status) + "}");
-              if (++attempt >= 5) {
+                  if (++attempt >= 5) {
+                    exhausted = true;
+                    c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
+                            "audio_state_v1\",\"state\":\"failed\",\"message\":"
+                            "\"Capture "
+                            "retries exhausted; select device and restart\"}");
+                    break;
+                  }
+                  for (int i = 0; i < 10 * attempt && !c->cancel; ++i)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+                c->active = false;
+                foresight::diagnostics::capture_state(exhausted   ? 9
+                                                      : c->cancel ? 2
+                                                                  : 0,
+                                                      exhausted   ? 3
+                                                      : c->cancel ? 4
+                                                                  : 2,
+                                                      0, false);
+                c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
+                        "audio_state_v1\",\"state\":\"stopped\"}");
+              },
+              [&](const std::string &) {
+                c->active = false;
+                foresight::diagnostics::worker_failed(0, 3, 0, 0);
+                foresight::diagnostics::capture_state(0, 3, 0, false);
                 c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
                         "audio_state_v1\",\"state\":\"failed\",\"message\":"
-                        "\"Capture "
-                        "retries exhausted; select device and restart\"}");
-                break;
-              }
-              for (int i = 0; i < 10 * attempt && !c->cancel; ++i)
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-            c->active = false;
-            c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
-                    "audio_state_v1\",\"state\":\"stopped\"}");
-          },
-          [&](const std::string &) {
-            c->active = false;
-            c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
-                    "audio_state_v1\",\"state\":\"failed\",\"message\":"
-                    "\"Capture failed\"}");
-          });
-    });
-    return owned_capture.release();
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return nullptr;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return nullptr;
-  }
+                        "\"Capture failed\"}");
+              },
+              [c] { c->active = false; });
+        });
+        rollback_capture.release();
+        return c;
+      },
+      static_cast<void *>(nullptr));
 }
 void fs_capture_finish(void *h) {
-  try {
-    if (!h)
-      return;
-    auto *c = static_cast<Capture *>(h);
-    c->stop();
-    c->join();
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-  }
+  foresight::ffi_barrier_void([&] {
+    if (h) {
+      NativeUse use(h, NativeKind::capture);
+      if (use) {
+        {
+          std::lock_guard lock(native_handles().mutex);
+          if (legacy_capture_work(use.control, false))
+            return;
+        }
+        auto &capture = *static_cast<Capture *>(h);
+        capture.stop();
+#ifdef __APPLE__
+        fs_macos_capture_revoke(capture.macos);
+#endif
+        capture.join();
+#ifdef __APPLE__
+        fs_macos_capture_close(capture.macos);
+#endif
+      }
+    }
+  });
 }
 void fs_capture_stop(void *h) {
-  try {
-    if (!h)
-      return;
-    auto *c = static_cast<Capture *>(h);
-    c->stop();
-    c->join();
-    retire_events(c);
-    delete c;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-  }
+  foresight::ffi_barrier_void([&] {
+    if (h)
+      retire_legacy(h, NativeKind::capture);
+  });
 }
 double fs_pcm_rms(const int16_t *samples, size_t n) {
-  try {
-    if (!samples || !n)
-      return 0;
-    long double sum = 0;
-    for (size_t i = 0; i < n; ++i) {
-      long double v = samples[i] / 32767.0L;
-      sum += v * v;
-    }
-    return std::sqrt(double(sum / n));
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return 0;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return 0;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> double {
+        if (!samples || !n)
+          return 0;
+        long double sum = 0;
+        for (size_t i = 0; i < n; ++i) {
+          long double v = samples[i] / 32767.0L;
+          sum += v * v;
+        }
+        return std::sqrt(double(sum / n));
+      },
+      0);
 }
 size_t fs_resample_pcm(const int16_t *input, size_t n, int in_rate,
                        int16_t *out, size_t capacity, int out_rate) {
-  try {
-    if (!input || !out || !n || in_rate <= 0 || out_rate <= 0)
-      return 0;
-    size_t count = std::min(capacity, size_t(uint64_t(n) * out_rate / in_rate));
-    for (size_t i = 0; i < count; ++i) {
-      double pos = double(i) * in_rate / out_rate;
-      size_t a = std::min(size_t(pos), n - 1), b = std::min(a + 1, n - 1);
-      out[i] =
-          int16_t(std::lround(input[a] + (input[b] - input[a]) * (pos - a)));
-    }
-    return count;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return 0;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return 0;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> size_t {
+        if (!input || !out || !n || in_rate <= 0 || out_rate <= 0)
+          return 0;
+        size_t count =
+            std::min(capacity, size_t(uint64_t(n) * out_rate / in_rate));
+        for (size_t i = 0; i < count; ++i) {
+          double pos = double(i) * in_rate / out_rate;
+          size_t a = std::min(size_t(pos), n - 1), b = std::min(a + 1, n - 1);
+          out[i] = int16_t(
+              std::lround(input[a] + (input[b] - input[a]) * (pos - a)));
+        }
+        return count;
+      },
+      0);
 }
 }
 
@@ -1834,129 +1967,154 @@ static int process_inspection_failure(pid_t value) {
 
 extern "C" int fs_process_matches(int64_t value, const char *socket,
                                   const char *storage, const char *instance) {
-  try {
-    if (value <= 0 || value > INT32_MAX || !socket || !storage || !instance)
-      return 0;
-    const auto prefix = std::to_string(value) + "-";
-    if (std::string(instance).rfind(prefix, 0) != 0)
-      return 0;
-    std::vector<std::string> args;
-    std::string executable;
+  return foresight::ffi_barrier(
+      [&]() -> int {
+        if (value <= 0 || value > INT32_MAX || !socket || !storage || !instance)
+          return 0;
+        const auto prefix = std::to_string(value) + "-";
+        if (std::string(instance).rfind(prefix, 0) != 0)
+          return 0;
+        std::vector<std::string> args;
+        std::string executable;
 #ifdef __APPLE__
-    char executable_buffer[PROC_PIDPATHINFO_MAXSIZE];
-    if (proc_pidpath(value, executable_buffer, sizeof(executable_buffer)) <= 0)
-      return process_inspection_failure(static_cast<pid_t>(value));
-    executable = executable_buffer;
-    proc_bsdinfo info{};
-    if (proc_pidinfo(value, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) !=
-        sizeof(info))
-      return process_inspection_failure(static_cast<pid_t>(value));
-    if (info.pbi_uid != getuid())
-      return 0;
-    // Helper IDs use system_clock's native ticks (microseconds on Apple
-    // libc++). Refuse an instance older than this process's creation,
-    // preventing stale persisted state from authorizing a reused PID with
-    // identical arguments.
-    std::string stamp = std::string(instance).substr(prefix.size());
-    if (stamp.empty() ||
-        stamp.find_first_not_of("0123456789") != std::string::npos)
-      return 0;
-    try {
-      uint64_t ticks = std::stoull(stamp);
-      const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
-                              std::chrono::system_clock::duration(ticks))
-                              .count();
-      if (micros < int64_t(info.pbi_start_tvsec) * 1000000 +
-                       int64_t(info.pbi_start_tvusec))
-        return 0;
-    } catch (...) {
-      return 0;
-    }
-    int mib[] = {CTL_KERN, KERN_PROCARGS2, static_cast<int>(value)};
-    size_t size = 0;
-    if (sysctl(mib, 3, nullptr, &size, nullptr, 0))
-      return process_inspection_failure(static_cast<pid_t>(value));
-    std::vector<char> bytes(size);
-    if (sysctl(mib, 3, bytes.data(), &size, nullptr, 0) || size < sizeof(int))
-      return process_inspection_failure(static_cast<pid_t>(value));
-    int count = 0;
-    memcpy(&count, bytes.data(), sizeof(count));
-    size_t offset = sizeof(count);
-    while (offset < size && bytes[offset])
-      ++offset; // executable path
-    while (offset < size && !bytes[offset])
-      ++offset; // padding
-    for (int i = 0; i < count && offset < size; ++i) {
-      size_t end = offset;
-      while (end < size && bytes[end])
-        ++end;
-      if (end == size)
-        return process_inspection_failure(static_cast<pid_t>(value));
-      args.emplace_back(bytes.data() + offset, end - offset);
-      offset = end + 1;
-    }
+        char executable_buffer[PROC_PIDPATHINFO_MAXSIZE];
+        if (proc_pidpath(value, executable_buffer, sizeof(executable_buffer)) <=
+            0)
+          return process_inspection_failure(static_cast<pid_t>(value));
+        executable = executable_buffer;
+        proc_bsdinfo info{};
+        if (proc_pidinfo(value, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) !=
+            sizeof(info))
+          return process_inspection_failure(static_cast<pid_t>(value));
+        if (info.pbi_uid != getuid())
+          return 0;
+        // Helper IDs use system_clock's native ticks (microseconds on Apple
+        // libc++). Refuse an instance older than this process's creation,
+        // preventing stale persisted state from authorizing a reused PID with
+        // identical arguments.
+        std::string stamp = std::string(instance).substr(prefix.size());
+        if (stamp.empty() ||
+            stamp.find_first_not_of("0123456789") != std::string::npos)
+          return 0;
+        try {
+          uint64_t ticks = std::stoull(stamp);
+          const auto micros =
+              std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::system_clock::duration(ticks))
+                  .count();
+          if (micros < int64_t(info.pbi_start_tvsec) * 1000000 +
+                           int64_t(info.pbi_start_tvusec))
+            return 0;
+        } catch (...) {
+          return 0;
+        }
+        int mib[] = {CTL_KERN, KERN_PROCARGS2, static_cast<int>(value)};
+        size_t size = 0;
+        if (sysctl(mib, 3, nullptr, &size, nullptr, 0))
+          return process_inspection_failure(static_cast<pid_t>(value));
+        std::vector<char> bytes(size);
+        if (sysctl(mib, 3, bytes.data(), &size, nullptr, 0) ||
+            size < sizeof(int))
+          return process_inspection_failure(static_cast<pid_t>(value));
+        int count = 0;
+        memcpy(&count, bytes.data(), sizeof(count));
+        size_t offset = sizeof(count);
+        while (offset < size && bytes[offset])
+          ++offset; // executable path
+        while (offset < size && !bytes[offset])
+          ++offset; // padding
+        for (int i = 0; i < count && offset < size; ++i) {
+          size_t end = offset;
+          while (end < size && bytes[end])
+            ++end;
+          if (end == size)
+            return process_inspection_failure(static_cast<pid_t>(value));
+          args.emplace_back(bytes.data() + offset, end - offset);
+          offset = end + 1;
+        }
 #else
-    struct stat info{};
-    std::string path = "/proc/" + std::to_string(value);
-    if (stat(path.c_str(), &info))
-      return process_inspection_failure(static_cast<pid_t>(value));
-    if (info.st_uid != getuid())
-      return 0;
-    std::error_code error;
-    executable = std::filesystem::read_symlink(path + "/exe", error).string();
-    if (error)
-      return process_inspection_failure(static_cast<pid_t>(value));
-    std::ifstream input(path + "/cmdline", std::ios::binary);
-    if (!input)
-      return process_inspection_failure(static_cast<pid_t>(value));
-    std::string arg;
-    while (std::getline(input, arg, '\0'))
-      args.push_back(arg);
+        struct stat info{};
+        std::string path = "/proc/" + std::to_string(value);
+        if (stat(path.c_str(), &info))
+          return process_inspection_failure(static_cast<pid_t>(value));
+        if (info.st_uid != getuid())
+          return 0;
+        std::error_code error;
+        executable =
+            std::filesystem::read_symlink(path + "/exe", error).string();
+        if (error)
+          return process_inspection_failure(static_cast<pid_t>(value));
+        std::ifstream input(path + "/cmdline", std::ios::binary);
+        if (!input)
+          return process_inspection_failure(static_cast<pid_t>(value));
+        std::string arg;
+        while (std::getline(input, arg, '\0'))
+          args.push_back(arg);
 #endif
-    if (args.size() < 3 || args[1] != socket || args[2] != storage)
-      return 0;
-    const auto name = std::filesystem::path(args[0]).filename().string();
-    const auto actual = std::filesystem::path(executable).filename().string();
-    return (name == "ForesightHelper" || name == "foresight-helper") &&
-                   actual == name
-               ? 1
-               : 0;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+        if (args.size() < 3 || args[1] != socket || args[2] != storage)
+          return 0;
+        const auto name = std::filesystem::path(args[0]).filename().string();
+        const auto actual =
+            std::filesystem::path(executable).filename().string();
+        return (name == "ForesightHelper" || name == "foresight-helper") &&
+                       actual == name
+                   ? 1
+                   : 0;
+      },
+      -1);
 }
 
 extern "C" int fs_set_runtime_environment(const char *key, const char *value) {
-  try {
-    if (!key || !value)
-      return -1;
-    static const std::set<std::string> allowed{
-        "FORESIGHT_LITERT_LIBRARY",  "FORESIGHT_LITERT_BACKEND",
-        "FORESIGHT_WHISPER_BACKEND", "FORESIGHT_WHISPER_DEVICE",
-        "FORESIGHT_HELPER",          "FORESIGHT_LITERT_CACHE",
-        "FORESIGHT_WHISPER_RUNTIME", "FORESIGHT_WHISPER_WORKER",
-        "PYTHONPYCACHEPREFIX",       "LD_LIBRARY_PATH"};
-    if (!allowed.count(key))
-      return -1;
-    std::lock_guard lock(foresight::launch_mutex);
-    if (foresight::runtime_environment_sealed) {
-      // Fresh Dart isolates may replay the same resolved runtime map. Keep the
-      // sealed process environment immutable while accepting that exact no-op.
-      const char *current = std::getenv(key);
-      return current && std::strcmp(current, value) == 0 ? 0 : -1;
-    }
-    return setenv(key, value, 1) == 0 ? 0 : -1;
-
-  } catch (const std::exception &barrier_error) {
-    foresight::report_barrier_error(barrier_error.what());
-    return -1;
-  } catch (...) {
-    foresight::report_barrier_error("unknown C++ exception");
-    return -1;
-  }
+  return foresight::ffi_barrier(
+      [&]() -> int {
+        if (!key || !value)
+          return -1;
+        static const std::set<std::string> allowed{
+            "FORESIGHT_LITERT_LIBRARY",  "FORESIGHT_LITERT_BACKEND",
+            "FORESIGHT_WHISPER_BACKEND", "FORESIGHT_WHISPER_DEVICE",
+            "FORESIGHT_HELPER",          "FORESIGHT_LITERT_CACHE",
+            "FORESIGHT_WHISPER_RUNTIME", "FORESIGHT_WHISPER_WORKER",
+            "PYTHONPYCACHEPREFIX",       "LD_LIBRARY_PATH",
+            "FORESIGHT_LOG_LEVEL"};
+        if (!allowed.count(key))
+          return -1;
+        const bool logging = std::strcmp(key, "FORESIGHT_LOG_LEVEL") == 0;
+        auto level = foresight::diagnostics::Level::off;
+        if (logging) {
+          using Level = foresight::diagnostics::Level;
+          if (std::strcmp(value, "error") == 0)
+            level = Level::error;
+          else if (std::strcmp(value, "warn") == 0)
+            level = Level::warn;
+          else if (std::strcmp(value, "info") == 0)
+            level = Level::info;
+          else if (std::strcmp(value, "debug") == 0)
+            level = Level::debug;
+          else if (std::strcmp(value, "trace") == 0)
+            level = Level::trace;
+          else if (std::strcmp(value, "off") != 0)
+            return -1;
+        }
+        std::lock_guard lock(foresight::launch_mutex_for_process());
+        static bool logging_configured = false;
+        if (foresight::runtime_environment_sealed) {
+          // Fresh Dart isolates may replay the same resolved runtime map. Keep
+          // the sealed process environment immutable while accepting that exact
+          // no-op.
+          // An inherited spelling is not evidence that the native queue's
+          // level was installed before handles sealed configuration.
+          if (logging && !logging_configured)
+            return -1;
+          const char *current = std::getenv(key);
+          return current && std::strcmp(current, value) == 0 ? 0 : -1;
+        }
+        if (setenv(key, value, 1) != 0)
+          return -1;
+        if (logging) {
+          foresight::diagnostics::configure(level);
+          logging_configured = true;
+        }
+        return 0;
+      },
+      -1);
 }

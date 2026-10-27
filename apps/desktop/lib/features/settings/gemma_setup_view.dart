@@ -14,7 +14,7 @@ class GemmaSetupDialog extends StatefulWidget {
   final StoreReader store;
   final bool Function()? ownerCurrent;
   final ModelPreferenceWriter savePreference;
-  final GemmaDownload Function()? createDownload;
+  final ModelDownloader Function()? createDownload;
   final LocalModelFinder findLocalModel;
   final LocalModelFinder findLocalCandidate;
   final bool firstRun, needsEmbedding, needsGeneration;
@@ -154,11 +154,16 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
       widget.store,
       model,
       savePreference: widget.savePreference,
+      ownerCurrent: () => active && !cancelled,
       openUri: widget.environment.openUri,
     ))
       throw const ModelDownloadCancelled();
     if (!active || cancelled) throw const ModelDownloadCancelled();
-    return download!.download(
+    final downloader = download ??= widget.createDownload?.call();
+    if (downloader == null) {
+      throw StateError('Model download service is unavailable');
+    }
+    return downloader.download(
       model,
       directory,
       progress: reportProgress,
@@ -166,9 +171,8 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
     );
   }
 
-  GemmaDownload? download;
+  ModelDownloader? download;
 
-  Process? preflight;
   bool working = false, cancelled = false;
   String status = '', error = '';
   int received = 0, total = 0;
@@ -208,7 +212,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
     } catch (failure) {
       if (active)
         setState(() {
-          error = failure.toString();
+          error = modelSetupFailureMessage(failure);
           checkingCache = false;
         });
     }
@@ -225,7 +229,6 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
   void cancel() {
     cancelled = true;
     download?.cancel();
-    preflight?.kill();
   }
 
   @override
@@ -283,32 +286,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
           );
       }
       final installGeneration = widget.needsGeneration && !isCurrent(model);
-      download = widget.createDownload?.call() ?? GemmaDownload();
-      final process = preflight = await widget.environment.start(
-        widget.runner,
-        ['--check'],
-      );
-      final out = process.stdout.listen((_) {}),
-          err = process.stderr.listen((_) {});
-      try {
-        if (!active || cancelled) {
-          process.kill();
-          return;
-        }
-        final code = await process.exitCode.timeout(
-          const Duration(seconds: 30),
-        );
-        if (!active || cancelled) return;
-        if (code != 0)
-          throw StateError(
-            'The local Gemma runtime is not ready. Use local model setup to install or configure it.',
-          );
-      } finally {
-        process.kill();
-        await out.cancel();
-        await err.cancel();
-        preflight = null;
-      }
+      download = null;
       if (!active || cancelled) return;
       if (!embeddingReady) {
         setState(() => status = 'Checking downloaded EmbeddingGemma 2...');
@@ -358,9 +336,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
     } catch (failure) {
       if (active && !cancelled)
         setState(() {
-          error = failure is StateError
-              ? failure.message.toString()
-              : 'Unable to download or load this model. Retry or use local model setup.';
+          error = modelSetupFailureMessage(failure);
         });
     } finally {
       clock.stop();

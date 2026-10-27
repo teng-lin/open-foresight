@@ -12,11 +12,14 @@ int main(int argc, char **argv) {
     return 0;
   }
   setenv("FORESIGHT_HELPER", argv[0], 1);
-  Engine engine;
-  engine.runtime = argv[0];
-  engine.model = "fixture";
-  Conversation conversation;
-  conversation.engine = &engine;
+  auto *engine_handle = fs_engine_create(argv[0], "/dev/null");
+  if (!engine_handle)
+    return 10;
+  auto &engine = *static_cast<Engine *>(engine_handle);
+  auto *conversation_handle = fs_conversation_create(engine_handle);
+  if (!conversation_handle)
+    return 11;
+  auto &conversation = *static_cast<Conversation *>(conversation_handle);
   setenv("FORESIGHT_TEST_THREAD_FAILURE", "generation", 1);
   if (fs_generate(&conversation, "retry", "prompt") != -1 || engine.busy ||
       conversation.active || conversation.requests.count("retry"))
@@ -27,20 +30,31 @@ int main(int argc, char **argv) {
   conversation.join();
   if (engine.busy || conversation.active || engine.state != "ready")
     return 3;
-  Speech speech;
-  speech.runtime = argv[0];
-  speech.model = "fixture";
+  auto *speech_handle = fs_speech_create(argv[0], "/dev/null");
+  if (!speech_handle)
+    return 12;
+  auto &speech = *static_cast<Speech *>(speech_handle);
   speech.samples = {1, 2, 3};
   setenv("FORESIGHT_TEST_THREAD_FAILURE", "speech", 1);
   if (fs_speech_finish(&speech, "speech") != -1 || speech.active ||
+      !speech.events.empty() ||
       speech.samples != std::vector<int16_t>({1, 2, 3}))
     return 4;
   unsetenv("FORESIGHT_TEST_THREAD_FAILURE");
-  const auto handles = poll_registry.size();
+  if (fs_speech_finish(speech_handle, "speech-retry") != 0)
+    return 14;
+  speech.join(); // Legacy pointer ABI retains local synchronous lifecycle.
+  if (speech.thread.joinable())
+    return 16;
+  const auto handles = poll_registry().size();
   setenv("FORESIGHT_TEST_THREAD_FAILURE", "capture", 1);
   if (fs_capture_start_with_options("auto", 0, 16000, 0) ||
-      poll_registry.size() != handles)
+      poll_registry().size() != handles)
     return 5;
   unsetenv("FORESIGHT_TEST_THREAD_FAILURE");
+  fs_speech_destroy(speech_handle);
+  if (fs_conversation_destroy(conversation_handle, 1) != 0 ||
+      fs_engine_destroy(engine_handle) != 0)
+    return 13;
   return 0;
 }

@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -86,6 +87,7 @@ Matcher rpc(RpcErrorCode code) =>
     throwsA(isA<RpcError>().having((error) => error.code, 'code', code));
 
 void main() {
+  bootstrapSqlSupportFixture();
   for (final mode in ['cancel', 'clear', 'close']) {
     test('answer owns retrieval and native cleanup through $mode', () async {
       final root = createTestTempDirectorySync('answer-owner-');

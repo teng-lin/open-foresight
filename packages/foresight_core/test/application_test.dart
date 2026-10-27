@@ -1,3 +1,5 @@
+import 'sql_support_test_bootstrap.dart';
+import 'package:foresight_test_support/google_connections.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
@@ -6,8 +8,7 @@ import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
 
-class TestDomain extends Domain {
-  final indexed = <String>[];
+class TestDomain extends AdapterDomain {
   TestDomain(super.store, super.helper);
   @override
   Future<void> index(String id, {bool Function()? current}) async {
@@ -58,6 +59,7 @@ class BrowserAuth extends GoogleAuth {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Application app;
   bool ownsApp = false;
   late Directory directory;
@@ -75,7 +77,7 @@ void main() {
     addTearDown(() async {
       if (ownsApp) await app.close();
       domain.close();
-      domain.generator?.close();
+      await domain.drain();
       await domain.helper.close();
       domain.store.close();
       directory.deleteSync(recursive: true);

@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/src/application_services/answer_coordinator.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -165,6 +166,7 @@ class OperationsAnswers extends AnswerGateway {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late OperationsDomain domain;
   late Application app;
@@ -199,7 +201,7 @@ void main() {
     addTearDown(() async {
       await app.close();
       domain.close();
-      domain.generator?.close();
+      await domain.drain();
       await domain.helper.close();
       domain.store.close();
       await server.shutdown();
@@ -925,7 +927,18 @@ void main() {
       domain.rejectIndex = true;
       await app.indexMeeting(id);
       await Future<void>.delayed(Duration.zero);
-      expect(app.recordingState, contains('index worker disconnected'));
+      expect(domain.indexed, isEmpty);
+      domain.resumeSources();
+      await expectLater(app.indexMeeting(id), throwsStateError);
+      expect(domain.store.sources.single['state'], 'failed');
+      expect(
+        domain.store.sources.single['error'],
+        'Transcript indexing could not complete; saved for retry.',
+      );
+      expect(
+        domain.store.rows('SELECT * FROM meeting_index_jobs'),
+        hasLength(1),
+      );
       expect(domain.store.sources.single['revision'], 1);
       domain.rejectIndex = false;
       domain.resumeSources();

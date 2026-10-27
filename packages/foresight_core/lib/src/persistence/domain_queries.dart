@@ -1,6 +1,7 @@
 import 'package:sqlite3/sqlite3.dart';
 
 import '../read_models.dart';
+import 'source_contents.dart';
 import '../store.dart';
 import 'model_store.dart';
 import 'read_schema_guard.dart';
@@ -27,6 +28,16 @@ final class DomainQueries {
   T _snapshot<T>(T Function() read) =>
       readSnapshot(db, read, supportedVersion: supportedVersion);
 
+  int? generatedTranscriptMeeting(String id) => _snapshot(() {
+    final rows = db.select(
+      'SELECT m.meeting_id FROM meeting_transcript_sources m '
+      'JOIN sources s ON s.id=m.source_id '
+      'WHERE s.id=? AND s.generated=1 AND s.deleted=0',
+      [id],
+    );
+    return rows.isEmpty ? null : rows.single['meeting_id'] as int;
+  });
+
   List<String> pendingHelperDeletes() => _snapshot(
     () => [
       for (final row in db.select(
@@ -51,9 +62,13 @@ final class DomainQueries {
 
   String graphSourceContent(Object? id) => _snapshot(
     () =>
-        db.select('SELECT content FROM sources WHERE id=? AND deleted=0', [
-              id,
-            ]).single['content']
+        db
+                .select('SELECT * FROM sources WHERE id=? AND deleted=0', [id])
+                .map(
+                  (row) =>
+                      materializeSource(db, Map<String, Object?>.from(row)),
+                )
+                .single['content']
             as String,
   );
 
@@ -61,7 +76,11 @@ final class DomainQueries {
     final rows = db.select('SELECT * FROM sources WHERE id=? AND deleted=0', [
       id,
     ]);
-    return rows.isEmpty ? null : SourceDocument.fromRow(rows.first);
+    return rows.isEmpty
+        ? null
+        : SourceDocument.fromRow(
+            materializeSource(db, Map<String, Object?>.from(rows.first)),
+          );
   });
 
   void sourceState(String id, String state, [String error = '']) => _snapshot(
@@ -102,7 +121,10 @@ final class DomainQueries {
   List<String> pendingSources() => _snapshot(
     () => [
       for (final row in db.select(
-        "SELECT id FROM sources WHERE deleted=0 AND state IN ('indexing','pending') ORDER BY title",
+        "SELECT s.id FROM sources s WHERE s.deleted=0 AND (s.state IN ('indexing','pending') "
+        "OR (s.generated=1 AND s.state='failed' AND EXISTS("
+        'SELECT 1 FROM meeting_transcript_sources m JOIN meeting_index_jobs j '
+        'ON j.meeting_id=m.meeting_id WHERE m.source_id=s.id))) ORDER BY s.title',
       ))
         row['id'] as String,
     ],

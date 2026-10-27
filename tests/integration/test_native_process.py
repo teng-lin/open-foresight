@@ -151,6 +151,13 @@ def check_runtime_environment_replay(lib, helper, directory):
 def main():
     library, helper = sys.argv[1:]
     lib = ctypes.CDLL(library)
+    abi = getattr(lib, "fs_abi_version", None)
+    if abi is None:
+        raise RuntimeError("Incompatible native ABI")
+    abi.argtypes = []
+    abi.restype = ctypes.c_int
+    if abi() != 1:
+        raise RuntimeError("Incompatible native ABI")
     lib.fs_process_matches.argtypes = [ctypes.c_int64] + [ctypes.c_char_p] * 3
     lib.fs_process_matches.restype = ctypes.c_int
     lib.fs_set_runtime_environment.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
@@ -160,7 +167,10 @@ def main():
     for key in (b"FORESIGHT_LITERT_LIBRARY",):
         assert lib.fs_set_runtime_environment(key, b"/controlled/native/library") == 0
     assert lib.fs_set_runtime_environment(b"FORESIGHT_HELPER", os.fsencode(helper)) == 0
-    with tempfile.TemporaryDirectory(prefix="fs-identity-", dir="/tmp") as directory:
+    with tempfile.TemporaryDirectory(
+        prefix="fs-identity-",
+        dir=os.environ.get("FORESIGHT_TEST_TEMP_ROOT") or tempfile.gettempdir(),
+    ) as directory:
         os.chmod(directory, 0o700)
         socket, storage = (
             str(Path(directory) / "helper.sock"),

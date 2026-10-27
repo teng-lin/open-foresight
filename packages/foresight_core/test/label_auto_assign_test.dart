@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
@@ -25,6 +26,7 @@ class DeferredEmbeddingDomain extends Domain {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late Store store;
   setUp(() {

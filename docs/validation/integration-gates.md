@@ -227,6 +227,49 @@ reports. Do not suppress a report without recording its cause and rationale.
 An unsupported runtime or missing evidence is a failed probe, not a clean TSan
 result.
 
+## Native leak sanitizer
+
+`tools/run_native_sanitizers.sh` enables LeakSanitizer (`detect_leaks=1`) for
+every CTest process and child, including the preloaded CPython ctypes hosts
+and helpers. Settings come from `tools/sanitizer_settings.py`, which the
+probe verifier also uses. It is kept out of `tools/sanitizer_runtime.py` so
+the instrumented SDK cache key does not change. Leak reports remain in the
+`asan.*` or `ubsan.*` evidence files: the combined runtime can use either log
+prefix. Both prefixes fail the gate for address, leak and UB reports.
+ThreadSanitizer settings are unchanged.
+
+CPython hosts run with `PYTHONMALLOC=malloc`. pymalloc arenas are mmap regions
+that LSan does not scan, so they would make live interpreter objects look
+leaked. Suppressions live only in `tools/lsan-cpython.supp`, and the settings
+module refuses to produce settings unless every rule is an exact
+`leak:^Symbol$` for an allowlisted CPython retained-allocation frame with its
+own captured-stack `# reason:` comment. The active rules cover
+`Py_InitializeFromConfig`, marshal constant reader `r_object`, parser name
+reader `_PyPegen_name_token`, and the `itertoolsmodule_exec`,
+`collections_exec`, and `_ctypes_add_objects` built-in module initializers.
+They come from the clean CPython 3.13.17 host's retained allocation traces.
+Eval-loop, call/import dispatch, finalization, generic allocator, ctypes
+call-wrapper/libffi, module-path and wildcard rules are rejected because
+application calls run beneath them. Allocation traces retain 128 frames to
+keep recursive frozen-module reads attached to their specific startup owner.
+Another interpreter build must pass the same clean-host and deliberately
+leaking-host controls; unexpected allocations remain failures to diagnose.
+
+`tools/verify_native_sanitizers.py` must pass before the suite runs. With the
+gate's settings and suppression file it requires:
+
+| Probe | Required result |
+| --- | --- |
+| `leak` | A native executable's unreachable 4242-byte block is reported and exits nonzero. |
+| `retained` | A graph held by a static pointer, like native process-lifetime registries, exits 0 without a report. |
+| `python-host-clean` | The CI virtualenv Python loads an instrumented library through ctypes, retains a graph and exits 0 without a report. |
+| `python-host-application-leak` | The same host leaks 4243 bytes inside that library through ctypes, and the leak is reported. This checks that the planted application leak remains visible with the same Python call stack and suppressions. |
+
+The existing `address` and `undefined` probes now use the same settings.
+Each probe's log and `settings.txt` are kept in `native-sanitizer-evidence`.
+Processes that end by signal or `_exit` skip the exit-time leak check. LSan
+does not cover those paths.
+
 ## Probe index
 
 `tools/integration_probes.json` records every `tools/test_*.py` and
@@ -271,3 +314,65 @@ Workspace clear stress validation on 2026-10-18: 50 invocations at concurrency f
 Installed release and Preview `standard` validation both import generated PDF and RTF fixtures through the exact installed application service's Parser and sandbox, verifying persisted source URI, known extracted text and the real platform adapter. No developer Dart runtime substitutes for the installed service. Standard validation has no model fixtures, so a recorded post-parse indexing failure does not establish indexing or inference; the probe requires that extraction and storage already succeeded. Full acceptance runs the same document check alongside its model tests.
 
 TSan triage on 2026-10-18: the first hosted run (39146727197) passed all five helper targets and 24/25 CTest targets overall. The lifecycle fixture restored Python's process environment immediately after asynchronous capture startup, racing `posix_spawnp` on the native worker. The fixture now keeps its environment override until `fs_capture_stop` joins the worker. No suppression was added. After that change, all 14 standalone native TSan targets and 50 repeated capture-tail fixture invocations passed locally without race reports. The current-head hosted rerun remains the final confirmation.
+
+## Compiled first-run model acquisition
+
+`tests/service/test_service_process.py::test_compiled_first_run_setup_download_restart_retry_adoption_and_indexing`
+owns the tiny first-run journey. It freshly compiles the standard service and MCP
+with the verified diagnostic Worker's exact public defines, and runs
+`apps/desktop/integration_test/first_run_models_test.dart` as a native Flutter
+application on an isolated display. It opens the actual first-run model surface;
+it does not use `finishOnboarding` to mark setup complete.
+
+The catalog substitution requires both the existing
+`FORESIGHT_ENABLE_TEST_HOOKS=true` compile flag and an immutable
+`FORESIGHT_MODEL_CATALOG_TEST_BASE64` define (JSON is base64-encoded because the Dart AOT CLI splits define values at
+commas). Without the flag, the fixture define
+has no effect. Entries require checksum-pinned bytes no larger than 64 KiB at
+literal loopback URLs. Each redirect must remain one of the exact compiled
+fixture URLs. Normal products retain the pinned catalog and HTTPS validation.
+The real acquisition coordinator and reaped download worker retain consent,
+range staging, checksum validation and publication ownership. These synthetic
+bytes are not model weights: the controlled runtime and indexing fixture cannot
+establish real inference, real model loading or physical audio acceptance.
+
+The journey requires the pinned SDKs, a verified native/diagnostic companion
+build and an isolated native display. The compiled service/MCP suite owns those
+prerequisites; a selected first-run journey fails if they are missing. Retain its
+compile logs, service/Flutter output, JSON test events, download range ledger and
+partial journey report. Real-model acceptance remains in the separate model gate.
+
+## Deferred macOS Keychain acceptance
+
+The existing opt-in fixture remains unchanged in
+`tests/integration/test_model_crypto_keychain.py`, enabled by
+`FORESIGHT_MODEL_CRYPTO_KEYCHAIN_TEST=1`. Its actual isolated Mac attempt failed
+with Security status -25308 (user interaction not allowed). Complete output is
+retained privately. The user deferred further Keychain testing; this is neither
+a passing result nor a current merge blocker. It does not establish Developer ID
+signing, Finder launch or TCC acceptance.
+
+## Opt-in native raw-query probe
+
+The inference runtime owner builds `native_raw_query_probe` from
+`tests/inference/raw_query_probe.cpp` in `native/CMakeLists.txt`. This is an
+explicit manual executable path, excluded from ordinary CTest execution because
+it needs an independently authorized local model and a prepared raw prompt.
+Neither assets nor a model license are acquired by this probe.
+
+After building that target with the reviewed LiteRT SDK and preparing its normal
+verified library identity metadata, run from a private task directory:
+
+```sh
+FORESIGHT_LITERT_LIBRARY=/owned/sdk/liblitert-lm.so \
+  /owned/build/native/native_raw_query_probe \
+  /owned/models/authorized-model.litertlm "$PREPARED_RAW_PROMPT" 512 cpu \
+  >raw-query.stdout 2>raw-query.stderr
+```
+
+Use the platform's `.dylib` path on macOS. Retain the exact model/library/prompt
+provenance and both streams privately, plus the exit status. A missing LiteRT
+library, identity, model or executable is an unmet prerequisite; it is never a
+pass for a selected LiteRT lane. A zero exit code establishes only that this raw
+prompt executed, not dedicated-model/tokenizer parity or inference quality. This
+unit supplies no authorized real-model evidence for that manual probe.

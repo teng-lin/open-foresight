@@ -1,10 +1,13 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:io';
 import 'package:foresight_core/src/store.dart';
+import 'package:foresight_core/src/persistence/schema_migrations.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/persistence/sqlite_runtime.dart';
 import 'package:test/test.dart';
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late String path;
   setUp(() {
@@ -79,4 +82,87 @@ void main() {
     );
     retried.close();
   });
+
+  Database schema21() {
+    final db = schema15();
+    db.execute(
+      "INSERT INTO meetings(id,title,state,revision) VALUES(42,'Legacy capture','completed',1)",
+    );
+    db.execute(
+      "INSERT INTO transcript(meeting_id,text,final,start_ms,end_ms,source) VALUES(42,'retained speech',1,10,20,'playback')",
+    );
+    db.execute(
+      "INSERT INTO sources(id,title,content,mime,revision,state,provenance) VALUES('meeting-42','Transcript','[Remote 10–20 ms] retained speech','text/plain',3,'indexed','meeting:42')",
+    );
+    final migrations = ApplicationMigrations(db);
+    for (var version = 16; version <= 21; version++) {
+      migrations.run(version);
+    }
+    db.execute('PRAGMA user_version=21');
+    return db;
+  }
+
+  test(
+    'v22 preserves legacy transcript bodies and adds projection without rewriting history',
+    () {
+      schema21().dispose();
+      final store = Store(path);
+      try {
+        expect(
+          store.sourceQueries.source('meeting-42')!.content,
+          '[Remote 10–20 ms] retained speech',
+        );
+        expect(store.rows('SELECT * FROM meeting_transcript_sources').single, {
+          'source_id': 'meeting-42',
+          'meeting_id': 42,
+        });
+        expect(store.rows('SELECT * FROM meeting_index_segments'), isEmpty);
+        expect(
+          store.contentHistory.revisions('sources', 'meeting-42'),
+          isEmpty,
+        );
+        expect(store.rows('PRAGMA user_version').single.values.single, 23);
+        expect(store.rows('PRAGMA foreign_key_check'), isEmpty);
+      } finally {
+        store.close();
+      }
+    },
+  );
+
+  test(
+    'v22 failure rolls back its complete DDL and retries from untouched v21',
+    () {
+      final db = schema21();
+      // Fail after earlier v22 CREATE statements, rather than before migration.
+      db.execute('CREATE TABLE meeting_index_segments(collision INTEGER)');
+      db.dispose();
+      expect(() => Store(path), throwsA(isA<SqliteException>()));
+      final failed = sqlite3.open(path);
+      expect(failed.select('PRAGMA user_version').single.values.single, 21);
+      expect(
+        failed.select(
+          "SELECT name FROM sqlite_master WHERE name IN ('meeting_index_progress','meeting_transcript_sources','source_contents')",
+        ),
+        isEmpty,
+      );
+      expect(
+        failed
+            .select("SELECT content FROM sources WHERE id='meeting-42'")
+            .single['content'],
+        '[Remote 10–20 ms] retained speech',
+      );
+      failed.execute('DROP TABLE meeting_index_segments');
+      failed.dispose();
+      final retried = Store(path);
+      try {
+        expect(retried.rows('PRAGMA user_version').single.values.single, 23);
+        expect(
+          retried.sourceQueries.source('meeting-42')!.content,
+          '[Remote 10–20 ms] retained speech',
+        );
+      } finally {
+        retried.close();
+      }
+    },
+  );
 }

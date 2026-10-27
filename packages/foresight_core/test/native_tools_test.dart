@@ -3,9 +3,17 @@ import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ffi';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:test/test.dart';
+
+final class ClosingJson {
+  ClosingJson(this.close);
+  final void Function() close;
+  Map<String, Object> toJson() {
+    close();
+    return {'type': 'null'};
+  }
+}
 
 void main() {
   final library = Platform.environment['FORESIGHT_NATIVE_LIBRARY'];
@@ -110,9 +118,132 @@ print('answer '+json.dumps(answer),flush=True)
       setUp(() {
         addTearDown(() async {
           runtime.close();
+          await runtime.closed;
           await directory.delete(recursive: true);
         });
       });
+
+      test(
+        'encoding callback cannot submit generation after closing its owner',
+        () async {
+          await expectLater(
+            runtime
+                .generate(
+                  'encoding-close',
+                  'Question',
+                  responseSchema: {
+                    'type': 'object',
+                    'controlled': ClosingJson(runtime.close),
+                  },
+                )
+                .toList(),
+            throwsA(
+              isA<RpcError>().having(
+                (error) => error.code,
+                'code',
+                RpcErrorCode.cancelled,
+              ),
+            ),
+          );
+          await runtime.closed;
+          expect(runtime.loaded, isFalse);
+        },
+      );
+
+      test(
+        'ownership notification cannot submit a released generation',
+        () async {
+          runtime.onOwnershipChanged = () {
+            if (runtime.loaded && runtime.generating) runtime.close();
+          };
+          await expectLater(
+            runtime
+                .generateConversation('notification-close', 'Question')
+                .toList(),
+            throwsA(
+              isA<RpcError>().having(
+                (error) => error.code,
+                'code',
+                RpcErrorCode.cancelled,
+              ),
+            ),
+          );
+          await runtime.closed;
+          expect(runtime.loaded, isFalse);
+        },
+      );
+
+      test(
+        'callback ownership is published before invocation and close can refuse invocation',
+        () async {
+          var notifications = 0, invoked = false;
+          runtime.onOwnershipChanged = () {
+            if (runtime.loaded && runtime.generating && ++notifications == 2) {
+              runtime.close();
+            }
+          };
+          await expectLater(
+            runtime
+                .generateWithTools(
+                  'callback-admission',
+                  'Question',
+                  tools: [referenceGoogleSearchTool()],
+                  dispatcher: ReferenceToolDispatcher({
+                    'google_search': (_) async {
+                      invoked = true;
+                      return 'obsolete';
+                    },
+                  }),
+                )
+                .toList(),
+            throwsA(
+              isA<RpcError>().having(
+                (error) => error.code,
+                'code',
+                RpcErrorCode.cancelled,
+              ),
+            ),
+          );
+          await runtime.closed;
+          expect(invoked, isFalse);
+        },
+      );
+
+      test(
+        'reentrant load from close cannot share the older attempt epoch',
+        () async {
+          var reentered = false;
+          Future<void>? winner;
+          runtime.onOwnershipChanged = () {
+            if (!runtime.loaded && !reentered) {
+              reentered = true;
+              winner = runtime.load(
+                '${directory.path}/runner',
+                '${directory.path}/asset',
+                backend: 'litert_lm',
+              );
+            }
+          };
+          await expectLater(
+            runtime.load(
+              '${directory.path}/runner',
+              '${directory.path}/asset',
+              backend: 'litert_lm',
+            ),
+            throwsA(
+              isA<RpcError>().having(
+                (error) => error.code,
+                'code',
+                RpcErrorCode.cancelled,
+              ),
+            ),
+          );
+          expect(winner, isNotNull);
+          await winner;
+          expect(runtime.loaded, isTrue);
+          expect(runtime.effectiveState['state'], 'ready');
+        },
+      );
 
       test(
         'installed LiteRT probe and load map legacy registrations to the canonical worker',
@@ -142,15 +273,14 @@ print(json.dumps({'native_stop_token_sequences':True}))
           runtimeConfiguration.environment['FORESIGHT_LITERT_RUNNER'] =
               alias.path;
           final model = '${directory.path}/asset';
-          final address = await probeNativeModel(
+          final probed = await probeNativeModel(
             library!,
             '/outside/legacy-python',
             model,
             backend: 'litert_lm',
           );
-          runtime.close();
-          runtime.engine = Pointer<Void>.fromAddress(address);
-          runtime.close();
+          probed.close();
+          await probed.closed;
           await runtime.load(
             '/outside/legacy-python',
             model,
@@ -199,7 +329,7 @@ print(json.dumps({'native_stop_token_sequences':True}))
               ),
             ),
           );
-          expect(runtime.engine.address, 0);
+          expect(runtime.engine, 0);
         },
       );
 
@@ -543,6 +673,11 @@ print(json.dumps({'native_stop_token_sequences':True}))
               ),
             ),
           );
+          expect(
+            runtime.generating,
+            isTrue,
+            reason: 'The cancelled callback still has an owned continuation',
+          );
           reply.complete('late reply');
           await Future<void>(() {});
           final next = await runtime
@@ -578,6 +713,8 @@ print(json.dumps({'native_stop_token_sequences':True}))
               .toList();
           await entered.future;
           runtime.close();
+          var closed = false;
+          final cleanup = runtime.closed.then((_) => closed = true);
           await expectLater(
             pending.timeout(const Duration(seconds: 2)),
             throwsA(
@@ -588,8 +725,13 @@ print(json.dumps({'native_stop_token_sequences':True}))
               ),
             ),
           );
+          expect(
+            closed,
+            isFalse,
+            reason: 'Store/library lifetime must outlast the callback',
+          );
           reply.complete('late reply after close');
-          await Future<void>(() {});
+          await cleanup;
           expect(runtime.loaded, isFalse);
           expect(runtime.generating, isFalse);
         },
@@ -613,8 +755,14 @@ print(json.dumps({'native_stop_token_sequences':True}))
             .toList();
         await entered.future;
         await expectLater(pending, throwsA(isA<TimeoutException>()));
-        expect(runtime.generating, isFalse);
+        expect(
+          runtime.generating,
+          isTrue,
+          reason: 'Timeout does not release callback ownership',
+        );
         reply.complete('too late');
+        await Future<void>(() {});
+        expect(runtime.generating, isFalse);
       });
     },
     skip: library == null

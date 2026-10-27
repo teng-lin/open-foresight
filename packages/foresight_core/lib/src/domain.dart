@@ -1,7 +1,11 @@
+import 'generation_runtime_slot.dart';
+import 'application_services/service_runtime_ports.dart';
+import 'package:meta/meta.dart';
+import 'application_services/service_workflow_ports.dart';
+import 'application_services/service_workspace_ports.dart';
 import 'cancellation.dart';
 export 'cancellation.dart' show CancellationWatch;
-import 'text_budget.dart' show boundUtf8;
-export 'text_budget.dart' show boundUtf8;
+export 'text_budget.dart' show boundUtf8, balancedTranscriptWindow;
 import 'rpc_error.dart';
 import 'package:clock/clock.dart';
 import 'model_setup.dart';
@@ -10,9 +14,9 @@ import 'platform_services.dart';
 import 'dart:async';
 import 'dart:developer' as developer;
 import 'model_gate.dart';
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:grpc/grpc.dart';
+import 'package:grpc/service_api.dart' as grpc_api;
 import 'store.dart';
 import 'persistence/domain_queries.dart';
 import 'helper.dart';
@@ -20,22 +24,72 @@ import 'native.dart';
 import 'web_search.dart';
 import 'web_content.dart';
 import 'generated/rag_service.pbgrpc.dart';
+import 'generated/transcript_index.pbgrpc.dart' as transcript;
 
 typedef GenerationRuntimeDiscovery =
     Future<NativeRuntime?> Function(
       Store store,
       String library, {
       bool Function()? current,
+      void Function(NativeRuntime)? onCandidate,
+      Future<void> Function(NativeRuntime)? retire,
     });
 
-class Domain {
+class Domain
+    implements
+        RecordingWorkspace,
+        SummaryWorkspace,
+        ModelWorkspace,
+        SourceOperationsPort,
+        GoogleWorkspacePort,
+        MeetingMutationPort,
+        WorkspaceResetPort,
+        ConversationWorkspacePort,
+        MeetingGenerationPort,
+        MeetingWorkflowPort,
+        NoteEnhancementPort,
+        RuntimeOperationsPort,
+        MeetingIndexingPort {
+  @override
   final Store store;
+
+  /// An explicit or bound owner snapshot is fixed at construction. Outside any
+  /// owner scope this is a legacy direct construction: each access returns a
+  /// fresh immutable snapshot of the boundary, as it read it before injection.
+  @override
+  RuntimeConfiguration get configuration =>
+      _configuration ?? legacyRuntimeSnapshot();
+  final RuntimeConfiguration? _configuration;
+  @override
   final Helper helper;
   late final _queries = DomainQueries(store);
-  NativeRuntime? generator;
+  @override
+  late final GenerationRuntimeSlot<NativeRuntime> generationRuntimes =
+      GenerationRuntimeSlot<NativeRuntime>(
+        closeRuntime: (runtime) => runtime.close(),
+        runtimeClosed: (runtime) => runtime.closed,
+        runtimeBusy: (runtime) => runtime.generating,
+        checkRuntime: (runtime) => runtime.checkAvailable(),
+        watchRuntime: (runtime, changed) =>
+            runtime.onOwnershipChanged = changed,
+        changed: () => onBackgroundSettled?.call(),
+      );
+  @override
+  NativeRuntime? get generator => generationRuntimes.visible;
+  @visibleForTesting
+  set generator(NativeRuntime? runtime) =>
+      generationRuntimes.installForTesting(runtime);
+  bool get generationBusy => generationRuntimes.busy;
+  @override
+  Object? get generationFailure => generationRuntimes.failure;
+  @override
+  bool get generationRestartRequired => generationRuntimes.restartRequired;
+  void stopGeneration() => generationRuntimes.stop();
+  @override
   final Clock clock;
+  @override
   final Timer Function(Duration, void Function()) createTimer;
-  final GenerationRuntimeDiscovery _discoverGeneration;
+  final GenerationRuntimeDiscovery? _discoverGeneration;
   Domain(
     this.store,
     this.helper, {
@@ -44,20 +98,28 @@ class Domain {
     Clock? clock,
     Timer Function(Duration, void Function())? createTimer,
     GenerationRuntimeDiscovery? discoverGeneration,
-  }) : modelGate = modelGate ?? const IdleModelGate(),
+    RuntimeConfiguration? configuration,
+  }) : _configuration =
+           configuration?.snapshot() ?? currentOwnerRuntimeSnapshot,
+       modelGate = modelGate ?? const IdleModelGate(),
        _webSearch = webSearch,
        clock = clock ?? const Clock(),
        createTimer = createTimer ?? Timer.new,
-       _discoverGeneration = discoverGeneration ?? discoverGenerationRuntime;
+       _discoverGeneration = discoverGeneration;
+  Future<void> Function(int, {bool Function()? current})?
+  indexMeetingTranscript;
+  @override
   ModelGate modelGate;
   SearchCallbacks? _webSearch;
   WebContentService? _ownedWebContent;
+  @override
   bool get webSearchAvailable =>
       _webSearch != null ||
       ((runtimeConfiguration['FORESIGHT_SEARCH_API_KEY'] ?? '').isNotEmpty &&
           (runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY'] ?? '')
               .isNotEmpty);
 
+  @override
   SearchCallbacks searchCallbacks() {
     if (!webSearchAvailable) {
       throw RpcError(
@@ -76,10 +138,13 @@ class Domain {
   }
 
   bool _closed = false;
+  @override
   bool get closed => _closed;
   int _workspaceGeneration = 0;
+  @override
   int get workspaceGeneration => _workspaceGeneration;
 
+  @override
   void checkWorkspace(int generation) {
     _checkOpen();
     if (generation != _workspaceGeneration) {
@@ -91,6 +156,7 @@ class Domain {
   }
 
   /// Invalidate work before deleting local data.
+  @override
   void invalidateWorkspace() {
     _workspaceGeneration++;
     checkCancellations();
@@ -107,12 +173,14 @@ class Domain {
     return watch;
   }
 
+  @override
   void checkCancellations() {
     for (final watch in _cancellations.toList()) {
       watch.check();
     }
   }
 
+  @override
   Future<T> awaitCurrent<T>(Future<T> shared, bool Function()? current) async {
     if (current == null) return shared;
     shared.ignore();
@@ -160,18 +228,22 @@ class Domain {
     }
   });
 
+  @override
   void cleanupClearedSources(List<String> sourceIds) {
     unawaited(retryPendingHelperDeletes().catchError((Object _) {}));
   }
 
   bool _sourcesPaused = false;
+  @override
   bool get sourcesPaused => _sourcesPaused;
   Completer<void>? _sourceWorkResumed;
+  @override
   void pauseSources() {
     _checkOpen();
     _sourcesPaused = true;
   }
 
+  @override
   void resumeSources() {
     _checkOpen();
     _sourcesPaused = false;
@@ -184,6 +256,7 @@ class Domain {
     signal?.complete();
   }
 
+  @override
   Future<void> waitForSourceWork({bool Function()? current}) async {
     void check() {
       _checkOpen();
@@ -205,8 +278,19 @@ class Domain {
 
   void close() {
     _closed = true;
+    stopGeneration();
+    indexMeetingTranscript = null;
+    checkCancellations();
     if (_ownedWebContent != null) unawaited(_ownedWebContent!.close());
     _wakeSourceWork();
+  }
+
+  /// Join owned RPC cancellation and channel teardown before the helper or
+  /// Store is released. Call [close] first to refuse later mutation admission.
+  Future<void> drain() async {
+    if (!_closed) throw StateError('Close Domain before draining its work');
+    checkCancellations();
+    await Future.wait<void>([_mutationTail, generationRuntimes.drain()]);
   }
 
   void _checkOpen() {
@@ -232,6 +316,7 @@ class Domain {
     return task;
   }
 
+  @override
   Future<Map<String, List<double>>> graphEmbeddings(
     List<Map<String, Object?>> sources,
   ) async {
@@ -258,7 +343,140 @@ class Domain {
     return result;
   }
 
+  /// One bounded operation-owned channel under the mutation queue isolates late
+  /// frames from a canceled stream from unrelated helper/control clients. The
+  /// pinned HTTP/2 transport otherwise treats late canceled response headers as
+  /// a connection error. No request or sibling is replayed to mask that race.
+  Future<T> _ownedIndexCall<T>(
+    ResponseFuture<T> Function(grpc_api.ClientChannel) invoke, {
+    bool Function()? current,
+  }) async {
+    if (_closed || (current != null && !current())) throw operationCancelled();
+    final channel = helperChannel(helper.socket);
+    try {
+      return await _awaitIndexResponse(invoke(channel), current: current);
+    } finally {
+      try {
+        await channel.terminate();
+      } catch (_) {
+        // Transport cleanup cannot replace the original operation outcome.
+      }
+    }
+  }
+
+  /// This watch belongs to the producer, not a subscriber racing its result.
+  /// Cancel the actual gRPC request, then join its response and cancellation
+  /// before the mutation queue releases the producer's reservation.
+  Future<T> _awaitIndexResponse<T>(
+    ResponseFuture<T> request, {
+    bool Function()? current,
+  }) async {
+    final generation = workspaceGeneration;
+    bool valid() =>
+        !_closed &&
+        generation == workspaceGeneration &&
+        (current?.call() ?? true);
+    final watch = whenCancelled(valid);
+    Future<void>? cancellation;
+    watch.future
+        .then<void>(
+          (_) {},
+          onError: (Object _) {
+            cancellation = Future<void>.sync(request.cancel);
+            cancellation!.ignore();
+          },
+        )
+        .ignore();
+    try {
+      final result = await request;
+      if (!valid()) throw operationCancelled();
+      return result;
+    } catch (_) {
+      if (!valid()) throw operationCancelled();
+      rethrow;
+    } finally {
+      watch.dispose();
+      try {
+        if (cancellation != null) await cancellation;
+      } catch (_) {
+        // Preserve the response/cancellation outcome after cleanup was tried.
+      }
+    }
+  }
+
+  /// Read the helper's committed incremental cursor after any durable purge.
+  /// The cursor is advisory; ApplyDelta checks it atomically before mutation.
+  @override
+  Future<transcript.TranscriptCursor> transcriptCursor(
+    String id, {
+    bool Function()? current,
+  }) => _serialize(() async {
+    if (current != null && !current()) throw operationCancelled();
+    final generation = workspaceGeneration;
+    if (_queries.helperDeletePending(id)) {
+      final deleted = await _ownedIndexCall(
+        (channel) => helperClient(channel).deleteDocument(
+          DeleteRequest(documentId: id, userId: helperUserId),
+          options: CallOptions(timeout: const Duration(seconds: 5)),
+        ),
+        current: current,
+      );
+      checkWorkspace(generation);
+      if (!deleted.success) throw StateError('Helper purge has not completed');
+      _queries.acknowledgeHelperDelete(id);
+    }
+    final result = await _ownedIndexCall(
+      (channel) => transcript.TranscriptIndexClient(channel).getCursor(
+        transcript.TranscriptCursorRequest(documentId: id),
+        options: CallOptions(timeout: const Duration(seconds: 5)),
+      ),
+      current: current,
+    );
+    checkWorkspace(generation);
+    return result;
+  });
+
+  /// Send only changed immutable transcript segments. No full source body is
+  /// read, concatenated or tokenized on this path. Cancellation retains the
+  /// mutation reservation until the actual helper RPC has settled.
+  @override
+  Future<transcript.TranscriptDeltaResult> applyTranscriptDelta(
+    transcript.TranscriptDelta delta, {
+    bool Function()? current,
+  }) async {
+    final generation = workspaceGeneration;
+    while (true) {
+      await waitForSourceWork(current: current);
+      checkWorkspace(generation);
+      final result = await _serialize(() async {
+        if (sourcesPaused) return null;
+        if (current != null && !current()) throw operationCancelled();
+        if (_queries.helperDeletePending(delta.documentId)) {
+          throw operationCancelled();
+        }
+        final result = await _ownedIndexCall(
+          (channel) => transcript.TranscriptIndexClient(channel).applyDelta(
+            delta,
+            options: CallOptions(timeout: const Duration(seconds: 45)),
+          ),
+          current: current,
+        );
+        checkWorkspace(generation);
+        return result;
+      });
+      if (result != null) return result;
+    }
+  }
+
+  @override
   Future<void> index(String id, {bool Function()? current}) async {
+    _checkOpen();
+    checkCancellations();
+    final route = indexMeetingTranscript;
+    if (route != null) {
+      final meeting = _queries.generatedTranscriptMeeting(id);
+      if (meeting != null) return route(meeting, current: current);
+    }
     final generation = workspaceGeneration;
     while (true) {
       // Wait outside the mutation queue so deletions can still proceed.
@@ -267,14 +485,15 @@ class Domain {
       final completed = await _serialize(() async {
         // Pause may have happened while an earlier mutation was finishing.
         if (sourcesPaused) return false;
-        await _index(id);
+        await _index(id, current: current);
         return true;
       });
       if (completed) return;
     }
   }
 
-  Future<void> _index(String id) async {
+  Future<void> _index(String id, {bool Function()? current}) async {
+    if (current != null && !current()) throw operationCancelled();
     final generation = workspaceGeneration;
     final source = _queries.activeSource(id);
     if (source == null) return;
@@ -289,9 +508,12 @@ class Domain {
     // A deterministic Calendar/meeting ID can be reused after clear. Delete the
     // old helper copy before indexing its replacement, within the mutation queue.
     if (_queries.helperDeletePending(id)) {
-      final deleted = await helper.client.deleteDocument(
-        DeleteRequest(documentId: id, userId: helperUserId),
-        options: CallOptions(timeout: const Duration(seconds: 5)),
+      final deleted = await _ownedIndexCall(
+        (channel) => helperClient(channel).deleteDocument(
+          DeleteRequest(documentId: id, userId: helperUserId),
+          options: CallOptions(timeout: const Duration(seconds: 5)),
+        ),
+        current: current,
       );
       checkWorkspace(generation);
       if (!deleted.success) throw StateError('Helper purge has not completed');
@@ -299,22 +521,29 @@ class Domain {
     }
     _queries.sourceState(id, 'indexing');
     try {
-      final r = await helper.client.indexDocument(
-        IndexRequest(
-          documentId: id,
-          content: source.content,
-          mimeType: source.mime,
-          userId: helperUserId,
-          maxTokensPerChunk: 480,
-          chunkOverlap: 5,
+      final r = await _ownedIndexCall(
+        (channel) => helperClient(channel).indexDocument(
+          IndexRequest(
+            documentId: id,
+            content: source.content,
+            mimeType: source.mime,
+            userId: helperUserId,
+            maxTokensPerChunk: 480,
+            chunkOverlap: 5,
+          ),
+          options: CallOptions(timeout: const Duration(minutes: 30)),
         ),
-        options: CallOptions(timeout: const Duration(minutes: 30)),
+        current: current,
       );
       checkWorkspace(generation);
       if (!r.success) throw StateError(r.errorMessage);
       _queries.sourceRevisionState(id, source.revision, 'indexed');
     } catch (e) {
       checkWorkspace(generation);
+      if (current != null && !current()) {
+        _queries.sourceRevisionState(id, source.revision, 'pending');
+        throw operationCancelled();
+      }
       // Cover the race before the first helper state event arrives. Other
       // preconditions and configured-model failures retain their normal errors.
       if (!_queries.hasModel('embedding') &&
@@ -329,9 +558,11 @@ class Domain {
     }
   }
 
+  @override
   Future<void> delete(String id) {
     _checkOpen();
     store.tombstone(id);
+    checkCancellations();
     return _serialize(() => _delete(id));
   }
 
@@ -361,6 +592,7 @@ class Domain {
 
   /// The note producer's lazy service getter shares an initialization future.
   /// Readiness policy and the single reset/reacquisition live in its caller.
+  @override
   Future<NativeRuntime?> noteEnhancementService() async {
     _checkOpen();
     if (generator?.loaded == true) return generator;
@@ -389,49 +621,57 @@ class Domain {
 
   /// Separate construction allows fixture runtimes to exercise real ownership.
   NativeRuntime createNoteEnhancementRuntime() =>
-      NativeRuntime(runtimeConfiguration.nativeLibrary);
+      NativeRuntime(configuration.nativeLibrary);
+
+  Future<NativeRuntime?> _discoverConfigured(
+    Store store,
+    String library, {
+    bool Function()? current,
+    void Function(NativeRuntime)? onCandidate,
+    Future<void> Function(NativeRuntime)? retire,
+  }) => discoverGenerationRuntime(
+    store,
+    library,
+    configuration: configuration,
+    current: current,
+    onCandidate: onCandidate,
+    retire: retire,
+  );
 
   Future<void> _initializeNoteEnhancementService() async {
-    final model = _queries.generationRegistration();
-    if (model == null) {
-      final candidate = await discoverGenerationRuntime(
-        store,
-        runtimeConfiguration.nativeLibrary,
-        current: () => !_closed,
-      );
-      if (_closed) {
-        candidate?.close();
-        _checkOpen();
+    final workspace = workspaceGeneration;
+    await generationRuntimes.replace((attempt) async {
+      final model = _queries.generationRegistration();
+      if (model == null) {
+        final config = configuration;
+        return discoverGenerationRuntime(
+          store,
+          config.nativeLibrary,
+          configuration: config,
+          current: attempt.current,
+          onCandidate: attempt.own,
+          retire: attempt.retire,
+        );
       }
-      if (candidate != null) generator = candidate;
-      return;
-    }
-    final candidate = createNoteEnhancementRuntime();
-    candidate.modelType =
-        model.modelType ?? referenceGenerationModelType(model.digest);
-    generator?.close();
-    generator = candidate;
-    try {
+      final candidate = createNoteEnhancementRuntime();
+      attempt.own(candidate);
+      candidate.modelType =
+          model.modelType ?? referenceGenerationModelType(model.digest);
       await candidate.load(
         model.runtime,
         model.path,
         backend: model.backend ?? 'llama_cpp',
       );
-      if (_closed || !identical(generator, candidate)) {
-        candidate.close();
-        _checkOpen();
-      }
-    } catch (_) {
-      if (_closed || !identical(generator, candidate)) candidate.close();
-      rethrow;
-    }
+      attempt.check();
+      return candidate;
+    }, current: () => !_closed && workspace == workspaceGeneration);
   }
 
+  @override
   Future<void> resetNoteEnhancementService() async {
     _checkOpen();
-    generator?.close();
-    generator = null;
     _noteServiceInitialization = null;
+    await generationRuntimes.reset();
   }
 
   Future<void>? _resuming;
@@ -452,6 +692,7 @@ class Domain {
   }
 
   bool get restoring => _resuming != null || _initialization != null;
+  @override
   Future<void> resume() => _resuming ??= _resume().whenComplete(() {
     _resuming = null;
     onBackgroundSettled?.call();
@@ -489,30 +730,38 @@ class Domain {
         if (!result.success) throw StateError(result.errorMessage);
       }
     }
-    if (generator == null && !_queries.hasModel('generation')) {
-      final candidate = await _discoverGeneration(
-        store,
-        runtimeConfiguration.nativeLibrary,
-        current: () => !_closed,
-      );
-      if (_closed) {
-        candidate?.close();
-        _checkOpen();
-      }
-      generator = candidate;
-    }
     if (generator == null) {
-      final gen = _queries.generationRegistration();
-      if (gen != null) {
-        generator = NativeRuntime(runtimeConfiguration.nativeLibrary);
-        generator!.modelType =
+      final workspace = workspaceGeneration;
+      await generationRuntimes.replace((attempt) async {
+        if (!_queries.hasModel('generation')) {
+          final config = configuration;
+          final candidate = await (_discoverGeneration ?? _discoverConfigured)(
+            store,
+            config.nativeLibrary,
+            current: attempt.current,
+            onCandidate: attempt.own,
+            retire: attempt.retire,
+          );
+          if (candidate != null) {
+            attempt.own(candidate);
+            return candidate;
+          }
+          attempt.check();
+        }
+        final gen = _queries.generationRegistration();
+        if (gen == null) return null;
+        final candidate = createNoteEnhancementRuntime();
+        attempt.own(candidate);
+        candidate.modelType =
             gen.modelType ?? referenceGenerationModelType(gen.digest);
-        await generator!.load(
+        await candidate.load(
           gen.runtime,
           gen.path,
           backend: gen.backend ?? 'llama_cpp',
         );
-      }
+        attempt.check();
+        return candidate;
+      }, current: () => !_closed && workspace == workspaceGeneration);
     }
     _checkOpen();
     await reconcile();
@@ -520,6 +769,7 @@ class Domain {
     schedulePendingSources();
   }
 
+  @override
   void schedulePendingSources() {
     unawaited(
       indexPendingSources().catchError((Object error) {
@@ -555,27 +805,4 @@ class Domain {
 
   bool citationCurrent(Map<String, Object?> citation) =>
       _queries.citationCurrent(citation['document_id'], citation['revision']);
-}
-
-/// UTF-8 bytes conservatively bound tokenizer input. Select the beginning,
-/// midpoint and ending rather than silently discarding the end of a meeting.
-String balancedTranscriptWindow(String text, int budget) {
-  if (utf8.encode(text).length <= budget) return text;
-  const omitted =
-      '\n[Transcript abridged: balanced beginning, middle and ending excerpts; omitted passages are not evidence.]\n';
-  final share = (budget - utf8.encode(omitted).length - 20) ~/ 3;
-  if (share < 1) {
-    throw StateError('Model context is too small for transcript excerpts');
-  }
-  final runes = text.runes.toList();
-  final head = boundUtf8(text, share);
-  final middle = boundUtf8(
-    String.fromCharCodes(runes.skip(runes.length ~/ 2)),
-    share,
-  );
-  final reverse = String.fromCharCodes(runes.reversed);
-  final tail = String.fromCharCodes(
-    boundUtf8(reverse, share).runes.toList().reversed,
-  );
-  return '$omitted$head\n[… ]\n$middle\n[… ]\n$tail';
 }

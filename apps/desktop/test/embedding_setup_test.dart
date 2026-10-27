@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import '../test_support/core_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -32,79 +33,85 @@ class EmbeddingSetupService extends RagServiceBase {
 }
 
 void main() {
-  testWidgets('GPU registration persists only after helper acceptance', (
-    tester,
-  ) async {
-    final temporary = createTestTempDirectorySync('foresight-embedding-setup-');
-    addTearDown(() {
-      if (temporary.existsSync()) temporary.deleteSync(recursive: true);
-    });
-    final original = File('${temporary.path}/old.litertlm')
-      ..writeAsStringSync('old registration');
-    final candidate = File('${temporary.path}/candidate.litertlm')
-      ..writeAsStringSync('candidate registration');
-    final store = Store('${temporary.path}/app.db');
-    await tester.runAsync(() => store.register('embedding', original.path, ''));
-    final previous = store
-        .rows("SELECT * FROM models WHERE kind='embedding'")
-        .single;
-    final service = EmbeddingSetupService();
-    final server = Server.create(services: [service]);
-    final socket = '${temporary.path}/helper.sock';
-    await tester.runAsync(
-      () => server.serve(
-        address: InternetAddress(socket, type: InternetAddressType.unix),
-        port: 0,
-      ),
-    );
-    final helper = OfflineHelper(socket, '${temporary.path}/helper');
-    try {
-      await tester.pumpWidget(
-        Foresight(
-          TestDesktopConnection(Application(Domain(store, helper))),
-          deviceLoader: () async => [],
-        ),
+  testWidgets(
+    'GPU registration persists only after helper acceptance',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final temporary = createTestTempDirectorySync(
+        'foresight-embedding-setup-',
       );
-      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
-      state.update(() {
-        state.navigate(WorkspaceTab.models);
+      addTearDown(() {
+        if (temporary.existsSync()) temporary.deleteSync(recursive: true);
       });
-      await tester.pumpAndSettle();
-      await tester.enterText(find.byType(TextField).at(0), candidate.path);
-      await tester.tap(find.text('Use GPU for EmbeddingGemma 2'));
-      await tester.pumpAndSettle();
-      Future<void> register() async {
-        await tester.runAsync(() async {
-          await tester.tap(find.text('Register and load'));
-          await eventually(() => state.busy != true);
-          expect(state.busy, false);
-        });
-        await tester.pumpAndSettle();
-      }
-
-      await register();
-      expect(service.requests.single.useGpu, true);
-      expect(find.text('GPU unavailable'), findsOneWidget);
-      expect(
-        store.rows("SELECT * FROM models WHERE kind='embedding'").single,
-        previous,
+      final original = File('${temporary.path}/old.litertlm')
+        ..writeAsStringSync('old registration');
+      final candidate = File('${temporary.path}/candidate.litertlm')
+        ..writeAsStringSync('candidate registration');
+      final store = Store('${temporary.path}/app.db');
+      await tester.runAsync(
+        () => store.register('embedding', original.path, ''),
       );
-      service.accept = true;
-      await register();
-      final installed = store
+      final previous = store
           .rows("SELECT * FROM models WHERE kind='embedding'")
           .single;
-      expect(installed['path'], candidate.absolute.path);
-      expect(installed['backend'], 'litert_lm_embedding_gpu');
-      expect(service.requests.length, 2);
-      expect(tester.takeException(), isNull);
-    } finally {
-      // Finish real HTTP/2 I/O outside the widget's fake clock before dispose
-      // requests the same idempotent shutdown.
-      await tester.runAsync(helper.close);
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.runAsync(server.shutdown);
-      temporary.deleteSync(recursive: true);
-    }
-  });
+      final service = EmbeddingSetupService();
+      final server = Server.create(services: [service]);
+      final socket = '${temporary.path}/helper.sock';
+      await tester.runAsync(
+        () => server.serve(
+          address: InternetAddress(socket, type: InternetAddressType.unix),
+          port: 0,
+        ),
+      );
+      final helper = OfflineHelper(socket, '${temporary.path}/helper');
+      try {
+        await tester.pumpWidget(
+          Foresight(
+            TestDesktopConnection(Application(Domain(store, helper))),
+            deviceLoader: () async => [],
+          ),
+        );
+        final state =
+            tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+        state.update(() {
+          state.navigate(WorkspaceTab.models);
+        });
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField).at(0), candidate.path);
+        await tester.tap(find.text('Use GPU for EmbeddingGemma 2'));
+        await tester.pumpAndSettle();
+        Future<void> register() async {
+          await tester.runAsync(() async {
+            await tester.tap(find.text('Register and load'));
+            await eventually(() => state.busy != true);
+            expect(state.busy, false);
+          });
+          await tester.pumpAndSettle();
+        }
+
+        await register();
+        expect(service.requests.single.useGpu, true);
+        expect(find.text('GPU unavailable'), findsOneWidget);
+        expect(
+          store.rows("SELECT * FROM models WHERE kind='embedding'").single,
+          previous,
+        );
+        service.accept = true;
+        await register();
+        final installed = store
+            .rows("SELECT * FROM models WHERE kind='embedding'")
+            .single;
+        expect(installed['path'], candidate.absolute.path);
+        expect(installed['backend'], 'litert_lm_embedding_gpu');
+        expect(service.requests.length, 2);
+        expect(tester.takeException(), isNull);
+      } finally {
+        // Finish real HTTP/2 I/O outside the widget's fake clock before dispose
+        // requests the same idempotent shutdown.
+        await tester.runAsync(helper.close);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.runAsync(server.shutdown);
+        temporary.deleteSync(recursive: true);
+      }
+    }),
+  );
 }

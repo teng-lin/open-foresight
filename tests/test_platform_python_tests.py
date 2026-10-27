@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 from types import SimpleNamespace
@@ -165,8 +166,29 @@ def test_full_quality_coverage_is_the_unchanged_authoritative_gate():
         for step in quality["jobs"]["python"]["steps"]
         if "--cov-config" in step.get("run", "")
     )
-    assert full.startswith("python -m pytest --cov --cov-config=.coveragerc")
-    assert "test_" not in full
+    from tools.pytest_parallel import pytest_command
+
+    arguments = shlex.split(full)
+    assert arguments[:2] == ["python", "tools/pytest_parallel.py"]
+    selection = arguments[2:]
+    assert selection == [
+        "--cov",
+        "--cov-config=.coveragerc",
+        "--cov-report=term",
+        "--cov-report=xml",
+        "--durations=20",
+        "--junitxml=coverage/python/junit.xml",
+    ], (
+        "The complete quality gate keeps every coverage/report argument and no test subset"
+    )
+    command = pytest_command(selection, workers=2)
+    assert command[:3] == [contracts.sys.executable, "-m", "pytest"]
+    assert command[3:-3] == selection
+    assert command[-3:] == [
+        "--numprocesses=2",
+        "--dist=loadfile",
+        "--max-worker-restart=0",
+    ]
     assert "fail_under = 95" in (ROOT / ".coveragerc").read_text()
 
 
@@ -176,7 +198,7 @@ def test_platform_workflows_run_host_contracts_instead_of_full_python_suite(plat
 
     filename = "macos.yml" if platform == "macos" else "linux-platform-stages.yml"
     workflow = yaml.safe_load((ROOT / ".github/workflows" / filename).read_text())
-    job = "macos" if platform == "macos" else "native-linux"
+    job = "macos-checks" if platform == "macos" else "native-linux"
     steps = workflow["jobs"][job]["steps"]
     commands = [step.get("run", "") for step in steps]
     assert (
@@ -189,6 +211,13 @@ def test_platform_workflows_run_host_contracts_instead_of_full_python_suite(plat
     assert not any("tools/coverage.sh" in run for run in commands)
     assert not any("-m pytest" in run for run in commands)
     if platform == "macos":
+        contract_step = next(
+            step
+            for step in steps
+            if "tools/platform_python_tests.py --platform macos" in step.get("run", "")
+        )
+        assert contract_step["if"] == "matrix.stage == 'contracts'"
+        assert "contracts" in workflow["jobs"][job]["strategy"]["matrix"]["stage"]
         assert "tests/test_macos_tools.py" in contracts.command(platform)
 
 
@@ -283,22 +312,38 @@ def test_platform_lists_execute_once_under_required_aggregate():
     workflows = ROOT / ".github/workflows"
     main = yaml.safe_load((workflows / "macos.yml").read_text())
 
-    def commands(workflow, name):
+    visited = set()
+
+    def commands(workflow, name, scope=("macos.yml",)):
+        identity = (scope, name)
+        if identity in visited:
+            return []
+        visited.add(identity)
         job = workflow["jobs"][name]
+        needs = job.get("needs", [])
+        if isinstance(needs, str):
+            needs = [needs]
+        ancestors = [
+            run for parent in needs for run in commands(workflow, parent, scope)
+        ]
         if "uses" in job and job["uses"].startswith("./.github/workflows/"):
             called = yaml.safe_load((ROOT / job["uses"]).read_text())
-            return [
-                step.get("run", "")
-                for child in called["jobs"].values()
-                for step in child.get("steps", [])
+            return ancestors + [
+                run
+                for child in called["jobs"]
+                for run in commands(called, child, (*scope, name))
             ]
         runs = [step.get("run", "") for step in job.get("steps", [])]
         if name == "linux-test":
             assert any("build_linux_container.sh --test-only" in run for run in runs)
-            # The sole required Linux test runner executes this transferred-tree
-            # entrypoint, where platform inventory and actual JUnit audit run.
-            runs.append((ROOT / "tools/linux_container_test.sh").read_text())
-        return runs
+            # The restored-tree entrypoint drops root before its runtime script
+            # executes platform inventory and the original JUnit audit.
+            entrypoint = (ROOT / "tools/linux_container_test.sh").read_text()
+            assert "bash tools/linux_container_runtime.sh" in entrypoint
+            runs.extend(
+                [entrypoint, (ROOT / "tools/linux_container_runtime.sh").read_text()]
+            )
+        return ancestors + runs
 
     required = main["jobs"]["platform-checks"]["needs"]
     runs = [command for name in required for command in commands(main, name)]

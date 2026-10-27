@@ -1,3 +1,5 @@
+import 'application_services/audio_operations.dart';
+import 'application_services/model_asset_acquisition.dart';
 import 'operations.dart';
 import 'operation_requests.dart';
 import 'operation_registry.dart';
@@ -80,7 +82,8 @@ class Application implements ModelGate, GenerationReservationGate {
   bool get _clearingWorkspace => _workspace.clearing;
   late final GenerationCoordinator _generation = GenerationCoordinator(
     restoring: () => domain.restoring,
-    generating: () => domain.generator?.generating ?? false,
+    generating: () => domain.generationBusy,
+    checkAvailable: domain.generationRuntimes.checkAvailable,
     recording: () => recording != null,
     closed: () => _closed,
     yieldAutomatic: () async {
@@ -116,6 +119,7 @@ class Application implements ModelGate, GenerationReservationGate {
       );
   final GoogleAuth? _auth;
   final AnswerGateway? _providedAnswers;
+  final AudioOperations _audioOperations;
   late final ModelRegistry _models;
 
   Application(
@@ -123,8 +127,12 @@ class Application implements ModelGate, GenerationReservationGate {
     GoogleAuth? auth,
     QueryCompletionRuntime? queryRuntime,
     AnswerGateway? answers,
+    AudioOperations? audioOperations,
   }) : _auth = auth,
-       _providedAnswers = answers {
+       _providedAnswers = answers,
+       _audioOperations =
+           audioOperations ??
+           AudioOperations(ownerConfiguration: () => domain.configuration) {
     _models = ModelRegistry(
       domain: domain,
       queryRuntime: queryRuntime,
@@ -135,6 +143,7 @@ class Application implements ModelGate, GenerationReservationGate {
     );
     domain.modelGate = this;
     domain.onBackgroundSettled = changed;
+    domain.indexMeetingTranscript = _meetingIndexer.indexMeeting;
     _googleMaintenance.initialize();
   }
 
@@ -206,6 +215,7 @@ class Application implements ModelGate, GenerationReservationGate {
     meetings: _meetings,
     capture: _capture,
     changed: changed,
+    stateChanges: changes.stream,
   );
   late final RecordingController _recordingController = RecordingController(
     domain: domain,
@@ -244,6 +254,7 @@ class Application implements ModelGate, GenerationReservationGate {
   late final SourceOperations _sources = SourceOperations(
     domain: domain,
     accounts: _googleMaintenance,
+    awaitSearchReadiness: _meetingIndexer.awaitStoppedIndexes,
   );
   late final WorkspaceAdmin _workspace = WorkspaceAdmin(
     domain: domain,
@@ -251,9 +262,17 @@ class Application implements ModelGate, GenerationReservationGate {
     proactive: proactive,
     accounts: _googleMaintenance,
   );
+  late final ModelAssetAcquisitionCoordinator _assetDownloads =
+      ModelAssetAcquisitionCoordinator(
+        store: store,
+        changed: changed,
+        ownerConfiguration: () => domain.configuration,
+      );
   late final RuntimeOperations _runtime = RuntimeOperations(
+    audio: _audioOperations,
     domain: domain,
     identity: _identity,
+    assetDownloads: _assetDownloads,
     generation: _generation,
     models: _models,
     workflow: _workflow,
@@ -276,7 +295,7 @@ class Application implements ModelGate, GenerationReservationGate {
     changed: changed,
   );
   late final WorkspaceOperations _workspaceOperations = WorkspaceOperations(
-    domain: domain,
+    store: store,
     proactive: proactive,
     recording: _recordingController,
     notes: _notes,
@@ -293,6 +312,7 @@ class Application implements ModelGate, GenerationReservationGate {
         ..._sources.handlers,
         ..._googleMaintenance.handlers,
         ..._models.handlers,
+        ..._assetDownloads.handlers,
       ]);
   Set<Operation> get registeredOperations => _registry.operations;
 
@@ -313,6 +333,7 @@ class Application implements ModelGate, GenerationReservationGate {
   int get proactiveWork => _automaticAnswers.activeWork;
   int get transcriptComputing => _notes.computing;
   bool get backgroundBusy =>
+      _meetingIndexer.busy ||
       _generation.configuring ||
       domain.resumeInProgress ||
       domain.initializationPending ||
@@ -323,7 +344,8 @@ class Application implements ModelGate, GenerationReservationGate {
       _notes.computing > 0 ||
       domain.mutating > 0 ||
       _models.acquiring ||
-      (domain.generator?.generating ?? false);
+      _assetDownloads.busy ||
+      domain.generationBusy;
 
   void changed() {
     if (!_closed) changes.add(null);
@@ -331,6 +353,8 @@ class Application implements ModelGate, GenerationReservationGate {
 
   Map<String, Object?>? get generationState => _runtime.generationState;
   Map<String, Object?> get captureState => _runtime.captureState;
+  Map<String, Object?> get modelAssetDownloadState =>
+      _assetDownloads.state.toWire();
 
   Future<Object?> call(
     String method,
@@ -512,34 +536,67 @@ class Application implements ModelGate, GenerationReservationGate {
   Future<void> startRecording(int id) =>
       _recordingController.startRecording(id);
   Future<void> stopRecording() => _recordingController.stopRecording();
-  void pauseRecording([int? id]) => _recordingController.pauseRecording(id);
-  void resumeRecording([int? id]) => _recordingController.resumeRecording(id);
+  Future<void> pauseRecording([int? id]) =>
+      _recordingController.pauseRecording(id);
+  Future<void> resumeRecording([int? id]) =>
+      _recordingController.resumeRecording(id);
+
+  Future<void> recoverMeetingIndexes() => _meetingIndexer.recover();
+  @visibleForTesting
+  Map<String, int> get meetingIndexWork => _meetingIndexer.workMetrics;
 
   Future<void> close() => _closing ??= _close();
 
   Future<void> _close() async {
     if (_closed) return;
     _closed = true;
-    _summary.stop();
-    _workflow.stop();
-    _googleMaintenance.stop();
-    _models.stop();
-    _recordingController.stopScheduling();
-    _notes.stop();
-    await _models.cancelAcquisition();
-    await proactive.close();
-    await _automaticAnswers.close();
-    await _generation.close();
-    await _summary.close();
-    await _workflow.close();
-    await _notes.close();
-    await _models.close();
-    try {
-      await _googleMaintenance.close();
-      await _recordingController.close();
-    } finally {
-      await captureLevelChanges.close();
-      await changes.close();
+    Object? failure;
+    StackTrace? failureStack;
+    void attempt(void Function() operation) {
+      try {
+        operation();
+      } catch (error, stack) {
+        failure ??= error;
+        failureStack ??= stack;
+      }
     }
+
+    Future<void> join(Future<void> Function() operation) async {
+      try {
+        await operation();
+      } catch (error, stack) {
+        failure ??= error;
+        failureStack ??= stack;
+      }
+    }
+
+    attempt(_meetingIndexer.stop);
+    attempt(_summary.stop);
+    attempt(_workflow.stop);
+    attempt(_googleMaintenance.stop);
+    attempt(domain.stopGeneration);
+    attempt(_models.stop);
+    attempt(_assetDownloads.stop);
+    attempt(_recordingController.stopScheduling);
+    // Stop physical capture now. Canceled/paused index producers must already
+    // know they are closing before the recording owner joins their Futures.
+    final recordingClose = _recordingController.close();
+    recordingClose.ignore();
+    attempt(_notes.stop);
+    await join(_models.cancelAcquisition);
+    await join(_assetDownloads.close);
+    await join(proactive.close);
+    await join(_automaticAnswers.close);
+    await join(_generation.close);
+    await join(_summary.close);
+    await join(_workflow.close);
+    await join(_notes.close);
+    await join(_models.close);
+    await join(_googleMaintenance.close);
+    await join(() => recordingClose);
+    await join(_meetingIndexer.close);
+    await join(captureLevelChanges.close);
+    await join(changes.close);
+    if (failure != null) Error.throwWithStackTrace(failure!, failureStack!);
   }
 }

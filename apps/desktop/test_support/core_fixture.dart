@@ -5,6 +5,7 @@ library;
 export 'package:foresight_core/src/agent_access.dart';
 export 'package:foresight_core/src/answer_source_scope.dart';
 export 'package:foresight_core/src/application.dart';
+export 'package:foresight_core/src/application_services/audio_operations.dart';
 export 'package:foresight_core/src/audio_devices.dart';
 export 'package:foresight_core/src/domain.dart';
 export 'package:foresight_core/src/gemma_download.dart';
@@ -29,3 +30,14 @@ export 'package:foresight_core/src/speech_models.dart';
 export 'package:foresight_core/src/sqlite_read_session.dart';
 export 'package:foresight_core/src/sqlite_store_reader.dart';
 export 'package:foresight_core/src/store.dart';
+
+export 'package:foresight_core/src/diagnostics/session.dart'
+    show
+        LoggingSession,
+        DiagnosticConfiguration,
+        DiagnosticEvent,
+        DiagnosticComponent,
+        DiagnosticHealthState,
+        DiagnosticIdentity;
+export 'package:foresight_core/src/diagnostics/storage.dart'
+    show DiagnosticSink, DiagnosticRole;

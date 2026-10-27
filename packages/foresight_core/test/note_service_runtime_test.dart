@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
@@ -19,6 +20,7 @@ class FixtureRuntime extends NativeRuntime {
   final Object? loadFailure;
   final loadStarted = Completer<void>();
   bool _ready = false;
+  int epoch = 0;
   int loads = 0;
   int closes = 0;
   int conversations = 0;
@@ -41,6 +43,7 @@ class FixtureRuntime extends NativeRuntime {
     String model, {
     String backend = 'llama_cpp',
   }) async {
+    final owner = epoch;
     loads++;
     loadedRuntime = runtime;
     loadedModel = model;
@@ -48,12 +51,16 @@ class FixtureRuntime extends NativeRuntime {
     loadStarted.complete();
     if (loadFailure case final failure?) throw failure;
     if (loadGate case final gate?) await gate.future;
+    if (owner != epoch) {
+      throw RpcError(RpcErrorCode.cancelled, 'Fixture load cancelled');
+    }
     _ready = readyAfterLoad;
   }
 
   @override
   void close() {
     closes++;
+    epoch++;
     _ready = false;
   }
 
@@ -96,6 +103,7 @@ class FixtureDomain extends Domain {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Application app;
   late Directory directory;
   late Store store;
@@ -128,7 +136,7 @@ void main() {
     addTearDown(() async {
       await app.close();
       domain.close();
-      domain.generator?.close();
+      await domain.drain();
       await helper.close();
       store.close();
       directory.deleteSync(recursive: true);

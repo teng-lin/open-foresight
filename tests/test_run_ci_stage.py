@@ -237,7 +237,18 @@ def test_native_runner_publishes_distinct_runtime_and_compilation_archives(
     def build(*args):
         for name in (
             "build/services/helper/ForesightHelper",
+            "build/services/helper/ForesightHelperTest",
             "build/native/libforesight_native.so",
+            "build/native/libforesight_sql_support.so",
+            "build/native/libforesight_sql_support.dylib",
+            "build/native/libforesight_diagnostic_support.so",
+            "build/native/libforesight_diagnostic_support.dylib",
+            "build/native/foresight-diagnostic-launcher",
+            "build/native/diagnostic-native-inputs.json",
+            "build/native/diagnostic-toolchain-metadata.json",
+            "build/native/diagnostic-products.json",
+            "build/native/diagnostic-sql-inputs.json",
+            "build/native/runtime-support-build.json",
             "build/_deps/compiler/object.o",
         ):
             target = tmp_path / name
@@ -288,4 +299,229 @@ def test_native_runner_publishes_distinct_runtime_and_compilation_archives(
         runtime["source_commit"],
     )
     assert (target / "build/services/helper/ForesightHelper").is_file()
+    assert (target / "build/services/helper/ForesightHelperTest").read_bytes() == (
+        tmp_path / "build/services/helper/ForesightHelperTest"
+    ).read_bytes()
+    for relative in (
+        "build/native/libforesight_sql_support.so",
+        "build/native/libforesight_sql_support.dylib",
+        "build/native/libforesight_diagnostic_support.so",
+        "build/native/libforesight_diagnostic_support.dylib",
+        "build/native/foresight-diagnostic-launcher",
+        "build/native/diagnostic-native-inputs.json",
+        "build/native/diagnostic-toolchain-metadata.json",
+        "build/native/diagnostic-products.json",
+        "build/native/diagnostic-sql-inputs.json",
+        "build/native/runtime-support-build.json",
+    ):
+        assert (target / relative).read_bytes() == (tmp_path / relative).read_bytes()
     assert not (target / "build/_deps").exists()
+
+
+def test_service_miss_builds_own_current_products_before_tests(tmp_path):
+    with patch.object(runner.subprocess, "run") as command:
+        runner.execute(tmp_path, "linux", "service", False, [])
+    assert len(command.call_args_list) == 2
+    first, second = [c.args[0] for c in command.call_args_list]
+    assert first == [
+        "bash",
+        str(tmp_path / "tools/build.sh"),
+        "--platform",
+        "linux",
+        "--stage",
+        "core",
+        "--build-only",
+    ]
+    assert second == [
+        "bash",
+        str(tmp_path / "tools/build.sh"),
+        "--platform",
+        "linux",
+        "--stage",
+        "service",
+    ]
+    assert all(
+        c.kwargs["check"] is True and c.kwargs["timeout"] == 3600
+        for c in command.call_args_list
+    )
+
+
+def test_failed_service_product_build_never_starts_service_tests(tmp_path):
+    with patch.object(
+        runner.subprocess,
+        "run",
+        side_effect=subprocess.CalledProcessError(7, ["controlled-build"]),
+    ) as command:
+        with pytest.raises(subprocess.CalledProcessError):
+            runner.execute(tmp_path, "linux", "service", False, [])
+    assert command.call_count == 1
+    assert command.call_args.args[0][-3:] == ["--stage", "core", "--build-only"]
+
+
+@pytest.mark.parametrize(
+    "parents,inputs",
+    [
+        (
+            {"native": "b" * 64, "core": "c" * 64, "desktop": "d" * 64},
+            {"native": "native", "core": "old-core"},
+        ),
+        ({"native": "b" * 64}, {"native": "native", "core": "old-core"}),
+        ({}, {}),
+    ],
+)
+def test_service_refuses_old_test_parent_recipe_before_restore_or_cache(
+    tmp_path, parents, inputs
+):
+    with (
+        patch.object(runner.cache, "git", return_value=b"a" * 40),
+        patch.object(runner, "restore_input") as restore,
+        patch.object(runner.cache, "find") as find,
+    ):
+        with pytest.raises(ValueError, match="requires"):
+            runner.run(
+                tmp_path,
+                "linux",
+                "service",
+                {"compiler": "fixture"},
+                parents,
+                {k: tmp_path / v for k, v in inputs.items()},
+                "repo",
+                1,
+                "pull_request",
+                False,
+                [],
+            )
+    restore.assert_not_called()
+    find.assert_not_called()
+
+
+def test_service_native_only_recipe_binds_current_source_and_native_before_lookup(
+    tmp_path,
+):
+    with (
+        patch.object(runner.cache, "git", return_value=b"a" * 40),
+        patch.object(runner, "restore_input") as restore,
+        patch.object(
+            runner.cache, "fingerprint", side_effect=RuntimeError("captured")
+        ) as fingerprint,
+        patch.object(runner.cache, "find") as find,
+    ):
+        with pytest.raises(RuntimeError, match="captured"):
+            runner.run(
+                tmp_path,
+                "linux",
+                "service",
+                {"compiler": "fixture"},
+                {"native": "b" * 64},
+                {"native": tmp_path / "native"},
+                "repo",
+                1,
+                "pull_request",
+                False,
+                [],
+            )
+    restore.assert_called_once_with(
+        tmp_path, "linux", "native", tmp_path / "native", "b" * 64, "a" * 40
+    )
+    assert fingerprint.call_args.kwargs["parents"] == {"native": "b" * 64}
+    find.assert_not_called()
+
+
+def test_old_service_test_parent_identity_cannot_equal_native_only_source_build(
+    tmp_path,
+):
+    from tools import ci_native_cache
+
+    with patch.object(
+        ci_native_cache,
+        "source_inputs",
+        return_value={"public-source": ["100644", "blob", "a" * 40]},
+    ):
+        common = {"environment": {"compiler": "controlled"}, "root": tmp_path}
+        old = runner.cache.fingerprint(
+            "linux",
+            "service",
+            parents={"native": "b" * 64, "core": "c" * 64, "desktop": "d" * 64},
+            **common,
+        )
+        current = runner.cache.fingerprint(
+            "linux", "service", parents={"native": "b" * 64}, **common
+        )
+    assert current != old
+
+
+def test_service_cache_hit_reuses_verified_result_without_claiming_fresh_products(
+    tmp_path, monkeypatch
+):
+    native = tmp_path / "native-input"
+    input_artifact(native)
+    cached = tmp_path / "cached"
+    cached.mkdir()
+    manifest = {
+        "files": {"test-results/service/results.xml": {"fixture": "verified result"}}
+    }
+    output = tmp_path / "build/ci-stage/linux-service"
+
+    def pack(*args):
+        output.mkdir(parents=True)
+        (output / "content.json").write_text("{}")
+        return manifest
+
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "outputs"))
+    with (
+        patch.object(runner.cache, "git", return_value=b"a" * 40),
+        patch.object(runner.cache, "fingerprint", return_value="d" * 64),
+        patch.object(
+            runner.cache,
+            "find",
+            return_value={
+                "hit": True,
+                "download_dir": str(cached),
+                "run_id": 123,
+                "receipt": {"content": manifest},
+            },
+        ) as find,
+        patch.object(runner.payloads, "unpack") as unpack,
+        patch.object(runner.payloads, "pack", side_effect=pack),
+        patch.object(
+            runner.cache,
+            "publish",
+            return_value={
+                "identity": "d" * 64,
+                "artifact_name": "verified-service-result",
+            },
+        ) as publish,
+        patch.object(
+            runner.cache, "source_inputs", return_value={"controlled": "same source"}
+        ),
+        patch.object(runner.subprocess, "run") as command,
+    ):
+        result = runner.run(
+            tmp_path,
+            "linux",
+            "service",
+            {"compiler": "controlled"},
+            {"native": "b" * 64},
+            {"native": native},
+            "repo",
+            1,
+            "pull_request",
+            False,
+            [],
+        )
+    assert result["cache_hit"] is True
+    assert result["compilation_cache_hit"] is False
+    assert not (tmp_path / "build/application").exists()
+    command.assert_not_called()
+    assert find.call_args.args[3] == "d" * 64
+    assert find.call_args.args[5] == {"native": "b" * 64}
+    assert find.call_args.args[6] == tmp_path
+    assert unpack.call_args_list[-1].args == (
+        tmp_path,
+        "linux",
+        "service",
+        cached / "payload.tar.gz",
+        manifest,
+    )
+    assert publish.call_args.args[4] == {"native": "b" * 64}
+    assert publish.call_args.args[7] == manifest

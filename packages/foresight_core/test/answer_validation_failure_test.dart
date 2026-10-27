@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
@@ -63,6 +64,7 @@ class FailedWebRuntime extends ToolRuntime {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test('failed web answers discard partial body and local citations', () async {
     final directory = createTestTempDirectorySync('failed-web-answer-');
     final store = Store('${directory.path}/app.db');

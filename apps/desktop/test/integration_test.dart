@@ -144,7 +144,9 @@ void main() {
           );
         }
       } finally {
-        d.generator?.close();
+        await app.close();
+        d.close();
+        await d.drain();
         await helper.close();
         store.close();
         tmp.deleteSync(recursive: true);

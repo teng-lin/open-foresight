@@ -1,15 +1,123 @@
+import 'sql_support_test_bootstrap.dart';
+import 'support/diagnostic_child_exit_probe.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:isolate';
 import 'dart:io';
 import 'dart:convert';
-import 'package:foresight_test_support/hooked_service.dart' show ServiceGates;
+import 'dart:ffi' as ffi;
+import 'package:ffi/ffi.dart';
+import 'package:foresight_test_support/capture_process.dart';
+import 'package:foresight_test_support/hooked_service.dart'
+    show ServiceGates, sourceServiceCompileDefines;
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/rpc_error.dart';
+import 'package:foresight_core/src/diagnostics/events.dart'
+    show DiagnosticRecord;
+import 'package:foresight_core/src/diagnostics/session.dart'
+    show DiagnosticHealthSnapshot;
 import 'package:foresight_core/src/service.dart';
 import 'package:test/test.dart';
+
+Future<Map<String, Object?>> _handoffResources(
+  List<String> defines,
+  String launch,
+  List<String> profileDirectories,
+) async {
+  final result = <String, Object?>{
+    'os': Platform.operatingSystem,
+    'osVersionNumeric': RegExp(
+      r'\d+(?:\.\d+)+',
+    ).firstMatch(Platform.operatingSystemVersion)?.group(0),
+    'dartVersion': Platform.version.split(' ').first,
+    'processors': Platform.numberOfProcessors,
+    'launchMode': launch.endsWith('.dill') ? 'portable-kernel' : 'source-jit',
+  };
+  for (final key in ['NATIVE_ID', 'BUILD_ID', 'DART_SDK_ID']) {
+    final prefix = '-DFORESIGHT_DIAGNOSTIC_$key=';
+    final value = defines
+        .where((value) => value.startsWith(prefix))
+        .firstOrNull;
+    if (value != null) {
+      final id = value.substring(prefix.length);
+      if (RegExp(r'^[0-9a-f]{64}$').hasMatch(id)) result[key] = id;
+    }
+  }
+  try {
+    result['fixtureFdCount'] =
+        Directory(Platform.isMacOS ? '/dev/fd' : '/proc/self/fd')
+            .listSync(followLinks: false)
+            .where((entry) => int.tryParse(entry.path.split('/').last) != null)
+            .length;
+    final limits = calloc<ffi.Uint64>(2);
+    try {
+      final getrlimit = ffi.DynamicLibrary.process()
+          .lookupFunction<
+            ffi.Int32 Function(ffi.Int32, ffi.Pointer<ffi.Uint64>),
+            int Function(int, ffi.Pointer<ffi.Uint64>)
+          >('getrlimit');
+      if (getrlimit(Platform.isMacOS ? 8 : 7, limits) == 0) {
+        result['nofileSoft'] = limits[0];
+        final hard = limits[1];
+        result['nofileHardUnlimited'] = hard < 0 || hard >= 0x7fffffffffffffff;
+        if (hard >= 0 && hard < 0x7fffffffffffffff) result['nofileHard'] = hard;
+      }
+    } finally {
+      calloc.free(limits);
+    }
+  } catch (_) {
+    result['fdMetadataAvailable'] = false;
+  }
+  try {
+    final sdkAncestors = <String>[];
+    const sdkPrefix = '-DFORESIGHT_DIAGNOSTIC_DART_SDK_ROOT=';
+    final sdkDefine = defines
+        .where((value) => value.startsWith(sdkPrefix))
+        .firstOrNull;
+    if (sdkDefine != null) {
+      final sdk = sdkDefine.substring(sdkPrefix.length);
+      if (sdk.startsWith('/') && !sdk.split('/').contains('..')) {
+        var directory = Directory(sdk);
+        for (var depth = 0; depth < 12; depth++) {
+          sdkAncestors.add(directory.path);
+          if (directory.parent.path == directory.path) break;
+          directory = directory.parent;
+        }
+      }
+    }
+    result['sdkAncestorCount'] = sdkAncestors.length;
+    final paths = [...profileDirectories, ...sdkAncestors];
+    final args = Platform.isMacOS
+        ? ['-f', '%u %g %Lp', ...paths]
+        : ['-c', '%u %g %a', ...paths];
+    final stat = await runCaptureProcess(
+      '/usr/bin/stat',
+      args,
+      timeout: const Duration(milliseconds: 500),
+    );
+    final values = (stat.stdout as String).trim().split(RegExp(r'\s+'));
+    if (stat.exitCode == 0 &&
+        values.length == paths.length * 3 &&
+        values.every((value) => RegExp(r'^[0-9]+$').hasMatch(value))) {
+      for (var i = 0; i < paths.length; i++) {
+        // Only an index and numeric metadata escape this known-path probe.
+        final label = i < profileDirectories.length
+            ? 'profile$i'
+            : 'sdkAncestor${i - profileDirectories.length}';
+        result['${label}Uid'] = int.parse(values[i * 3]);
+        result['${label}Gid'] = int.parse(values[i * 3 + 1]);
+        result['${label}Mode'] = int.tryParse(values[i * 3 + 2], radix: 8);
+      }
+    } else {
+      result['profileMetadataAvailable'] = false;
+    }
+  } catch (_) {
+    result['profileMetadataAvailable'] = false;
+  }
+  return result;
+}
 
 /// A closing owner's refusal as it reaches a client: unavailable, with the
 /// reason or, from an older owner, only the unchanged text.
@@ -38,6 +146,7 @@ void diagnosticWorker(SendPort parent) {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   test(
     'recoverable worker diagnostics preserve operation and clean exit',
     () async {
@@ -133,6 +242,7 @@ void main() {
         'FORESIGHT_DATA': profile.data,
         'FORESIGHT_RUNTIME': profile.runtime,
         'FORESIGHT_SERVICE_TRACE': '1',
+        'FORESIGHT_LOG_LEVEL': 'info',
       };
       final handoff = await writeServiceStartupEnvironment(
         Directory(profile.runtime),
@@ -146,7 +256,11 @@ void main() {
         'XDG_RUNTIME_DIR': '${directory.path}/xdg-run',
         'FORESIGHT_STARTUP_ENV': handoff.path,
       };
+      final verifiedDefines = await sourceServiceCompileDefines(
+        verifiedWorker: true,
+      );
       final command = [
+        ...verifiedDefines,
         '--packages=${File('.dart_tool/package_config.json').absolute.path}',
         'bin/service.dart',
       ];
@@ -156,6 +270,7 @@ void main() {
         environment: environment,
         includeParentEnvironment: false,
       );
+      final childExitProbe = DiagnosticChildExitProbe.start(process.pid);
       final output = utf8.decoder.bind(process.stdout).join();
       final errors = utf8.decoder.bind(process.stderr).join();
       ServiceClient? client;
@@ -168,6 +283,43 @@ void main() {
         expect(await client.call('notes.list'), isEmpty);
         expect(File('${profile.data}/application.db').existsSync(), isTrue);
         expect(handoff.existsSync(), isFalse);
+        // The real worker must adopt the same profile and qualified logger.
+        // Observe the unchanged five-second cold gate through actual status.
+        Map<String, Object?> lastHealth = {'observed': false};
+        try {
+          await eventually(() async {
+            final status = await client!.call('status') as Map;
+            expect(status['pid'], process.pid);
+            expect(status['profile_id'], profile.identity);
+            final diagnostics = status['diagnostics'] as Map;
+            expect(diagnostics['level'], 'info');
+            final snapshot = DiagnosticHealthSnapshot.tryParse(diagnostics);
+            lastHealth = snapshot == null
+                ? {'observed': true, 'valid': false}
+                : {
+                    'observed': true,
+                    'valid': true,
+                    'state': snapshot.state.name,
+                    'reason': snapshot.reason.name,
+                    'nativeReason': snapshot.nativeReason.name,
+                    'known': snapshot.known,
+                    'stale': snapshot.stale,
+                    'storageConfigured': snapshot.storageConfigured,
+                  };
+            return diagnostics['state'] == 'healthy';
+          }, timeout: const Duration(seconds: 15));
+        } catch (_) {
+          // Emit only validated closed tags/booleans, never raw status, paths,
+          // configuration, child output or exception messages.
+          stderr.writeln('Startup handoff health: ${jsonEncode(lastHealth)}');
+          stderr.writeln(
+            'Startup handoff child exits: ${jsonEncode(childExitProbe.snapshot)}',
+          );
+          stderr.writeln(
+            'Startup handoff resources: ${jsonEncode(await _handoffResources(verifiedDefines, command.last, [directory.path, profile.data, profile.runtime]))}',
+          );
+          rethrow;
+        }
         final statusHandoff = await writeServiceStartupEnvironment(
           Directory(profile.runtime),
           values,
@@ -188,18 +340,75 @@ void main() {
         );
         expect(statusHandoff.existsSync(), isFalse);
       } finally {
+        try {
+          childExitProbe.close();
+        } catch (_) {
+          // Observation must never prevent authoritative service cleanup.
+        }
         await client?.close();
         process.kill(ProcessSignal.sigterm);
         await process.exitCode.timeout(const Duration(seconds: 30));
         await output;
         final diagnostics = await errors;
         expect(process.exitCode, completion(0), reason: diagnostics);
-        expect(diagnostics, contains('worker starting'));
         expect(
           diagnostics,
           isNot(contains('Invalid service environment handoff')),
         );
       }
+      final records = Directory('${profile.data}/logs')
+          .listSync(recursive: true, followLinks: false)
+          .whereType<File>()
+          .where((file) => file.path.endsWith('.jsonl'))
+          .where((file) {
+            final manifest = File('${file.parent.path}/manifest.json');
+            return manifest.existsSync() &&
+                (jsonDecode(manifest.readAsStringSync()) as Map)['pid'] ==
+                    process.pid;
+          })
+          .expand(
+            (file) => const LineSplitter().convert(file.readAsStringSync()),
+          )
+          .where((line) => line.isNotEmpty)
+          .map((line) => jsonDecode(line) as Map<String, dynamic>)
+          .toList();
+      expect(records, isNotEmpty);
+      expect(records.every((record) => record['schema'] == 2), isTrue);
+      expect(
+        records.every(
+          (record) => DiagnosticRecord.validWire({
+            for (final entry in record.entries)
+              if (const {
+                'event',
+                'component',
+                'fields',
+                'connection',
+                'request',
+                'attempt',
+                'job',
+                'stack',
+              }.contains(entry.key))
+                entry.key: entry.value,
+          }),
+        ),
+        isTrue,
+      );
+      expect(
+        records.where(
+          (record) =>
+              record['event'] == 'service.starting' &&
+              record['component'] == 'service',
+        ),
+        hasLength(1),
+      );
+      expect(
+        records.any(
+          (record) =>
+              record['event'] == 'rpc.completed' &&
+              (record['fields'] as Map?)?['operation'] == 'notes.list',
+        ),
+        isTrue,
+      );
     },
     // Both subprocesses compile the service from source under parallel load.
     timeout: const Timeout(Duration(minutes: 4)),

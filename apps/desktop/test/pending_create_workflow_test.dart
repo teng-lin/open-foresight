@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/google_connections.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 import '../test_support/core_fixture.dart';
 import 'dart:async';
@@ -14,7 +15,7 @@ import 'pump_until.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 /// Commits a create, then loses its reply as a dropped connection would.
-class LostReplyDomain extends CommandFixtureDomain {
+class LostReplyDomain extends CommandFixtureDomain with TranscriptIndexAdapter {
   LostReplyDomain(super.store, super.helper);
   final lose = <Operation>{};
   final sent = <(Operation, Map<String, dynamic>)>[];

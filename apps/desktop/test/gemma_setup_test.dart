@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'fixtures/setup_process.dart';
 import 'store_reader_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -14,12 +15,13 @@ import 'package:open_foresight/features/settings/gemma_setup_view.dart';
 void main() {
   testWidgets(
     'Done rejects a corrupt registered candidate and requires download consent',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       await tester.binding.setSurfaceSize(const Size(1000, 1100));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final root = createTestTempDirectorySync('gemma-current-corrupt-');
       final store = Store('${root.path}/app.db');
       addTearDown(store.close);
+      registerDesktopFixtureOwner(close: store.close, settled: () async {});
       final model = gemmaModels.last;
       final file = File('${root.path}/registered.litertlm')..createSync();
       file.openSync(mode: FileMode.write)
@@ -76,17 +78,18 @@ void main() {
       expect(finished, isFalse);
       expect(store.rows('SELECT * FROM models').single, before);
       await tester.pumpWidget(const SizedBox());
-    },
+    }),
   );
 
   testWidgets(
     'activation verifies a local model once and reuses it without downloading',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       await tester.binding.setSurfaceSize(const Size(1000, 1100));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final root = createTestTempDirectorySync('gemma-local-activation-');
       final store = Store('${root.path}/app.db');
       addTearDown(store.close);
+      registerDesktopFixtureOwner(close: store.close, settled: () async {});
       final model = gemmaModels.last;
       final file = File('${root.path}/${model.directory}/${model.filename}')
         ..createSync(recursive: true);
@@ -142,15 +145,16 @@ void main() {
       expect(installs, 1);
       expect(find.text('${model.name} terms'), findsNothing);
       await tester.pumpWidget(const SizedBox());
-    },
+    }),
   );
 
   testWidgets(
     'selection stays available during discovery and is not overwritten',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('gemma-discovery-');
       final store = Store('${root.path}/app.db');
       addTearDown(store.close);
+      registerDesktopFixtureOwner(close: store.close, settled: () async {});
       final discovery = Completer<File?>();
       await tester.pumpWidget(
         MaterialApp(
@@ -190,15 +194,16 @@ void main() {
         gemmaModels[1],
       );
       await tester.pumpWidget(const SizedBox());
-    },
+    }),
   );
 
   testWidgets(
     'local file is verified only on activation and corruption requires download consent',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('gemma-discovery-integrity-');
       final store = Store('${root.path}/app.db');
       addTearDown(store.close);
+      registerDesktopFixtureOwner(close: store.close, settled: () async {});
       final model = gemmaModels.last;
       final file = File('${root.path}/${model.directory}/${model.filename}')
         ..createSync(recursive: true);
@@ -246,16 +251,17 @@ void main() {
       await tester.pumpAndSettle();
       expect(store.model('generation'), isNull);
       await tester.pumpWidget(const SizedBox());
-    },
+    }),
   );
 
   for (final firstRun in [true, false]) {
     testWidgets(
       'fresh setup defaults to E2B with 64 GB RAM (firstRun: $firstRun)',
-      (tester) async {
+      (tester) async => withDesktopFixtures(tester, () async {
         final root = createTestTempDirectorySync('gemma-default-');
         final store = Store('${root.path}/app.db');
         addTearDown(store.close);
+        registerDesktopFixtureOwner(close: store.close, settled: () async {});
         await tester.pumpWidget(
           MaterialApp(
             home: Scaffold(
@@ -297,7 +303,7 @@ void main() {
           isNotNull,
         );
         await tester.pumpWidget(const SizedBox());
-      },
+      }),
     );
   }
 
@@ -356,7 +362,7 @@ void main() {
 
   testWidgets(
     'cached embedding setup offers reuse instead of another download',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('embedding-cache-ui-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
@@ -406,7 +412,7 @@ void main() {
         store.close();
         root.deleteSync(recursive: true);
       }
-    },
+    }),
   );
 
   testWidgets('14 GB host offers E2B and prevents larger model installation', (
@@ -472,7 +478,7 @@ void main() {
   });
   testWidgets(
     'current E4B waits for Done verification without loading or downloading',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final root = createTestTempDirectorySync('gemma-current-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
@@ -553,7 +559,7 @@ void main() {
         store.close();
         root.deleteSync(recursive: true);
       }
-    },
+    }),
   );
   testWidgets('downloaded inactive model has no download action on the right', (
     tester,

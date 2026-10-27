@@ -45,7 +45,7 @@ class ApplicationService {
   final ServiceSocketBinding _binding;
   final String path;
   final RandomAccessFile lock;
-  final RandomAccessFile? installationLock;
+  final InstallationLock? installationLock;
   final _clients = <Socket>{};
   final bool _internalWorker;
   final DesktopPeerVerifier _verifyDesktopPeer;
@@ -54,6 +54,7 @@ class ApplicationService {
     (client, id) => _cancel(client, id),
   );
   final _subscriptions = <Socket, Map<int, StreamSubscription<Object?>>>{};
+  final _controlCalls = <Socket, Map<int, Object>>{};
   StreamSubscription<void>? _changes;
   StreamSubscription<void>? _captureLevels;
   Timer? _heartbeat;
@@ -240,6 +241,11 @@ class ApplicationService {
 
   /// [desktopDetachGrace] is how long the service waits for a desktop to
   /// reattach after its approval connection closes before it shuts down.
+  /// An explicit [configuration], else the owner snapshot bound by
+  /// [runWithRuntimeConfiguration], is captured once here and every
+  /// service-owned consumer receives that immutable snapshot. Outside any
+  /// owner scope, startup decisions use one boundary snapshot taken here while
+  /// the long-lived owners stay legacy boundary consumers, as before injection.
   static Future<ApplicationService> start(
     ProfilePaths profile, {
     SearchCallbacks? webSearch,
@@ -251,22 +257,35 @@ class ApplicationService {
     void Function()? onDraining,
     Future<void> Function()? beforeReleaseOwnership,
     DesktopPeerVerifier? desktopPeerVerifier,
+    void Function()? onProfileOwned,
+    RuntimeConfiguration? configuration,
   }) async {
+    final scoped = configuration == null ? currentOwnerRuntimeSnapshot : null;
+    final captured = runtimeSnapshot(configuration);
     // This must precede native loads, database opens, and worker creation.
-    final installationLock = acquireInstallationLock();
+    final installationLock = acquireInstallationLock(configuration: captured);
     void Function()? releaseLocalOwner;
     try {
       releaseLocalOwner = retainLocalServiceOwner(profile.data);
-      final service = await _start(
+      Future<ApplicationService> startOwned() => _start(
         profile,
         installationLock,
+        captured,
+        injected: configuration != null || scoped != null,
+        explicit: configuration != null,
         webSearch: webSearch,
         internalWorker: internalWorker,
         clock: clock,
         createTimer: createTimer,
         helperStartupProbeTimeout: helperStartupProbeTimeout,
         desktopPeerVerifier: desktopPeerVerifier,
+        onProfileOwned: onProfileOwned,
       );
+      // An explicit snapshot is also bound as this owner's scope, so the store,
+      // its read worker and in-service defaults capture the same snapshot.
+      final service = await (configuration == null
+          ? startOwned()
+          : runWithRuntimeConfiguration(captured, startOwned));
       service._desktopDetachGrace = desktopDetachGrace;
       service._onDraining = onDraining;
       service._beforeReleaseOwnership = beforeReleaseOwnership;
@@ -281,18 +300,32 @@ class ApplicationService {
 
   static Future<ApplicationService> _start(
     ProfilePaths profile,
-    RandomAccessFile? installationLock, {
+    InstallationLock? installationLock,
+    RuntimeConfiguration captured, {
+    required bool injected,
+    required bool explicit,
     SearchCallbacks? webSearch,
     bool internalWorker = false,
     Clock? clock,
     Timer Function(Duration, void Function())? createTimer,
     Duration? helperStartupProbeTimeout,
     DesktopPeerVerifier? desktopPeerVerifier,
+    void Function()? onProfileOwned,
   }) async {
     final lock = await acquireServiceProfileLock(
       profile,
-      launchWithdrawn: () => serviceLaunchLeaseWithdrawn(profile),
+      launchWithdrawn: () =>
+          serviceLaunchLeaseWithdrawn(profile, configuration: captured),
+      // Unless the caller owns an explicit snapshot, the legacy boundary keeps
+      // receiving profile defaults for callers outside the ports; this
+      // service's own snapshot is derived below.
+      configuration: explicit ? captured : null,
     );
+    final owned = injected
+        ? profileServiceConfiguration(profile, captured)
+        : null;
+    // Startup's own view, after the lock added any profile defaults.
+    final configuration = owned ?? legacyRuntimeSnapshot();
     Store? store;
     Helper? helper;
     Application? startedApplication;
@@ -305,6 +338,7 @@ class ApplicationService {
     var publishedRecord = false;
     String? claimed;
     try {
+      onProfileOwned?.call();
       // This owner holds the profile lock; any endpoint record is a
       // predecessor's. Claim it before anything that can wait.
       claimed = claimServiceEndpointRecord(profile.data);
@@ -324,14 +358,15 @@ class ApplicationService {
           '${profile.runtime}/${internalWorker ? 'worker' : 'application'}.sock';
       await clearStaleServiceSocket(path);
       sweepStaleSpeechAudio(profile.data);
-      store = Store('${profile.data}/application.db');
+      store = Store('${profile.data}/application.db', configuration: owned);
       await store.verifyRegisteredModels(rejectInvalidRegistrations: true);
-      final interrupted = store.meetingStore.interruptActiveCaptures();
+      store.meetingStore.interruptActiveCaptures();
       helper = Helper(
         '${profile.runtime}/helper.sock',
         '${profile.data}/helper',
         startupProbeTimeout:
             helperStartupProbeTimeout ?? const Duration(milliseconds: 400),
+        configuration: owned,
       );
       final domain = Domain(
         store,
@@ -339,6 +374,7 @@ class ApplicationService {
         webSearch: webSearch,
         clock: clock,
         createTimer: createTimer,
+        configuration: owned,
       );
       final application = Application(domain)..profileId = profile.identity;
       startedApplication = application;
@@ -368,7 +404,10 @@ class ApplicationService {
         installationLock,
         application,
         internalWorker,
-        desktopPeerVerifier ?? verifyInstalledDesktopPeer,
+        desktopPeerVerifier ??
+            (owned == null
+                ? verifyInstalledDesktopPeer
+                : installedDesktopPeerVerifier(owned)),
       );
       try {
         await publishServiceSocket(binding, service._accept);
@@ -376,10 +415,14 @@ class ApplicationService {
         service._discard();
         rethrow;
       }
-      final manifest = runtimeConfiguration['FORESIGHT_MODEL_MANIFEST'];
+      final manifest = configuration['FORESIGHT_MODEL_MANIFEST'];
       if (manifest != null && File(manifest).existsSync()) {
         domain.initialize(
-          registerInstalledModels(store, manifest).then<void>((_) {}),
+          registerInstalledModels(
+            store,
+            manifest,
+            configuration: configuration,
+          ).then<void>((_) {}),
         );
       }
       helper.changed = () {
@@ -388,14 +431,7 @@ class ApplicationService {
       };
       helper.onReady = () async {
         await domain.resume();
-        for (final id in interrupted.toList()) {
-          try {
-            await application.indexMeeting(id);
-            interrupted.remove(id);
-          } catch (error) {
-            stderr.writeln('Interrupted meeting indexing: $error');
-          }
-        }
+        await application.recoverMeetingIndexes();
       };
       service._ready = helper.start().catchError((Object e) {
         stderr.writeln('Helper startup: $e');
@@ -450,6 +486,7 @@ class ApplicationService {
       message = {
         'event': 'changed',
         'capture': application.captureState,
+        'model_asset_download': application.modelAssetDownloadState,
         'revision': domain.store.dataRevision,
         'sources_paused': domain.sourcesPaused,
         'generation': application.generationState,
@@ -493,6 +530,7 @@ class ApplicationService {
     unawaited(client.done.catchError((Object _) {}));
     _clients.add(client);
     _subscriptions[client] = {};
+    _controlCalls[client] = {};
     _leases[client] = {};
     var bytes = 0;
     client
@@ -506,6 +544,9 @@ class ApplicationService {
         .transform(const LineSplitter())
         .listen(
           (line) {
+            // A decoder may already hold additional frames when a preceding
+            // duplicate closes this connection. None may acquire a new owner.
+            if (!_clients.contains(client)) return;
             bytes = 0;
             int? responseId;
             try {
@@ -532,6 +573,17 @@ class ApplicationService {
                 return;
               }
               responseId = request['id'] is int ? request['id'] as int : null;
+              // Check the wire id before operation/argument decoding too:
+              // a malformed duplicate must not terminate the original call.
+              if (responseId != null &&
+                  (_leases[client]?.containsKey(responseId) == true ||
+                      _subscriptions[client]?.containsKey(responseId) == true ||
+                      _controlCalls[client]?.containsKey(responseId) == true)) {
+                // No independent reply identity exists for the duplicate.
+                // Retire the connection instead of sending an ambiguous done.
+                _disconnect(client);
+                return;
+              }
               final envelope = ServiceCallEnvelope.decode(request);
               final id = envelope.id;
               if (_closing) {
@@ -599,15 +651,9 @@ class ApplicationService {
                 lastDesktopDeparture = null;
                 _exitIfIdle();
               }
-              if (typed is ServiceStopIfIdleRequest) {
-                unawaited(
-                  _serviceHandlers
-                      .registry(ServiceRequestContext(client, id))
-                      .dispatch(typed),
-                );
-                return;
-              }
-              if ((_subscriptions[client]?.length ?? 0) >= 32) {
+              if ((_subscriptions[client]?.length ?? 0) +
+                      (_controlCalls[client]?.length ?? 0) >=
+                  32) {
                 _messages.send(client, {
                   'id': id,
                   'error': RpcError(
@@ -616,6 +662,21 @@ class ApplicationService {
                   ).toJson(),
                   'done': true,
                 });
+                return;
+              }
+              if (typed is ServiceStopIfIdleRequest) {
+                final owner = Object();
+                _controlCalls[client]![id] = owner;
+                unawaited(
+                  _serviceHandlers
+                      .registry(ServiceRequestContext(client, id))
+                      .dispatch(typed)
+                      .whenComplete(() {
+                        if (identical(_controlCalls[client]?[id], owner)) {
+                          _controlCalls[client]?.remove(id);
+                        }
+                      }),
+                );
                 return;
               }
               _admitRequest(client, id, typed);
@@ -643,6 +704,7 @@ class ApplicationService {
       );
     }
     _clients.remove(client);
+    _controlCalls.remove(client);
     _verifiedDesktopClients.remove(client);
     for (final id in _leases[client]?.keys.toList() ?? <int>[]) {
       _cancel(client, id, reevaluate: false);
@@ -713,10 +775,27 @@ class ApplicationService {
         );
       }),
     ).asyncExpand((_) => _results(client, typed, lease));
+    bool ownsRequest() => identical(_leases[client]?[id], lease);
+    void releaseRequest() {
+      if (ownsRequest()) {
+        _subscriptions[client]?.remove(id);
+        _leases[client]?.remove(id);
+      }
+      if (lease.streamed) _settle(lease);
+      _exitIfIdle();
+    }
+
     _subscriptions[client]![id] = results.listen(
-      (value) =>
-          _messages.send(client, {'id': id, 'result': value, 'done': false}),
+      (value) {
+        if (ownsRequest()) {
+          _messages.send(client, {'id': id, 'result': value, 'done': false});
+        }
+      },
       onError: (Object e, StackTrace stack) {
+        if (!ownsRequest()) {
+          releaseRequest();
+          return;
+        }
         if (typed.operation.descriptor.scope == OperationScope.service &&
             typed.operation.notifiesChanges) {
           _flushBroadcast();
@@ -726,21 +805,19 @@ class ApplicationService {
           'error': requestFailure(e, stack).toJson(),
           'done': true,
         });
-        _subscriptions[client]?.remove(id);
-        _leases[client]?.remove(id);
-        if (lease.streamed) _settle(lease);
-        _exitIfIdle();
+        releaseRequest();
       },
       onDone: () {
+        if (!ownsRequest()) {
+          releaseRequest();
+          return;
+        }
         if (typed.operation.descriptor.scope == OperationScope.service &&
             typed.operation.notifiesChanges) {
           _flushBroadcast();
         }
         _messages.send(client, {'id': id, 'done': true});
-        _subscriptions[client]?.remove(id);
-        _leases[client]?.remove(id);
-        if (lease.streamed) _settle(lease);
-        _exitIfIdle();
+        releaseRequest();
       },
       cancelOnError: true,
     );
@@ -833,6 +910,7 @@ class ApplicationService {
     try {
       _enforceCapability(client, request);
       final guard = ServiceIdleShutdownGuard(
+        configuration: domain.configuration,
         helper: domain.helper,
         recording: () => application.recording != null,
         operationsBusy: () => _ledger.operationsBusy,
@@ -1016,7 +1094,7 @@ class ApplicationService {
       await _captureLevels?.cancel();
     });
     await attempt(domain.close);
-    await attempt(() => domain.generator?.close());
+    await attempt(domain.drain);
     await attempt(domain.helper.close);
     if (serviceGatesEnabled) await serviceGate('close.helper_closed');
     // Stop accepting first, so every connection is flushed and closed below.

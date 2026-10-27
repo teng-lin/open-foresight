@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -27,6 +28,7 @@ class _FailedIndex extends AdoptionRag {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Directory root;
   late ProfilePaths profile;
   late Map<String, String> environment;
@@ -121,7 +123,7 @@ void main() {
       );
       expect(
         service.domain.store.sources.single['error'],
-        contains('fixture index unavailable'),
+        'Transcript indexing could not complete; saved for retry.',
       );
       await client.call('notes.save', {
         'title': 'Still available',
@@ -233,6 +235,145 @@ void main() {
       expect(service.domain.store.notes().single['title'], 'Survived');
     },
   );
+
+  for (final mode in [
+    'valid duplicate',
+    'malformed duplicate',
+    'cancel/reuse',
+  ]) {
+    final duplicate = mode != 'cancel/reuse';
+    test(
+      duplicate
+          ? 'raw $mode active ID closes the connection and retires the original producer'
+          : 'raw 32-request admission and cancelled-ID reuse retain the replacement owner',
+      () async {
+        privateDirectory(profile.runtime);
+        final ping = HeldPing();
+        final server = Server.create(
+          services: [ping, AdoptionControl(control.State())],
+        );
+        await server.serve(
+          address: InternetAddress(
+            '${profile.runtime}/helper.sock',
+            type: InternetAddressType.unix,
+          ),
+          port: 0,
+        );
+        addTearDown(server.shutdown);
+        final service = await ApplicationService.start(
+          profile,
+          desktopPeerVerifier: trustInProcessDesktop,
+        );
+        addTearDown(service.close);
+        final entered = Completer<void>(), release = Completer<void>();
+        service.domain.helper.onReady = () async {
+          entered.complete();
+          await release.future;
+        };
+        addTearDown(() {
+          if (!release.isCompleted) release.complete();
+        });
+        ping.release.complete();
+        await entered.future.timeout(const Duration(seconds: 3));
+        final raw = await Socket.connect(
+          InternetAddress(service.path, type: InternetAddressType.unix),
+          0,
+        );
+        addTearDown(raw.destroy);
+        final frames = <Map>[];
+        final ended = Completer<void>();
+        raw
+            .cast<List<int>>()
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .listen(
+              (line) => frames.add(jsonDecode(line) as Map),
+              onDone: ended.complete,
+              onError: (Object error, StackTrace stack) {
+                if (!ended.isCompleted) ended.completeError(error, stack);
+              },
+            );
+        void send(
+          int id,
+          String method, [
+          Map<String, Object?> args = const {},
+        ]) =>
+            raw.writeln(jsonEncode({'id': id, 'method': method, 'args': args}));
+        final count = duplicate ? 1 : 32;
+        for (var id = 0; id < count; id++) {
+          send(id, 'answer.stream', {'question': 'held $id'});
+        }
+        // A same-socket response establishes that admission of all preceding
+        // frames occurred before the duplicate/cancellation is sent.
+        send(99, 'status');
+        await eventually(
+          () => frames.any((f) => f['id'] == 99 && f['done'] == true),
+        );
+        if (duplicate) {
+          if (mode == 'malformed duplicate') {
+            raw.writeln(
+              jsonEncode({'id': 0, 'method': 'notes.save', 'args': null}),
+            );
+          } else {
+            send(0, 'notes.save', {
+              'title': 'must not run',
+              'body': 'duplicate',
+            });
+          }
+          send(1, 'notes.save', {
+            'title': 'also must not run',
+            'body': 'queued after duplicate',
+          });
+          await ended.future.timeout(const Duration(seconds: 3));
+          expect(frames.where((f) => f['id'] == 0), isEmpty);
+        } else {
+          expect(
+            (frames.firstWhere((f) => f['id'] == 99)['error'] as Map)['code'],
+            'busy',
+          );
+          raw.writeln(jsonEncode({'cancel': 0}));
+          send(0, 'notes.save', {
+            'title': 'replacement',
+            'body': 'retained owner',
+          });
+          await eventually(
+            () => frames.any((f) => f['id'] == 0 && f['done'] == true),
+          );
+          expect(
+            frames.where((f) => f['id'] == 0 && f['result'] is Map),
+            hasLength(1),
+          );
+          for (var id = 1; id < count; id++) {
+            raw.writeln(jsonEncode({'cancel': id}));
+          }
+          send(98, 'status');
+          await eventually(
+            () => frames.any((f) => f['id'] == 98 && f['done'] == true),
+          );
+        }
+        release.complete();
+        final other = await ServiceClient.connect(service.path);
+        addTearDown(other.close);
+        expect((await other.call('status') as Map)['pid'], pid);
+        await eventually(() => service.dispatchedCount == 0);
+        expect(service.domain.store.rows('SELECT * FROM answers'), isEmpty);
+        expect(
+          service.domain.store.notes(),
+          duplicate ? isEmpty : hasLength(1),
+        );
+        if (!duplicate) {
+          send(100, 'status');
+          await eventually(
+            () => frames.any((f) => f['id'] == 100 && f['done'] == true),
+          );
+          expect(
+            frames.where((f) => f['id'] == 0 && f['done'] == true),
+            hasLength(1),
+          );
+        }
+      },
+    );
+  }
 
   test(
     'request saturation and cancellation leave another client responsive',

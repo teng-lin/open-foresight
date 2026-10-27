@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -27,29 +28,30 @@ void main() {
     ('Linux', const PlatformCapabilities.linux()),
     ('Mac', const PlatformCapabilities.macOS()),
   ]) {
-    testWidgets('$name facts choose keyboard modifiers on either host', (
-      tester,
-    ) async {
-      await ControllerFixture.mount(
-        tester,
-        environment: DesktopEnvironment(capabilities: capabilities),
-      );
-      final shortcuts = tester.widget<CallbackShortcuts>(
-        find.byType(CallbackShortcuts).first,
-      );
-      final activators = shortcuts.bindings.keys.whereType<SingleActivator>();
-      for (final key in [
-        LogicalKeyboardKey.digit1,
-        LogicalKeyboardKey.keyN,
-        LogicalKeyboardKey.keyO,
-      ]) {
-        final activator = activators.singleWhere(
-          (value) => value.trigger == key,
+    testWidgets(
+      '$name facts choose keyboard modifiers on either host',
+      (tester) async => withDesktopFixtures(tester, () async {
+        await ControllerFixture.mount(
+          tester,
+          environment: DesktopEnvironment(capabilities: capabilities),
         );
-        expect(activator.meta, name == 'Mac');
-        expect(activator.control, name == 'Linux');
-      }
-    });
+        final shortcuts = tester.widget<CallbackShortcuts>(
+          find.byType(CallbackShortcuts).first,
+        );
+        final activators = shortcuts.bindings.keys.whereType<SingleActivator>();
+        for (final key in [
+          LogicalKeyboardKey.digit1,
+          LogicalKeyboardKey.keyN,
+          LogicalKeyboardKey.keyO,
+        ]) {
+          final activator = activators.singleWhere(
+            (value) => value.trigger == key,
+          );
+          expect(activator.meta, name == 'Mac');
+          expect(activator.control, name == 'Linux');
+        }
+      }),
+    );
 
     test(
       '$name facts select native calendar delivery without host probing',

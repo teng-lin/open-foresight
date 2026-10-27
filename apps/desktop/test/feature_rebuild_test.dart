@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,37 +7,38 @@ import 'package:open_foresight/shell/workspace_tab.dart';
 import 'controller_fixture.dart';
 
 void main() {
-  testWidgets('global operation transitions refresh disabled body controls', (
-    tester,
-  ) async {
-    final fixture = await ControllerFixture.mount(tester);
-    fixture.shell.navigate(WorkspaceTab.settings);
-    await tester.pumpAndSettle();
-    SwitchListTile control() =>
-        tester.widget<SwitchListTile>(find.byType(SwitchListTile).first);
-    expect(control().onChanged, isNotNull);
-    final held = Completer<void>();
-    final operation = fixture.shell.run(() => held.future);
-    addTearDown(() {
-      if (!held.isCompleted) held.complete();
-    });
-    await tester.pump();
-    expect(control().onChanged, isNull);
-    fixture.shell.settingsFeature.setState(
-      () => fixture.shell.settingsFeature.modelKind = 'speech',
-    );
-    await tester.pump();
-    expect(control().onChanged, isNull);
-    held.complete();
-    await operation;
-    await tester.pumpAndSettle();
-    expect(control().onChanged, isNotNull);
-    expect(tester.takeException(), isNull);
-  });
+  testWidgets(
+    'global operation transitions refresh disabled body controls',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final fixture = await ControllerFixture.mount(tester);
+      fixture.shell.navigate(WorkspaceTab.settings);
+      await tester.pumpAndSettle();
+      SwitchListTile control() =>
+          tester.widget<SwitchListTile>(find.byType(SwitchListTile).first);
+      expect(control().onChanged, isNotNull);
+      final held = Completer<void>();
+      final operation = fixture.shell.run(() => held.future);
+      addTearDown(() {
+        if (!held.isCompleted) held.complete();
+      });
+      await tester.pump();
+      expect(control().onChanged, isNull);
+      fixture.shell.settingsFeature.setState(
+        () => fixture.shell.settingsFeature.modelKind = 'speech',
+      );
+      await tester.pump();
+      expect(control().onChanged, isNull);
+      held.complete();
+      await operation;
+      await tester.pumpAndSettle();
+      expect(control().onChanged, isNotNull);
+      expect(tester.takeException(), isNull);
+    }),
+  );
 
   testWidgets(
     'local edits leave unrelated Chat and shell presentation untouched',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final fixture = await ControllerFixture.mount(tester);
       fixture.shell.navigate(WorkspaceTab.chat);
       await tester.pumpAndSettle();
@@ -72,6 +74,6 @@ void main() {
       expect(tester.widget<ChatView>(find.byType(ChatView)), isNot(same(chat)));
       expect(tester.widget<Tooltip>(find.byTooltip('Help')), same(help));
       expect(tester.takeException(), isNull);
-    },
+    }),
   );
 }

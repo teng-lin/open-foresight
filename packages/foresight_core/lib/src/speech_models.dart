@@ -5,18 +5,7 @@ import 'gemma_download.dart';
 import 'store.dart';
 import 'runtime_execution_policy.dart';
 
-// Official whisper.cpp artifact metadata, verified against the Hugging Face
-// repository API on 2026-10-15. All choices are multilingual (not .en models).
-final speechModels = [
-  for (final filename in [
-    'ggml-tiny.bin',
-    'ggml-base.bin',
-    'ggml-small.bin',
-    'ggml-medium.bin',
-    'ggml-large-v3-turbo.bin',
-  ])
-    modelFromPin(filename),
-];
+export 'speech_model_catalog.dart';
 
 /// Validates that the selected runner can actually load and decode the model.
 /// Uses generated silence, never the microphone. The caller owns cancellation
@@ -28,8 +17,10 @@ Future<void> configureSpeech(
   String digest, {
   required bool Function() current,
   void Function(Process)? onProcess,
+  RuntimeConfiguration? configuration,
 }) async {
-  runner = requireInstalledRuntime(runner);
+  final config = runtimeSnapshot(configuration);
+  runner = requireInstalledRuntime(runner, configuration: config);
   final executable = File(runner);
   if (!executable.existsSync() || (executable.statSync().mode & 0x49) == 0) {
     throw StateError('The whisper.cpp runner is missing or not executable.');
@@ -74,16 +65,16 @@ Future<void> configureSpeech(
       '-t',
       '4',
     ];
-    if (runtimeConfiguration['FORESIGHT_WHISPER_BACKEND'] == 'cpu') {
+    if (config['FORESIGHT_WHISPER_BACKEND'] == 'cpu') {
       arguments.add('-ng');
-    } else if (runtimeConfiguration['FORESIGHT_WHISPER_DEVICE']
-        case final String device when device.isNotEmpty) {
+    } else if (config['FORESIGHT_WHISPER_DEVICE'] case final String device
+        when device.isNotEmpty) {
       arguments.addAll(['-dev', device]);
     }
     process = await Process.start(
       runner,
       arguments,
-      environment: runtimeConfiguration.environment,
+      environment: config.environment,
     );
     onProcess?.call(process);
     final stdout = process.stdout.drain<void>();

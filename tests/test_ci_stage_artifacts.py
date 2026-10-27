@@ -325,6 +325,7 @@ def test_native_runtime_payload_omits_compilers_and_retains_products_and_notices
     repository(root)
     products = [
         "build/services/helper/ForesightHelper",
+        "build/services/helper/ForesightHelperTest",
         "build/native/libforesight_native.dylib",
         "build/sdk/foresight-sdk.json",
         "build/sdk/share/foresight-sdk/licenses/LICENSE",
@@ -334,6 +335,18 @@ def test_native_runtime_payload_omits_compilers_and_retains_products_and_notices
             "build/macos/libforesight_sqlite3.dylib",
             "build/macos/foresight-sqlite3.json",
         ]
+    products += [
+        "build/native/libforesight_sql_support.so",
+        "build/native/libforesight_sql_support.dylib",
+        "build/native/libforesight_diagnostic_support.so",
+        "build/native/libforesight_diagnostic_support.dylib",
+        "build/native/foresight-diagnostic-launcher",
+        "build/native/diagnostic-native-inputs.json",
+        "build/native/diagnostic-toolchain-metadata.json",
+        "build/native/diagnostic-products.json",
+        "build/native/diagnostic-sql-inputs.json",
+        "build/native/runtime-support-build.json",
+    ]
     excluded = [
         "build/_deps/compiler/big.o",
         "build/native/CMakeFiles/native.o",
@@ -407,3 +420,32 @@ def test_invalid_output_timestamp_inventory_is_rejected(tmp_path, value):
                 "output_times": {"build/native/file.o": value},
             },
         )
+
+
+@pytest.mark.parametrize("platform", ["linux", "macos"])
+def test_core_stage_retains_companion_and_its_native_context(tmp_path, platform):
+    root = tmp_path / "original"
+    repository(root)
+    expected = {
+        "build/application/foresight-diagnostic-worker": b"compiled companion",
+        "build/application/diagnostic-worker-build.json": b"public byte receipt",
+        "build/native/diagnostic-worker-inputs.json": b"public worker context",
+    }
+    for name, blob in expected.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(blob)
+    (root / "build/application/foresight-diagnostic-worker").chmod(0o755)
+    # Adjacent native outputs still belong to the independently restored stage.
+    (root / "build/native/unrelated-object.o").write_bytes(b"not a core artifact")
+    output = tmp_path / "artifact"
+    manifest = module.pack(root, platform, "core", output)
+    assert set(manifest["files"]) == {*expected, "build/application"}
+    target = tmp_path / "restored"
+    module.unpack(target, platform, "core", output / "payload.tar.gz", manifest)
+    for name, blob in expected.items():
+        assert (target / name).read_bytes() == blob
+    assert (
+        target / "build/application/foresight-diagnostic-worker"
+    ).stat().st_mode & 0o777 == 0o755
+    assert not (target / "build/native/unrelated-object.o").exists()

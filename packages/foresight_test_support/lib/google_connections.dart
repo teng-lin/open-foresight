@@ -2,7 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
+// ignore: implementation_imports
+import 'package:foresight_core/src/generated/transcript_index.pb.dart'
+    as transcript;
 import 'package:matcher/expect.dart';
+// ignore: implementation_imports
+import 'package:foresight_core/src/cancellation.dart';
 // Shared fixtures exercise internal wire protocol types.
 // ignore: implementation_imports
 import 'package:foresight_core/src/domain.dart';
@@ -262,9 +267,45 @@ class GoogleFixture {
   Future<void> close() => server.close(force: true);
 }
 
-class AdapterDomain extends Domain {
+mixin TranscriptIndexAdapter on Domain {
+  bool get useProductionTranscriptIndex => false;
+  final transcriptCursors = <String, transcript.TranscriptCursor>{};
+  @override
+  Future<transcript.TranscriptCursor> transcriptCursor(
+    String id, {
+    bool Function()? current,
+  }) async => useProductionTranscriptIndex
+      ? super.transcriptCursor(id, current: current)
+      : transcriptCursors[id] ?? transcript.TranscriptCursor();
+  @override
+  Future<transcript.TranscriptDeltaResult> applyTranscriptDelta(
+    transcript.TranscriptDelta delta, {
+    bool Function()? current,
+  }) async {
+    if (useProductionTranscriptIndex) {
+      return super.applyTranscriptDelta(delta, current: current);
+    }
+    if (current != null && !current()) throw operationCancelled();
+    await index(delta.documentId, current: current);
+    if (current != null && !current()) throw operationCancelled();
+    transcriptCursors[delta.documentId] = transcript.TranscriptCursor(
+      exists: true,
+      workspaceEpoch: delta.workspaceEpoch,
+      revision: delta.revision,
+      lastSegmentId: delta.upserts.isEmpty
+          ? null
+          : delta.upserts.last.key.segmentId,
+    );
+    return transcript.TranscriptDeltaResult(
+      applied: true,
+      revision: delta.revision,
+    );
+  }
+}
+
+class AdapterDomain extends Domain with TranscriptIndexAdapter {
   final indexed = <String>[];
-  AdapterDomain(super.store, super.helper);
+  AdapterDomain(super.store, super.helper, {super.createTimer, super.clock});
   @override
   Future<void> index(String id, {bool Function()? current}) async {
     indexed.add(id);

@@ -1,0 +1,151 @@
+{
+  "schema": 1,
+  "status": "passed",
+  "measured_utc_date": "2026-10-26",
+  "compiled_source_commit": "4ffbbf62a75f2d9484963ec7020c0b8fa1bedffa",
+  "source_boundary": "Existing fresh4ff compiled cohort; current PR production-equivalent, not a new HEAD build",
+  "diagnostic_context": {
+    "native_id": "6d4ccf1d94a0bbc45d7faefc92b6b7ca2351fe94259d0b1c7df0730a8d2f7b2f",
+    "worker_id": "0a417fdfb291ec0931ea6d8e683c759cd22c76400bc2583ee961f9ccada8cfce",
+    "catalog_id": "dcddab0c194be68ce7644adeee4d44230dda448528edcc1957132014df881dad"
+  },
+  "official_worker_define_count": 13,
+  "comparison": "Within the same compiled production cohort: idle before models, warmed idle, native-active generation and active capture; not a separate old-code baseline.",
+  "models": {
+    "generation_model": {
+      "filename": "gemma-4-E2B-it.litertlm",
+      "bytes": 2588147712,
+      "sha256": "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c",
+      "normal_pinned_input_verification_passed": true
+    },
+    "embedding_model": {
+      "filename": "embeddinggemma-2-740m.litertlm",
+      "bytes": 484622336,
+      "sha256": "e7a8a2204b91e0f96e92960e84a09a89212e1633dcb7575a9bf3378b4df77f4c",
+      "normal_pinned_input_verification_passed": true
+    },
+    "speech_model": {
+      "filename": "ggml-medium.bin",
+      "bytes": 1533763059,
+      "sha256": "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+      "normal_pinned_input_verification_passed": true
+    }
+  },
+  "samples": {
+    "idle_before_models": {
+      "n": 100,
+      "p50_ms": 0.40135149999999997,
+      "p95_ms": 0.64068,
+      "max_ms": 0.73751,
+      "target_p95_ms": 50,
+      "target_met": true,
+      "generation_active_count": 0,
+      "native_active_count": 0,
+      "capture_active_count": 0,
+      "capture_present_count": 0
+    },
+    "warmed_idle": {
+      "n": 100,
+      "p50_ms": 0.491065,
+      "p95_ms": 0.74754,
+      "max_ms": 0.790724,
+      "target_p95_ms": 50,
+      "target_met": true,
+      "generation_active_count": 0,
+      "native_active_count": 0,
+      "capture_active_count": 0,
+      "capture_present_count": 0
+    },
+    "warmed_streaming": {
+      "n": 100,
+      "p50_ms": 0.6389015,
+      "p95_ms": 0.861479,
+      "max_ms": 1.066599,
+      "target_p95_ms": 50,
+      "target_met": true,
+      "generation_active_count": 100,
+      "native_active_count": 100,
+      "capture_active_count": 0,
+      "capture_present_count": 0
+    },
+    "warmed_capture": {
+      "n": 100,
+      "p50_ms": 0.7466375000000001,
+      "p95_ms": 1.112381,
+      "max_ms": 1.450352,
+      "target_p95_ms": 50,
+      "target_met": true,
+      "generation_active_count": 0,
+      "native_active_count": 0,
+      "capture_active_count": 100,
+      "capture_present_count": 100
+    }
+  },
+  "stream_chunks_total": 27,
+  "stream_chunks_during_native_active_samples": 25,
+  "teardown": {
+    "native_active_before_close": true,
+    "changed_preview_characters": 14,
+    "close_elapsed_us": 414901,
+    "graceful_shutdown": true,
+    "service_exit_code": 0,
+    "supervisor_exit_code": 0,
+    "owned_session_empty_after_close": true,
+    "request_settlement": "Request was still active immediately before intentional service close, then settled as RuntimeError. Public Peer.call raises this for disconnect or an RPC error; type-only retained metadata cannot uniquely distinguish disconnect from cancellation response. No claim of a successful generation result during shutdown."
+  },
+  "logging_before_close": {
+    "level": "info",
+    "state": "healthy",
+    "reason": "healthy",
+    "nativeReason": "healthy",
+    "nativeDropsExact": true,
+    "admittedRecords": 70,
+    "droppedRecords": 507,
+    "rejectedRecords": 0,
+    "highWaterBytes": 81920,
+    "highWaterRecords": 168,
+    "producerRegistrationRefused": 0,
+    "quarantinedProducers": 0
+  },
+  "observation_before_close": {
+    "version": 1,
+    "processWide": false,
+    "capacity": 1,
+    "active": 1,
+    "admitted": 345,
+    "refused": 249
+  },
+  "inventory": {
+    "snapshots": 16,
+    "complete_snapshots": 16,
+    "runtime_files": 174,
+    "diagnostic_data_mappings": 1,
+    "diagnostic_mapping_bytes": [
+      16384
+    ],
+    "diagnostic_mapping_seals": [
+      7
+    ],
+    "diagnostic_payload_hashed": false
+  },
+  "capabilities": {
+    "observer_uid": 1000,
+    "observer_effective": 1099511627776,
+    "launches": 3,
+    "all_launches_exec_boundary_observed": true,
+    "snapshots": 9,
+    "process_observations": 85,
+    "unique_processes": 15,
+    "maximum_processes_per_snapshot": 15,
+    "all_child_active_vectors_zero": true,
+    "all_child_nnp_one": true,
+    "child_bounding_bit40_retained": true
+  },
+  "limitations": [
+    "No full CLI verify_export/body-hash certification",
+    "No lossless logging claim: dropped records and observation refusals retained",
+    "No strict relative 5%/10% certification or exact 512KiB proof",
+    "No GPU, physical audio, or Mac real-model result"
+  ],
+  "failed_attempts": "Original loader-path, manifest/vendor-context and worker-vs-CLI input mistakes, plus partial runs, remain retained; none is relabeled as a completed benchmark."
+}

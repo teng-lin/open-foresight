@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import '../domain.dart';
+import 'service_workspace_ports.dart';
 import '../google_auth.dart';
 import '../google_connections.dart';
 import '../operation_registry.dart';
@@ -22,7 +22,7 @@ final class GoogleMaintenance implements WorkspaceAccountCleanup {
     required this.changed,
   });
 
-  final Domain domain;
+  final GoogleWorkspacePort domain;
   final GoogleAuth auth;
   final MeetingQueries meetings;
   final void Function() changed;

@@ -1,4 +1,5 @@
 import 'operations.dart';
+import 'client_command.dart';
 import 'dart:io';
 import 'helper_status.dart';
 import 'store_reader.dart';
@@ -73,7 +74,7 @@ abstract interface class CaptureLevelEvents {
   Stream<List<double>> get captureLevels;
 }
 
-abstract interface class DesktopConnection {
+abstract interface class DesktopConnection implements CurrentClientCommandPort {
   StoreReader get store;
   HelperStatus get helper;
   DesktopModelAssets get modelAssets;
@@ -111,10 +112,12 @@ abstract interface class DesktopConnection {
   /// Moves [workspaceEpoch] to the service's current workspace. Call it only
   /// after dropping every view and draft that holds an ID from before.
   void adoptWorkspace();
+  @override
   Future<Object?> command(
     Operation operation, [
     Map<String, dynamic> args = const {},
   ]);
+  @override
   Future<Object?> commandCurrent(
     Operation operation,
     Map<String, dynamic> args,

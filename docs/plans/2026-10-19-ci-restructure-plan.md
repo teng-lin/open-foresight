@@ -167,8 +167,8 @@ Replace the AGENTS.md section "Reuse SDKs, libraries, and build caches before re
 > - SDKs and dependency outputs may come from:
 >   - `main`;
 >   - the consumer's own PR;
->   - the final head of a merged same-repository PR, if its producer-control files are byte-identical (including file modes) to reviewed main source and its component identity matches. Verify the authoritative merged-tree and main-reachability proof. This exception lapses if [decision 7](docs/plans/2026-10-19-ci-restructure-plan.md#8-owner-decisions) drops PR-produced SDK promotion.
-> - Application candidates come only from stamped `release`-tier runs of reviewed main source. Transition ([WS5b](docs/plans/2026-10-19-ci-restructure-plan.md#ws5b-candidates-on-demand-and-release-gates-three-prs-before-ws5a)): until WS5b-1 lands, today's per-merge main-push candidates remain the release source. Between WS5b-1 and WS5b-3, they remain the source only for sources below `RELEASE_SOURCE_FLOOR`, through a legacy trust row that expires at WS5b-3.
+>   - the final head of a merged same-repository PR, if its producer-control files are byte-identical (including file modes) to reviewed main source and its component identity matches. Verify the authoritative merged-tree and main-reachability proof. This exception lapses if [decision 7](#8-owner-decisions) drops PR-produced SDK promotion.
+> - Application candidates come only from stamped `release`-tier runs of reviewed main source. Transition ([WS5b](#ws5b-candidates-on-demand-and-release-gates-three-prs-before-ws5a)): until WS5b-1 lands, today's per-merge main-push candidates remain the release source. Between WS5b-1 and WS5b-3, they remain the source only for sources below `RELEASE_SOURCE_FLOOR`, through a legacy trust row that expires at WS5b-3.
 > - Preview bytes never become release bytes.
 > - PR bundles serve only that PR's checks.
 >

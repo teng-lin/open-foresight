@@ -1,8 +1,14 @@
+import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:foresight_core/foresight_core.dart';
+import 'package:foresight_core/src/service_ownership.dart'
+    show readPosixLockHolders, anotherProfileMessage, serviceEndpoint;
+import 'package:foresight_core/src/unix_peer_identity.dart'
+    show effectiveUserId;
 import 'package:foresight_test_support/hooked_service.dart';
 import 'package:test/test.dart';
 
@@ -71,10 +77,17 @@ bool lockHeld(ProfilePaths profile) {
 Future<Process> releasedOwner(
   ProfilePaths profile, {
   required Duration finalizing,
+  Map<String, Object?>? namespace,
 }) async {
   privateDirectory(profile.data);
   privateDirectory(profile.runtime);
-  final owner = await Process.start('python3', [
+  final owner = await Process.start(namespace == null ? 'python3' : 'unshare', [
+    if (namespace != null) ...[
+      '-Urpf',
+      '--mount-proc',
+      '--kill-child',
+      'python3',
+    ],
     '-c',
     r'''
 import fcntl, json, os, signal, socket, sys, threading, time
@@ -116,6 +129,8 @@ def stop(*_):
     os._exit(0)
 signal.signal(signal.SIGTERM, stop)
 print("ready", flush=True)
+if len(sys.argv) > 4:
+    print(json.dumps({"pid": os.getpid(), "namespace": os.readlink("/proc/self/ns/pid")}), flush=True)
 while True:
     peer, _ = server.accept()
     peers.append(peer)
@@ -124,6 +139,7 @@ while True:
     '${profile.data}/.application.lock',
     '${profile.runtime}/application.sock',
     '${finalizing.inMilliseconds / 1000}',
+    if (namespace != null) 'namespace',
   ]);
   addTearDown(() => owner.kill(ProcessSignal.sigkill));
   final output = StreamIterator(
@@ -131,6 +147,10 @@ while True:
   );
   expect(await output.moveNext(), isTrue);
   expect(output.current, 'ready');
+  if (namespace != null) {
+    expect(await output.moveNext(), isTrue);
+    namespace.addAll(jsonDecode(output.current) as Map<String, dynamic>);
+  }
   unawaited(() async {
     while (await output.moveNext()) {}
   }());
@@ -138,6 +158,7 @@ while True:
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late HookedServiceBuild build;
   setUpAll(() async => build = await HookedServiceBuild.compile());
   tearDownAll(() => build.dispose());
@@ -171,59 +192,188 @@ void main() {
     return StopRun(process);
   }
 
-  test('--status run in another pid namespace than this profile\'s older '
-      'owner says it cannot verify that owner', () async {
-    if (!Platform.isLinux) {
-      markTestSkipped('unshare and /proc/locks are Linux only');
-      return;
-    }
-    // A user and pid namespace with its own /proc, as in a sandbox. The
-    // kernel leaves the owner, outside it, out of that /proc/locks.
-    final ProcessResult probe;
-    try {
-      probe = await Process.run('unshare', ['-Urpf', '--mount-proc', 'true']);
-    } on ProcessException catch (error) {
-      markTestSkipped('unshare is not installed here: $error');
-      return;
-    }
-    if (probe.exitCode != 0) {
-      markTestSkipped('unshare is not permitted here: ${probe.stderr}');
-      return;
-    }
-    final profile = newProfile('of-namespace-');
-    final owner = await releasedOwner(
-      profile,
-      finalizing: const Duration(seconds: 1),
-    );
-    final status = await Process.run(
-      'unshare',
-      [
-        '-Urpf',
-        '--mount-proc',
-        Platform.resolvedExecutable,
-        build.kernel,
-        '--status',
-      ],
-      environment: {
-        for (final entry in Platform.environment.entries)
-          if (!entry.key.startsWith('FORESIGHT_') ||
-              entry.key == 'FORESIGHT_SQLITE_LIBRARY')
-            entry.key: entry.value,
-        'FORESIGHT_DATA': profile.data,
-        'FORESIGHT_RUNTIME': profile.runtime,
-      },
-      includeParentEnvironment: false,
-    ).timeout(const Duration(seconds: 120));
-    expect(status.exitCode, 1, reason: '${status.stdout}${status.stderr}');
-    expect(
-      status.stderr,
-      contains(
-        'Cannot verify the running older Open Foresight service (pid '
-        '${owner.pid}) for this profile; stop it with its own --stop, then '
-        'retry.',
-      ),
-    );
-  }, timeout: const Timeout(Duration(minutes: 3)));
+  test(
+    '--status refuses a real older owner across pid namespaces',
+    () async {
+      if (!Platform.isLinux) {
+        markTestSkipped('unshare and /proc/locks are Linux only');
+        return;
+      }
+      final ProcessResult probe;
+      try {
+        probe = await Process.run('unshare', ['-Urpf', '--mount-proc', 'true']);
+      } on ProcessException catch (error) {
+        markTestSkipped('unshare is not installed here: $error');
+        return;
+      }
+      if (probe.exitCode != 0) {
+        markTestSkipped('unshare is not permitted here: ${probe.stderr}');
+        return;
+      }
+
+      // Preserve the original caller-inside-namespace ownership classification
+      // through the public library. This probe deliberately is not the CLI and
+      // never invokes ApplicationRuntimeBootstrap or loads an application image.
+      final outside = newProfile('of-outer-owner-');
+      final outsideOwner = await releasedOwner(
+        outside,
+        finalizing: Duration.zero,
+      );
+      final ownershipProbe =
+          File('${Directory(outside.runtime).parent.path}/ownership_probe.dart')
+            ..writeAsStringSync(r"""
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:foresight_core/src/profile_paths.dart';
+import 'package:foresight_core/src/service_ownership.dart';
+Future<void> main(List<String> args) async {
+  final profile = ProfilePaths(args[0], args[1]);
+  final endpoint = serviceEndpoint(profile);
+  final peer = await Socket.connect(InternetAddress(endpoint, type: InternetAddressType.unix), 0);
+  final credentials = ByteData.sublistView(peer.getRawOption(RawSocketOption(1, 17, Uint8List(12))));
+  final received = utf8.decoder.bind(peer).transform(const LineSplitter()).first;
+  peer.writeln(jsonEncode({'id': 1, 'method': 'status', 'params': {}}));
+  await peer.flush();
+  final status = (jsonDecode(await received) as Map)['result'] as Map;
+  await peer.close();
+  final holders = readPosixLockHolders('${profile.data}/.application.lock');
+  try {
+    servesAnotherProfile(Map<Object?, Object?>.from(status), profile, endpoint);
+    throw StateError('Expected an unverifiable outside owner');
+  } on UnverifiableServiceOwner catch (error) {
+    stdout.writeln(jsonEncode({'classification': 'unverifiable', 'message': error.message,
+      'peerPid': credentials.getInt32(0, Endian.host), 'holders': holders?.toList()}));
+  }
+}
+""");
+      try {
+        final observed = await Process.run('unshare', [
+          '-Urpf',
+          '--mount-proc',
+          '--kill-child',
+          Platform.resolvedExecutable,
+          '--packages=${File('.dart_tool/package_config.json').absolute.path}',
+          ownershipProbe.path,
+          outside.data,
+          outside.runtime,
+        ]).timeout(const Duration(seconds: 120));
+        expect(
+          observed.exitCode,
+          0,
+          reason: '${observed.stdout}${observed.stderr}',
+        );
+        final result = jsonDecode(observed.stdout as String) as Map;
+        expect(result['classification'], 'unverifiable');
+        expect(
+          result['peerPid'],
+          0,
+        ); // SO_PEERCRED cannot name a peer outside it.
+        expect(result['holders'], anyOf(isNull, isEmpty, contains(0)));
+        expect(
+          result['message'],
+          'Cannot verify the running older Open Foresight service (pid ${outsideOwner.pid}) for this profile; stop it with its own --stop, then retry.',
+        );
+        expect(lockHeld(outside), isTrue);
+      } finally {
+        outsideOwner.kill(ProcessSignal.sigterm);
+        expect(
+          await outsideOwner.exitCode.timeout(const Duration(seconds: 30)),
+          0,
+        );
+      }
+
+      // Reverse only the namespace placement for the real current CLI. Its
+      // filesystem and verified source/Worker/native admission remain unchanged.
+      final profile = newProfile('of-namespace-');
+      final namespace = <String, Object?>{};
+      final owner = await releasedOwner(
+        profile,
+        finalizing: Duration.zero,
+        namespace: namespace,
+      );
+      final peer = await Socket.connect(
+        InternetAddress(
+          serviceEndpoint(profile),
+          type: InternetAddressType.unix,
+        ),
+        0,
+      );
+      final credentials = ByteData.sublistView(
+        peer.getRawOption(RawSocketOption(1, 17, Uint8List(12))),
+      );
+      final outerPid = credentials.getInt32(0, Endian.host);
+      final ownerUid = credentials.getUint32(4, Endian.host);
+      final received = utf8.decoder
+          .bind(peer)
+          .transform(const LineSplitter())
+          .first;
+      peer.writeln(jsonEncode({'id': 1, 'method': 'status', 'params': {}}));
+      await peer.flush();
+      final reported = (jsonDecode(await received) as Map)['result'] as Map;
+      await peer.close();
+      var exited = false;
+      unawaited(owner.exitCode.then((_) => exited = true));
+      try {
+        expect(outerPid, greaterThan(0));
+        expect(ownerUid, effectiveUserId);
+        expect(
+          namespace['namespace'],
+          isNot(Link('/proc/self/ns/pid').targetSync()),
+        );
+        expect(reported['pid'], namespace['pid']);
+        expect(reported['pid'], isNot(outerPid));
+        expect(
+          readPosixLockHolders('${profile.data}/.application.lock'),
+          contains(outerPid),
+        );
+        expect(lockHeld(profile), isTrue);
+        final status = await Process.run(
+          Platform.resolvedExecutable,
+          [
+            ...await sourceServiceCompileDefines(verifiedWorker: true),
+            '--packages=${File('.dart_tool/package_config.json').absolute.path}',
+            'bin/service.dart',
+            '--status',
+          ],
+          environment: {
+            for (final entry in Platform.environment.entries)
+              if (!entry.key.startsWith('FORESIGHT_') ||
+                  entry.key == 'FORESIGHT_SQLITE_LIBRARY')
+                entry.key: entry.value,
+            'FORESIGHT_DATA': profile.data,
+            'FORESIGHT_RUNTIME': profile.runtime,
+          },
+          includeParentEnvironment: false,
+        ).timeout(const Duration(seconds: 120));
+        expect(status.exitCode, 1, reason: '${status.stdout}${status.stderr}');
+        expect(status.stdout, isEmpty);
+        expect(
+          status.stderr,
+          contains(
+            anotherProfileMessage(
+              profile,
+              serviceEndpoint(profile),
+              fromRecord: false,
+              pid: reported['pid'] as int,
+            ),
+          ),
+        );
+        expect(
+          status.stderr,
+          isNot(contains('Diagnostic startup is unavailable')),
+        );
+        expect(exited, isFalse); // --status neither adopted nor signalled it.
+        expect(lockHeld(profile), isTrue);
+        expect(File('${profile.data}/application.db').existsSync(), isFalse);
+      } finally {
+        Process.killPid(outerPid, ProcessSignal.sigterm);
+        expect(await owner.exitCode.timeout(const Duration(seconds: 30)), 0);
+      }
+      expect(lockHeld(profile), isFalse);
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
 
   test(
     '--stop waits past the release bound of a current owner for a '
@@ -307,7 +457,10 @@ void main() {
     owner.release('close.begin');
     await owner.reached('close.before_lock_release');
     // Its connection ended; the owner still holds its profile.
-    await stop.line('still holds its profile');
+    await stop.line(
+      'Waiting for the application service to release its profile.',
+    );
+    expect(lockHeld(profile), isTrue);
     expect(exited, isFalse);
     owner.release('close.before_lock_release');
     expect(await stop.exited(), 0, reason: stop.lines.join('\n'));

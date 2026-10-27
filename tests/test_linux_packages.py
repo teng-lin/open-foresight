@@ -264,7 +264,8 @@ class LinuxPackagesTest(unittest.TestCase):
             self.assertIn("upgrade_lock_decision", script)
             self.assertIn("F_SETLK", script)
             self.assertNotIn("flock -n", script)
-            self.assertIn("refuse_upgrade_if_recording /opt/open-foresight", script)
+            self.assertIn("prepare_installation_change /opt/open-foresight", script)
+            self.assertIn('refuse_upgrade_if_recording "$1"', script)
         self.assertIn("upgrade|remove", prerm)
         self.assertIn("upgrade|install", preinst)
         self.assertIn("%pre\n", spec)
@@ -287,13 +288,16 @@ class LinuxPackagesTest(unittest.TestCase):
 
 class PackagePreflightTest(unittest.TestCase):
     def test_missing_speech_worker_leaves_output_available_for_retry(self):
+        from contextlib import ExitStack
         from types import SimpleNamespace
         from unittest.mock import patch
 
         sys.path.insert(0, str(ROOT / "tools"))
         import package
 
-        with tempfile.TemporaryDirectory() as directory:
+        from tests.test_linux_bundle_failure_paths import diagnostic_products
+
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as products:
             root = Path(directory)
             build, flutter, runtime = root / "build", root / "flutter", root / "runtime"
             flutter.mkdir()
@@ -309,6 +313,8 @@ class PackagePreflightTest(unittest.TestCase):
                 target = build / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(b"fixture")
+            for owner, name, value in diagnostic_products(build, root / "dart-sdk"):
+                products.enter_context(patch.object(owner, name, value))
             library = build / "lib/liblitert-lm.so"
             (runtime / "whisper-cli").write_bytes(b"fixture")
             output = root / "bundle"
@@ -360,13 +366,16 @@ class PackagePreflightTest(unittest.TestCase):
 )
 class LinuxDependencyCollectionTest(unittest.TestCase):
     def test_extension_validation_preserves_sdk_lookup_and_bundle_relocates(self):
+        from contextlib import ExitStack
         from types import SimpleNamespace
         from unittest.mock import patch
 
         sys.path.insert(0, str(ROOT / "tools"))
         import package
 
-        with tempfile.TemporaryDirectory() as directory:
+        from tests.test_linux_bundle_failure_paths import diagnostic_products
+
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as products:
             root = Path(directory)
             build, sdk, flutter = root / "build", root / "sdk", root / "flutter"
             sdk.mkdir()
@@ -420,7 +429,8 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                 "-Wl,-rpath-link," + str(sdk),
             )
             worker = build / "services/inference/foresight-model"
-            compile(r'''
+            compile(
+                r"""
 #include <stdio.h>
 #include <stdlib.h>
 int main(void) {
@@ -434,7 +444,9 @@ int main(void) {
   }
   return 0;
 }
-''', worker)
+""",
+                worker,
+            )
             for name in ("application/foresight-service", "application/foresight-mcp"):
                 target = build / name
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -458,6 +470,8 @@ int main(void) {
                 target = build / f"_deps/sentencepiece-src/third_party/{name}/LICENSE"
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text("fixture license")
+            for owner, name, value in diagnostic_products(build, root / "dart-sdk"):
+                products.enter_context(patch.object(owner, name, value))
             digest = hashlib.sha256(library.read_bytes()).hexdigest()
             extensions = SimpleNamespace(
                 manifest={
@@ -499,12 +513,17 @@ int main(void) {
                 package.main()
             manifest = json.loads((output / "manifest.json").read_text())
             launcher_environment = {
-                key: value for key, value in os.environ.items()
+                key: value
+                for key, value in os.environ.items()
                 if not key.startswith("FORESIGHT_") and key != "LD_LIBRARY_PATH"
             }
             launched = subprocess.run(
-                [str(output / "open-foresight-service")], env=launcher_environment,
-                check=True, capture_output=True, text=True, timeout=30,
+                [str(output / "open-foresight-service")],
+                env=launcher_environment,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             selected = dict(line.split("=", 1) for line in launched.stdout.splitlines())
             resources = output / "share/open-foresight"
@@ -515,7 +534,10 @@ int main(void) {
                 elif key in {"FORESIGHT_RUNTIME_REVISION", "FORESIGHT_LITERT_BACKEND"}:
                     self.assertEqual(value, configuration[key])
                 else:
-                    self.assertEqual(Path(value).resolve(), (resources / configuration[key]).resolve())
+                    self.assertEqual(
+                        Path(value).resolve(),
+                        (resources / configuration[key]).resolve(),
+                    )
             self.assertTrue(
                 {"libgrpc_fixture.so", "libupb_fixture.so"}
                 <= set(manifest["bundled_libraries"])
@@ -911,3 +933,107 @@ def _assert_native_package_notice(tmp_path, kind, tool):
         command = ["bsdtar", "-tf", str(output)]
     listing = subprocess.check_output(command, text=True, timeout=60)
     assert "usr/share/doc/open-foresight/notices/nlohmann-json-LICENSE.MIT" in listing
+
+
+@unittest.skipUnless(
+    sys.platform == "linux",
+    "Linux maintainer scripts require GNU stat and Linux LP64 record locks",
+)
+def test_new_nss_home_lock_blocks_package_change_and_maintenance_spans_hooks(tmp_path):
+    import fcntl
+    import pwd
+
+    root = tmp_path / "installation"
+    root.mkdir()
+    identity = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:24]
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    directory = account_home / ".cache/open-foresight/install-locks" / identity
+    directory.mkdir(parents=True, mode=0o700)
+    try:
+        lock = directory / "lock"
+        descriptor = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            command = packages.upgrade_helper() + '\nprepare_installation_change "$1"\n'
+            refused = subprocess.run(
+                ["sh", "-c", command, "fixture", str(root)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert refused.returncode == 1, refused.stderr
+            assert "holds the install lock" in refused.stderr
+            marker = root / ".installation-maintenance"
+            assert not marker.exists(), (
+                "failed admission must remove its newly owned marker"
+            )
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            allowed = subprocess.run(
+                ["sh", "-c", command, "fixture", str(root)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert allowed.returncode == 0, allowed.stderr
+            assert marker.is_file() and marker.stat().st_mode & 0o777 == 0o600
+            finalizer = packages.deb_postinst().replace(
+                "/opt/open-foresight", str(root)
+            )
+            completed = subprocess.run(
+                ["sh", "-c", finalizer, "postinst", "configure"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert completed.returncode == 0, completed.stderr
+            assert not marker.exists()
+        finally:
+            os.close(descriptor)
+    finally:
+        shutil.rmtree(directory)
+
+
+@unittest.skipUnless(
+    sys.platform == "linux",
+    "Linux maintainer scripts require GNU stat and Linux LP64 record locks",
+)
+def test_removal_finalizer_prunes_only_empty_installation_directory(tmp_path):
+    root = tmp_path / "installation"
+    root.mkdir()
+    marker = root / ".installation-maintenance"
+    marker.write_text("")
+    marker.chmod(0o600)
+    command = packages.upgrade_helper() + '\nfinish_installation_removal "$1"\n'
+
+    def finalize():
+        return subprocess.run(
+            ["sh", "-c", command, "fixture", str(root)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+    # Simulate the package manager leaving its directory because the marker
+    # still existed during payload removal, then running the post-remove hook.
+    result = finalize()
+    assert result.returncode == 0, result.stderr
+    assert not root.exists()
+    assert finalize().returncode == 0
+
+    # Unknown user data is never recursively removed by package cleanup.
+    root.mkdir()
+    retained = root / "unowned"
+    retained.write_text("preserve")
+    result = finalize()
+    assert result.returncode == 0, result.stderr
+    assert retained.read_text() == "preserve"
+
+    # A marker with an unsafe mode is still refused and retained.
+    marker.write_text("")
+    marker.chmod(0o644)
+    assert finalize().returncode != 0
+    assert marker.exists() and retained.read_text() == "preserve"
+
+    assert "finish_installation_removal" in packages.deb_postrm()
+    assert "finish_installation_removal" in packages.rpm_scriptlets().split("%postun\n")[1]
+    assert "post_remove() { finish_installation_removal" in packages.arch_install_script()

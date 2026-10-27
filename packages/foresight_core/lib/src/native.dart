@@ -1,10 +1,11 @@
+import 'model_runtime_paths.dart';
 import 'rpc_error.dart';
 import 'desktop_connection.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'platform_services.dart';
-import 'dart:isolate';
+import 'native_lifetime.dart';
 import 'package:ffi/ffi.dart';
 import 'reference_tools.dart';
 import 'reference_tool_parser.dart';
@@ -12,13 +13,18 @@ import 'runtime_execution_policy.dart';
 
 /// Packaged installations always use their bundled native worker, including
 /// profiles that still contain the former Python runner path.
-String liteRtRunner(String registered) =>
-    runtimeConfiguration['FORESIGHT_LITERT_RUNNER'] ?? registered;
+String liteRtRunner(String registered, {RuntimeConfiguration? configuration}) =>
+    resolveLiteRtRunner(
+      registered,
+      runtimeSnapshot(configuration)['FORESIGHT_LITERT_RUNNER'],
+    );
 
-typedef CreateNative = Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>);
-typedef CreateDart = Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef CreateNative = Uint64 Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef CreateDart = int Function(Pointer<Utf8>, Pointer<Utf8>);
 
-Future<int> probeNativeModel(
+/// The returned runtime owns its mapping and native handles. No borrowed native
+/// pointer crosses an isolate or is reconstructed from an integer address.
+Future<NativeRuntime> probeNativeModel(
   String libraryPath,
   String runtime,
   String model, {
@@ -28,214 +34,183 @@ Future<int> probeNativeModel(
   runtime = requireInstalledRuntime(
     backend == 'litert_lm' ? liteRtRunner(runtime) : runtime,
   );
-  return Isolate.run(
-    () => _createAndProbe(libraryPath, runtime, model, backend, modelType),
-  );
-}
-
-int _createAndProbe(
-  String path,
-  String runtime,
-  String model,
-  String backend,
-  int modelType,
-) {
-  final lib = DynamicLibrary.open(path);
-  final a = runtime.toNativeUtf8(), b = model.toNativeUtf8();
-  Pointer<Void> engine = nullptr;
+  final candidate = NativeRuntime(libraryPath)..modelType = modelType;
   try {
-    if (backend == 'llama_cpp') {
-      engine = lib.lookupFunction<CreateNative, CreateDart>('fs_engine_create')(
-        a,
-        b,
-      );
-    } else if (backend == 'litert_lm') {
-      if (modelType != 0) {
-        engine = lib
-            .lookupFunction<
-              Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>, Int32),
-              Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>, int)
-            >('fs_engine_create_model_type')(a, b, modelType);
-      } else {
-        engine = lib
-            .lookupFunction<
-              Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>, Int32),
-              Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>, int)
-            >('fs_engine_create_backend')(a, b, 1);
-      }
-    } else {
-      throw ArgumentError.value(backend, 'backend');
-    }
-    if (engine == nullptr) {
-      throw StateError('Native model initialization failed');
-    }
-    final rc = lib
-        .lookupFunction<
-          Int32 Function(Pointer<Void>),
-          int Function(Pointer<Void>)
-        >('fs_engine_probe')(engine);
-    if (rc != 0) {
-      var detail = '';
-      final state = lib
-          .lookupFunction<
-            Pointer<Utf8> Function(Pointer<Void>),
-            Pointer<Utf8> Function(Pointer<Void>)
-          >('fs_engine_state')(engine);
-      if (state != nullptr) {
-        try {
-          detail =
-              (jsonDecode(state.toDartString()) as Map)['error']?.toString() ??
-              '';
-        } finally {
-          lib.lookupFunction<
-            Void Function(Pointer<Utf8>),
-            void Function(Pointer<Utf8>)
-          >('fs_string_free')(state);
-        }
-      }
-      throw StateError(
-        'Native model load/inference probe failed ($rc)${detail.isEmpty ? '' : ': $detail'}',
-      );
-    }
-    return engine.address;
-  } catch (_) {
-    if (engine != nullptr) {
-      lib.lookupFunction<
-        Int32 Function(Pointer<Void>),
-        int Function(Pointer<Void>)
-      >('fs_engine_destroy')(engine);
-    }
-    rethrow;
-  } finally {
-    calloc.free(a);
-    calloc.free(b);
+    await candidate.load(runtime, model, backend: backend);
+    return candidate;
+  } catch (error, stack) {
+    candidate.close();
+    try {
+      await candidate.closed;
+    } catch (_) {}
+    Error.throwWithStackTrace(error, stack);
   }
 }
 
 class _GenerationRequest {
   final String id;
-  final Pointer<Void> handle;
+  final int handle;
   final int epoch;
   bool released = false;
+  Future<void>? closed;
   bool cancelled = false;
   _GenerationRequest(this.id, this.handle, this.epoch);
 }
 
 class NativeRuntime implements GenerationStatus {
-  // Resolve each optional native symbol lazily once per loaded library.
+  late final _nativeFsEngineCreate = lib
+      .lookupFunction<
+        Uint64 Function(Pointer<Utf8>, Pointer<Utf8>, Int32, Int32),
+        int Function(Pointer<Utf8>, Pointer<Utf8>, int, int)
+      >('fs_owned_engine_create');
   late final _nativeFsEngineState = lib
       .lookupFunction<
-        Pointer<Utf8> Function(Pointer<Void>),
-        Pointer<Utf8> Function(Pointer<Void>)
-      >('fs_engine_state');
+        Pointer<Utf8> Function(Uint64),
+        Pointer<Utf8> Function(int)
+      >('fs_owned_engine_state');
   late final _nativeFsStringFree = lib
       .lookupFunction<
         Void Function(Pointer<Utf8>),
         void Function(Pointer<Utf8>)
       >('fs_string_free');
-  late final _nativeFsEngineDestroy = lib
-      .lookupFunction<
-        Int32 Function(Pointer<Void>),
-        int Function(Pointer<Void>)
-      >('fs_engine_destroy');
   late final _nativeFsConversationCreate = lib
-      .lookupFunction<
-        Pointer<Void> Function(Pointer<Void>),
-        Pointer<Void> Function(Pointer<Void>)
-      >('fs_conversation_create');
+      .lookupFunction<Uint64 Function(Uint64), int Function(int)>(
+        'fs_owned_conversation_create',
+      );
   late final _nativeFsGenerateTools = lib
       .lookupFunction<
         Int32 Function(
-          Pointer<Void>,
+          Uint64,
           Pointer<Utf8>,
           Pointer<Utf8>,
           Pointer<Utf8>,
           Int32,
         ),
-        int Function(
-          Pointer<Void>,
-          Pointer<Utf8>,
-          Pointer<Utf8>,
-          Pointer<Utf8>,
-          int,
-        )
-      >('fs_generate_tools');
+        int Function(int, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, int)
+      >('fs_owned_generate_tools');
   late final _nativeFsGenerateOptions = lib
       .lookupFunction<
         Int32 Function(
-          Pointer<Void>,
+          Uint64,
           Pointer<Utf8>,
           Pointer<Utf8>,
           Pointer<Utf8>,
           Int32,
         ),
-        int Function(
-          Pointer<Void>,
-          Pointer<Utf8>,
-          Pointer<Utf8>,
-          Pointer<Utf8>,
-          int,
-        )
-      >('fs_generate_options');
-  late final _nativeFsGenerateJson = lib
-      .lookupFunction<
-        Int32 Function(
-          Pointer<Void>,
-          Pointer<Utf8>,
-          Pointer<Utf8>,
-          Pointer<Utf8>,
-        ),
-        int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)
-      >('fs_generate_json');
-  late final _nativeFsGenerate = lib
-      .lookupFunction<
-        Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>),
-        int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
-      >('fs_generate');
+        int Function(int, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, int)
+      >('fs_owned_generate_options');
   late final _nativeFsEventPoll = lib
       .lookupFunction<
-        Pointer<Utf8> Function(Pointer<Void>, Int32),
-        Pointer<Utf8> Function(Pointer<Void>, int)
-      >('fs_event_poll');
+        Pointer<Utf8> Function(Uint64, Int32),
+        Pointer<Utf8> Function(int, int)
+      >('fs_owned_event_poll');
   late final _nativeFsGenerationToolReply = lib
       .lookupFunction<
-        Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>),
-        int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
-      >('fs_generation_tool_reply');
-  late final _nativeFsConversationDestroy = lib
-      .lookupFunction<
-        Int32 Function(Pointer<Void>, Int32),
-        int Function(Pointer<Void>, int)
-      >('fs_conversation_destroy');
+        Int32 Function(Uint64, Pointer<Utf8>, Pointer<Utf8>),
+        int Function(int, Pointer<Utf8>, Pointer<Utf8>)
+      >('fs_owned_generation_tool_reply');
   late final _nativeFsGenerationCancel = lib
-      .lookupFunction<
-        Int32 Function(Pointer<Void>),
-        int Function(Pointer<Void>)
-      >('fs_generation_cancel');
+      .lookupFunction<Int32 Function(Uint64), int Function(int)>(
+        'fs_owned_generation_cancel',
+      );
 
-  late final DynamicLibrary lib;
-  Pointer<Void> engine = nullptr, conversation = nullptr;
+  late final NativeLibrary _bindings;
+  DynamicLibrary get lib => _bindings.library;
+  NativeLifetime get _lifetime => _bindings.lifetime;
+  bool get restartRequired => _bindings.restartRequired;
+  void checkAvailable() => _bindings.checkAvailable();
+  int _engine = 0, _conversation = 0;
+  int get engine => _engine;
+  int get conversation => _conversation;
+  Future<void>? _closed;
+  Future<void> get closed => _closed ?? Future<void>.value();
   String template = 'raw';
   int modelType = 0;
   final String libraryPath;
   int _epoch = 0;
+  Completer<void>? _admissionCancelled;
   _GenerationRequest? _active;
+  final _callbacks = <Future<void>>{};
+  void Function()? onOwnershipChanged;
+  Object? _observerFailure;
+  StackTrace? _observerStack;
+  void _notifyOwnership() {
+    try {
+      onOwnershipChanged?.call();
+    } catch (error, stack) {
+      _observerFailure ??= error;
+      _observerStack ??= stack;
+    }
+  }
+
+  Future<T> _ownCallback<T>(
+    _GenerationRequest owner,
+    Future<T> Function() run,
+  ) {
+    final settled = Completer<void>();
+    _callbacks.add(settled.future);
+    _notifyOwnership();
+    // Publish ownership before invoking user code, which may close the runtime
+    // synchronously before returning its pending Future.
+    final work = Future<T>.sync(() {
+      if (owner.released ||
+          owner.cancelled ||
+          !identical(_active, owner) ||
+          owner.epoch != _epoch) {
+        throw RpcError(
+          RpcErrorCode.cancelled,
+          'Tool request is no longer current',
+        );
+      }
+      return run();
+    });
+    unawaited(
+      work.then<void>(
+        (_) => settled.complete(),
+        onError: (Object _, StackTrace _) => settled.complete(),
+      ),
+    );
+    unawaited(
+      settled.future.then<void>((_) {
+        _callbacks.remove(settled.future);
+        _notifyOwnership();
+      }),
+    );
+    return work;
+  }
+
   @override
-  bool get generating => _active != null;
-  bool get loaded => engine != nullptr && conversation != nullptr;
+  bool get generating => _active != null || _callbacks.isNotEmpty;
+  bool get loaded => engine != 0 && conversation != 0;
   String _phase = 'unconfigured', _lastError = '';
   NativeRuntime(String path) : libraryPath = path {
-    lib = DynamicLibrary.open(path);
+    _bindings = NativeLibrary(DynamicLibrary.open(path));
   }
   @override
   Map<String, dynamic> get effectiveState {
-    if (engine == nullptr) return {'state': _phase, 'error': _lastError};
+    if (restartRequired) {
+      return {
+        'state': 'failed',
+        'restart_required': true,
+        'error': 'Native ownership is unconfirmed; restart the service',
+      };
+    }
+    if (engine == 0) return {'state': _phase, 'error': _lastError};
     final p = _nativeFsEngineState(engine);
     if (p == nullptr) return {'state': 'failed'};
     try {
       return jsonDecode(p.toDartString()) as Map<String, dynamic>;
     } finally {
       _nativeFsStringFree(p);
+    }
+  }
+
+  void _requireEpoch(int epoch) {
+    if (epoch != _epoch) {
+      throw RpcError(
+        RpcErrorCode.cancelled,
+        'Model load cancelled before adoption',
+      );
     }
   }
 
@@ -249,42 +224,77 @@ class NativeRuntime implements GenerationStatus {
     if (!['llama_cpp', 'litert_lm'].contains(backend)) {
       throw ArgumentError.value(backend);
     }
+    final epoch = _epoch + 1;
     close();
-    final epoch = _epoch;
+    _requireEpoch(epoch);
     _phase = 'loading';
     _lastError = '';
     template = backend == 'llama_cpp' && model.toLowerCase().contains('qwen')
         ? 'chatml'
         : 'raw';
     try {
-      final address = await probeNativeModel(
-        libraryPath,
-        runtime,
-        model,
-        backend: backend,
-        modelType: modelType,
-      );
-      final loaded = Pointer<Void>.fromAddress(address);
-      if (epoch != _epoch) {
-        _nativeFsEngineDestroy(loaded);
-        throw RpcError(
-          RpcErrorCode.cancelled,
-          'Model load cancelled before adoption',
+      await closed;
+      _requireEpoch(epoch);
+      _closed = null;
+      final lifetime = _lifetime;
+      lifetime.ensureAdmission();
+      if (NativeLibrary.beforeAdmission != null) {
+        final cancelled = Completer<void>();
+        _admissionCancelled = cancelled;
+        try {
+          await Future.any<void>([
+            _bindings.prepareAdmission()!,
+            cancelled.future,
+          ]);
+          _requireEpoch(epoch);
+          lifetime.ensureAdmission();
+        } finally {
+          if (identical(_admissionCancelled, cancelled)) {
+            _admissionCancelled = null;
+          }
+        }
+      }
+      final a = runtime.toNativeUtf8(), b = model.toNativeUtf8();
+      try {
+        _engine = _nativeFsEngineCreate(
+          a,
+          b,
+          backend == 'llama_cpp' ? 0 : 1,
+          modelType,
+        );
+      } finally {
+        calloc.free(a);
+        calloc.free(b);
+      }
+      if (engine == 0) {
+        throw StateError('Native model initialization failed');
+      }
+      final result = await lifetime.request('fs_engine_probe_async', engine);
+      _requireEpoch(epoch);
+      if (result != 1) {
+        throw StateError(
+          'Native model load/inference probe failed: ${effectiveState['error'] ?? ''}',
         );
       }
-      engine = loaded;
-      conversation = _nativeFsConversationCreate(engine);
-      if (conversation == nullptr) {
-        close();
+      lifetime.ensureAdmission();
+      _conversation = _nativeFsConversationCreate(engine);
+      if (conversation == 0) {
         throw StateError('Native conversation initialization failed');
       }
       _phase = 'ready';
-    } catch (e) {
+    } catch (error, stack) {
       if (epoch == _epoch) {
-        _phase = 'failed';
-        _lastError = e.toString();
+        close();
+        final closingEpoch = _epoch;
+        try {
+          await closed;
+        } catch (_) {}
+        if (closingEpoch == _epoch) {
+          _phase = 'failed';
+          _lastError = error.toString();
+        }
       }
-      rethrow;
+      Error.throwWithStackTrace(error, stack);
     }
   }
 
@@ -410,10 +420,10 @@ class NativeRuntime implements GenerationStatus {
     Duration timeout = const Duration(minutes: 5),
     int? maxOutputTokens = 256,
   }) async* {
-    if (engine == nullptr || conversation == nullptr) {
+    if (engine == 0 || conversation == 0) {
       throw RpcError(RpcErrorCode.unavailable, 'Generation model unavailable');
     }
-    if (_active != null) {
+    if (generating) {
       throw RpcError(RpcErrorCode.busy, 'Generation already in progress');
     }
     if ((tools == null) != (toolDispatcher == null) ||
@@ -432,12 +442,22 @@ class NativeRuntime implements GenerationStatus {
     final outputBudget = maxOutputTokens ?? 0;
     // Each request owns a conversation. Destroy joins the native worker, so
     // the done-event/active-flag race cannot leak into the next generation.
+    _lifetime.ensureAdmission();
     final handle = _nativeFsConversationCreate(engine);
-    if (handle == nullptr) throw StateError('Native conversation unavailable');
+    if (handle == 0) throw StateError('Native conversation unavailable');
     final owner = _GenerationRequest(id, handle, _epoch);
     _active = owner;
     final clock = Stopwatch()..start();
     try {
+      _notifyOwnership();
+      if (owner.released ||
+          !identical(_active, owner) ||
+          owner.epoch != _epoch) {
+        throw RpcError(
+          RpcErrorCode.cancelled,
+          'Generation closed before admission',
+        );
+      }
       // Tool conversations carry a distinct native system message below.
       if (tools == null) {
         if (template == 'chatml') {
@@ -465,14 +485,20 @@ class NativeRuntime implements GenerationStatus {
       final schema = encodedSchema?.toNativeUtf8() ?? nullptr.cast<Utf8>();
       late int rc;
       try {
+        if (owner.released ||
+            owner.cancelled ||
+            !identical(_active, owner) ||
+            owner.epoch != _epoch) {
+          throw RpcError(
+            RpcErrorCode.cancelled,
+            'Generation closed before admission',
+          );
+        }
+        _lifetime.ensureAdmission();
         if (tools != null) {
           rc = _nativeFsGenerateTools(handle, a, b, schema, outputBudget);
-        } else if (maxOutputTokens != 256) {
-          rc = _nativeFsGenerateOptions(handle, a, b, schema, outputBudget);
-        } else if (responseSchema != null) {
-          rc = _nativeFsGenerateJson(handle, a, b, schema);
         } else {
-          rc = _nativeFsGenerate(handle, a, b);
+          rc = _nativeFsGenerateOptions(handle, a, b, schema, outputBudget);
         }
       } finally {
         calloc.free(a);
@@ -487,7 +513,9 @@ class NativeRuntime implements GenerationStatus {
       while (true) {
         // close/load may have destroyed this handle while awaiting the timer
         // or while a consumer was processing a yielded event.
-        if (owner.released || owner.epoch != _epoch) {
+        if (owner.released ||
+            !identical(_active, owner) ||
+            owner.epoch != _epoch) {
           throw RpcError(
             RpcErrorCode.cancelled,
             'Generation closed before completion',
@@ -561,7 +589,10 @@ class NativeRuntime implements GenerationStatus {
               _,
             ) {
               if (interrupted.isCompleted) return;
-              if (owner.released || owner.epoch != _epoch || owner.cancelled) {
+              if (owner.released ||
+                  !identical(_active, owner) ||
+                  owner.epoch != _epoch ||
+                  owner.cancelled) {
                 interrupted.completeError(
                   RpcError(
                     RpcErrorCode.cancelled,
@@ -576,7 +607,10 @@ class NativeRuntime implements GenerationStatus {
             });
             try {
               final reply = await Future.any([
-                toolDispatcher.handle(calls!, maxTokens: 4096),
+                _ownCallback(
+                  owner,
+                  () => toolDispatcher.handle(calls!, maxTokens: 4096),
+                ),
                 interrupted.future,
               ]);
               message = delegated ? {'message': reply} : reply;
@@ -584,7 +618,10 @@ class NativeRuntime implements GenerationStatus {
               monitor.cancel();
             }
           }
-          if (owner.released || owner.epoch != _epoch || owner.cancelled) {
+          if (owner.released ||
+              !identical(_active, owner) ||
+              owner.epoch != _epoch ||
+              owner.cancelled) {
             throw RpcError(
               RpcErrorCode.cancelled,
               'Tool request is no longer current',
@@ -597,6 +634,15 @@ class NativeRuntime implements GenerationStatus {
           final request = id.toNativeUtf8();
           final reply = encodedReply.toNativeUtf8();
           try {
+            if (owner.released ||
+                owner.cancelled ||
+                !identical(_active, owner) ||
+                owner.epoch != _epoch) {
+              throw RpcError(
+                RpcErrorCode.cancelled,
+                'Tool request is no longer current',
+              );
+            }
             final result = _nativeFsGenerationToolReply(handle, request, reply);
             if (result != 0) {
               throw StateError(
@@ -634,15 +680,22 @@ class NativeRuntime implements GenerationStatus {
         if (event['type'] == 'done') break;
       }
     } finally {
-      _release(owner);
-      if (identical(_active, owner)) _active = null;
+      try {
+        await _release(owner);
+      } finally {
+        if (identical(_active, owner)) _active = null;
+        _notifyOwnership();
+      }
     }
   }
 
-  void _release(_GenerationRequest owner) {
-    if (owner.released) return;
+  Future<void> _release(_GenerationRequest owner) {
+    if (owner.released) return owner.closed!;
     owner.released = true;
-    _nativeFsConversationDestroy(owner.handle, 1);
+    return owner.closed = _lifetime.retire(
+      'fs_conversation_retire',
+      owner.handle,
+    );
   }
 
   /// Supplying an ID prevents a stale UI/controller from cancelling a new task.
@@ -659,20 +712,58 @@ class NativeRuntime implements GenerationStatus {
     return true;
   }
 
+  /// Request-scoped actual native cleanup, including a paused stream consumer.
+  /// A late continuation still observes its released identity before any FFI.
+  Future<void> cancelAndDrain({String? requestId}) {
+    final owner = _active;
+    cancel(requestId: requestId);
+    if (owner == null || (requestId != null && owner.id != requestId)) {
+      return Future<void>.value();
+    }
+    return _release(owner).whenComplete(() {
+      if (identical(_active, owner)) _active = null;
+      _notifyOwnership();
+    });
+  }
+
   @override
   void close() {
+    final admission = _admissionCancelled;
+    if (admission != null && !admission.isCompleted) admission.complete();
     _epoch++;
     _phase = 'unconfigured';
+    final previous = _closed;
+    final pending = <Future<void>>[
+      if (previous != null) previous,
+      ..._callbacks,
+    ];
     final owner = _active;
-    if (owner != null) _release(owner);
     _active = null;
-    if (conversation != nullptr) {
-      _nativeFsConversationDestroy(conversation, 1);
-      conversation = nullptr;
+    if (owner != null) pending.add(_release(owner));
+    final oldConversation = conversation, oldEngine = engine;
+    _conversation = 0;
+    _engine = 0;
+    if (owner == null &&
+        oldConversation == 0 &&
+        oldEngine == 0 &&
+        (previous != null || _callbacks.isEmpty)) {
+      return;
     }
-    if (engine != nullptr) {
-      _nativeFsEngineDestroy(engine);
-      engine = nullptr;
+    if (oldConversation != 0) {
+      pending.add(_lifetime.retire('fs_conversation_retire', oldConversation));
     }
+    if (oldEngine != 0) {
+      pending.add(_lifetime.retire('fs_engine_retire', oldEngine));
+    }
+    if (pending.isEmpty) return;
+    final completion = Future.wait(pending).then<void>((_) {
+      final failure = _observerFailure;
+      if (failure != null) Error.throwWithStackTrace(failure, _observerStack!);
+    });
+    unawaited(
+      completion.then<void>((_) {}, onError: (Object _, StackTrace _) {}),
+    );
+    _closed = completion;
+    _notifyOwnership();
   }
 }

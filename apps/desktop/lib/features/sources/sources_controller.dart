@@ -1,3 +1,7 @@
+import 'source_collection.dart';
+import 'graph_widgets.dart';
+import 'note_widgets.dart';
+import 'source_tiles.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -16,27 +20,23 @@ import '../../presentation/workspace_presentation.dart';
 import '../../shell/ports.dart';
 import '../../shell/workspace_tab.dart';
 import 'file_discovery_sheet.dart';
-import 'graph_label_controls.dart';
 import 'graph_rendering.dart';
 import 'cluster_rendering.dart';
-import 'source_painters.dart';
 
+part 'source_composition.dart';
 part 'source_actions.dart';
-part 'note_widgets.dart';
 part 'source_labels.dart';
-part 'source_collection.dart';
-part 'source_tiles.dart';
 part 'graph_layout_owner.dart';
 part 'graph_interaction.dart';
-part 'graph_widgets.dart';
-
-const _blue = workspaceBlue;
-const _ink = workspaceInk;
 
 // Each graph.embeddings reply must fit the service's 16 MiB frame limit.
 const _graphEmbeddingBatch = 128;
 
 class SourcesController implements SourceCommands {
+  Widget sourceTile(SourceSummary source, {String? originalMime}) =>
+      _composeSourceTile(source, originalMime: originalMime);
+  void syncGraphMotion() => _composeSyncGraphMotion();
+  void tickGraphMotion(Duration elapsed) => _composeTickGraphMotion(elapsed);
   SourcesController({
     required FeatureHost host,
     required WorkspaceNavigation navigation,
@@ -282,46 +282,6 @@ class SourcesController implements SourceCommands {
     if (graphView) _queueGraphScene();
   }
 
-  void syncGraphMotion() {
-    final enabled =
-        mounted &&
-        _navigation.selectedTab == WorkspaceTab.sources &&
-        graphView &&
-        _reads.sources.isNotEmpty &&
-        !graphAnimationPaused &&
-        graphMousePointer == null &&
-        !graphModalOpen &&
-        !MediaQuery.disableAnimationsOf(context);
-    if (enabled && !graphMotionTicker.isActive) {
-      graphLastTick = null;
-      // The callback intentionally schedules work owned by its controller.
-      // ignore: discarded_futures
-      graphMotionTicker.start();
-    } else if (!enabled && graphMotionTicker.isActive) {
-      graphMotionTicker.stop();
-      graphLastTick = null;
-    }
-  }
-
-  void tickGraphMotion(Duration elapsed) {
-    final previous = graphLastTick;
-    graphLastTick = elapsed;
-    if (!mounted ||
-        previous == null ||
-        graphMousePointer != null ||
-        graphAnimationPaused ||
-        graphModalOpen ||
-        _navigation.selectedTab != WorkspaceTab.sources ||
-        !graphView)
-      return;
-    final seconds = (elapsed - previous).inMicroseconds / 1000000;
-    if (seconds <= 0) return;
-    // Keep idle graph motion slow, with gentler motion while a source is selected.
-    graphYaw += seconds * .025 * (graphSelectedDocument == null ? 1 : .05);
-    if (!graphManualPitch) graphPitch = .4 + math.sin(graphYaw * .4) * .08;
-    graphMotionFrames.value++;
-  }
-
   Future<void> importFolderPath(String path) => _featureImportFolderPath(path);
 
   @override
@@ -452,16 +412,8 @@ class SourcesController implements SourceCommands {
 
   Widget sources() => _featureSources();
 
-  String sourceTimeLabel(Object? stamp) => _featureSourceTimeLabel(stamp);
-
-  Widget sourceCells(SourceSummary? source, {String? originalMime}) =>
-      _featureSourceCells(source, originalMime: originalMime);
-
-  Widget sourceTile(SourceSummary source, {String? originalMime}) =>
-      _featureSourceTile(source, originalMime: originalMime);
-
-  Widget sourceCardTile(SourceSummary s, {String? originalMime}) =>
-      _featureSourceCardTile(s, originalMime: originalMime);
+  String sourceTimeLabel(Object? stamp) =>
+      stamp == null || stamp == 0 ? '--' : timeLabel(stamp);
 
   void scheduleGraphLayout(List<SourceSummary> all) =>
       _featureScheduleGraphLayout(all);
@@ -521,6 +473,255 @@ class SourcesController implements SourceCommands {
     documentLabelRecords,
     clusters,
   );
+  Future<void> _featureOpenNote(NoteSummary note) => _loadNoteBody(
+    note.id,
+    note.title,
+    resetEditor: noteId != note.id || noteBodyReady,
+  );
+
+  Future<void> _loadNoteBody(
+    int id,
+    String title, {
+    required bool resetEditor,
+  }) async {
+    if (!mounted) return;
+    final owner = _noteLoadOwner = FeatureRequestIdentity.capture(d);
+    final generation = ++noteEditorGeneration;
+    final preserveBody =
+        !resetEditor && _noteDraftRevision != _noteBodyLoadRevision;
+    setState(() {
+      newNoteKey.reset();
+      noteId = id;
+      noteLoading = true;
+      _acceptedNoteBody = null;
+      _noteBodyNeedsReview = false;
+      _noteLoadError = '';
+      if (resetEditor) {
+        noteTitle.text = title;
+        noteBody.clear();
+        noteBaseline = (title, '');
+        _noteBodyLoadRevision = _noteDraftRevision;
+      }
+    });
+    final draftRevision = _noteDraftRevision;
+    bool current() =>
+        owner.isCurrent(d, alive: mounted) &&
+        generation == noteEditorGeneration &&
+        noteId == id;
+    try {
+      final body = await d.store.read(StoreReadQueries.noteBody(id));
+      if (!current()) return;
+      if (body.error != null) throw body.error!;
+      if (!body.current) {
+        throw RpcError(
+          RpcErrorCode.unavailable,
+          'Note is refreshing; try again.',
+        );
+      }
+      setState(() {
+        final savedBody = body.value ?? '';
+        _noteBodyNeedsReview =
+            (preserveBody || _noteDraftRevision != draftRevision) &&
+            noteBody.text != savedBody;
+        if (!_noteBodyNeedsReview) {
+          noteBody.text = savedBody;
+          _noteBodyLoadRevision = _noteDraftRevision;
+        }
+        noteBaseline = (title, savedBody);
+        _acceptedNoteBody = (id, generation);
+      });
+    } catch (failure) {
+      if (current()) {
+        setState(() => _noteLoadError = failure.toString());
+        rethrow;
+      }
+    } finally {
+      // Settlement releases this editor's loading state even if its owner was
+      // retired. The body remains unaccepted; a newer selection/load owns its
+      // own loading flag and is never cleared by this completion.
+      if (mounted && generation == noteEditorGeneration && noteId == id)
+        setState(() => noteLoading = false);
+    }
+  }
+
+  void _featureShowSource(String id) {
+    final owner = FeatureRequestIdentity.capture(d);
+    unawaited(
+      sourceById(id).catchError((Object error) {
+        if (owner.isCurrent(d, alive: mounted))
+          _operations.reportAsyncError(error);
+        return false;
+      }),
+    );
+  }
+
+  Widget _featureNotes() => NoteEditor(
+    notes: _reads.notes,
+    noteTitle: noteTitle,
+    noteBody: noteBody,
+    canSave: !noteLoading && _noteBodyPreparedReady,
+    status: _noteLoadStatus(),
+    problem: _reads.problem,
+    onNew: _newNoteDraft,
+    onSave: _saveNote,
+    onOpen: (note) =>
+        unawaited(openNote(note).catchError(_operations.reportAsyncError)),
+  );
+
+  void _newNoteDraft() {
+    setState(() {
+      noteEditorGeneration++;
+      noteId = null;
+      noteLoading = false;
+      _acceptedNoteBody = null;
+      _noteBodyNeedsReview = false;
+      _noteLoadError = '';
+      noteBaseline = ('', '');
+      newNoteKey.reset();
+      noteTitle.clear();
+      noteBody.clear();
+    });
+  }
+
+  void _saveNote() {
+    // A callback built before a session/epoch replacement must
+    // not treat its accepted body as current after replacement.
+    if (!mounted || noteLoading || !noteBodyReady) return;
+    unawaited(
+      _operations.run(() async {
+        if (!mounted || noteLoading || !noteBodyReady) return;
+        // Every send names the workspace this save began in, and a
+        // reply that arrives after a reset is not shown: it names an
+        // ID the views have dropped.
+        final epoch = d.workspaceEpoch;
+        final identity = FeatureRequestIdentity.capture(d);
+        var originalId = noteId;
+        final editorGeneration = noteEditorGeneration;
+        bool current() =>
+            identity.isCurrent(d, alive: mounted) &&
+            noteId == originalId &&
+            noteEditorGeneration == editorGeneration;
+        final sendEnvelope = ClientEnvelope(
+          workspaceEpoch: epoch != null
+              ? WireField(epoch)
+              : const WireField.absent(),
+        );
+        final note = NotesSaveInput(title: noteTitle.text, body: noteBody.text);
+        void saved(int id) => setState(() {
+          noteId = id;
+          noteBaseline = (note.title, note.body);
+          _acceptedNoteBody = (id, noteEditorGeneration);
+          _noteLoadOwner = identity;
+          _noteBodyNeedsReview = false;
+          _noteLoadError = '';
+          if (noteBody.text == note.body)
+            _noteBodyLoadRevision = _noteDraftRevision;
+        });
+        final id = noteId;
+        if (id != null) {
+          await notesSaveDescriptor.send(
+            d,
+            NotesSaveInput(
+              id: WireField(id),
+              title: note.title,
+              body: note.body,
+              envelope: sendEnvelope,
+            ),
+          );
+          if (current()) saved(id);
+          return;
+        }
+        final created = await notesSaveDescriptor.sendKeyed(
+          newNoteKey,
+          d,
+          note,
+          sendEnvelope: sendEnvelope,
+          // Edited after an unconfirmed save: the first save is now known,
+          // so the edit updates that note under the existing retry owner.
+          amend: (first, edited) async {
+            final id = first.id;
+            if (current()) {
+              setState(() {
+                originalId = id;
+                noteId = id;
+              });
+            }
+            return notesSaveDescriptor.send(
+              d,
+              NotesSaveInput(
+                id: WireField(id),
+                title: edited.title,
+                body: edited.body,
+                envelope: sendEnvelope,
+              ),
+            );
+          },
+        );
+        if (current()) saved(created.id);
+      }),
+    );
+  }
+
+  Widget _noteLoadStatus() {
+    final id = noteId;
+    if (id == null || noteLoading || _noteBodyPreparedReady)
+      return const SizedBox.shrink();
+    if (_noteBodyPreparedCurrent && _noteBodyNeedsReview) {
+      final accepted = _acceptedNoteBody!;
+      return NoteLoadStatus(
+        message: 'Review the saved note before replacing it with this draft.',
+        actionLabel: 'Review saved note',
+        onAction: () => unawaited(
+          _reviewLoadedNote(accepted).catchError(_operations.reportAsyncError),
+        ),
+      );
+    }
+    final current =
+        _noteLoadOwner?.matchesConnection(d, alive: mounted) ?? false;
+    return NoteLoadStatus(
+      message: current && _noteLoadError.isNotEmpty
+          ? _noteLoadError
+          : 'Reload this note before saving.',
+      actionLabel: 'Retry loading note',
+      onAction: () {
+        if (!mounted || noteId != id || noteLoading || noteBodyReady) return;
+        unawaited(
+          _loadNoteBody(
+            id,
+            noteBaseline.$1,
+            resetEditor: false,
+          ).catchError(_operations.reportAsyncError),
+        );
+      },
+    );
+  }
+
+  Future<void> _reviewLoadedNote((int, int) accepted) async {
+    if (!mounted ||
+        !_noteBodyAcceptedCurrent ||
+        !_noteBodyNeedsReview ||
+        accepted != _acceptedNoteBody)
+      return;
+    final owner = FeatureRequestIdentity.capture(d);
+    final saved = noteBaseline;
+    final useSaved = await showDialog<bool>(
+      context: context,
+      builder: (_) => SavedNoteReviewDialog(title: saved.$1, body: saved.$2),
+    );
+    if (useSaved == null ||
+        !owner.isCurrent(d, alive: mounted) ||
+        accepted != _acceptedNoteBody ||
+        !_noteBodyNeedsReview)
+      return;
+    setState(() {
+      if (useSaved) {
+        noteTitle.text = saved.$1;
+        noteBody.text = saved.$2;
+        _noteBodyLoadRevision = _noteDraftRevision;
+      }
+      _noteBodyNeedsReview = false;
+    });
+  }
 }
 
 class SourcesView extends StatelessWidget {

@@ -1,3 +1,4 @@
+import 'desktop_fixture_owner.dart';
 import 'package:foresight_core/desktop.dart' show MeetingArtifact;
 import 'package:open_foresight/shell/workspace_tab.dart';
 import '../test_support/core_fixture.dart';
@@ -14,51 +15,53 @@ import 'controller_fixture.dart';
 import 'pump_until.dart';
 
 void main() {
-  testWidgets('another client\'s clear closes the editors that hold its IDs', (
-    tester,
-  ) async {
-    final fixture = RemoteFixture();
-    await tester.runAsync(fixture.start);
-    addTearDown(() => tester.runAsync(fixture.close));
-    fixture.handler = (socket, request) => fixture.reply(socket, request, null);
-    await tester.pumpWidget(
-      Foresight(fixture.remote, deviceLoader: () async => []),
-    );
-    await tester.pumpAndSettle();
-    final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
-    state.update(() {
-      state.sourceFeature.noteId = 3;
-      state.sourceFeature.noteTitle.text = 'Note 3';
-      state.sourceFeature.noteBody.text = 'Body of note 3';
-    });
-    // The clear commits to the profile before its event arrives.
-    fixture.owner.renewWorkspaceEpoch();
-    final cleared = fixture.owner.workspaceEpoch;
-    fixture.event({...fixture.status, 'workspace_epoch': cleared});
-    await pumpUntil(tester, () => state.sourceFeature.noteId == null);
-    expect(state.sourceFeature.noteTitle.text, isEmpty);
-    expect(state.sourceFeature.noteBody.text, isEmpty);
-    // The reset views now edit the new workspace.
-    await tester.runAsync(
-      () => fixture.remote.command(Operation.notesSave, {
-        'id': 1,
-        'title': 'New',
-        'body': '',
-      }),
-    );
-    expect(
-      fixture.requests.last['args'],
-      containsPair('workspace_epoch', cleared),
-    );
-    fixture.remote.close();
-    await pumpUntilCompleted(tester, fixture.remote.closed);
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pumpAndSettle();
-  });
+  testWidgets(
+    'another client\'s clear closes the editors that hold its IDs',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final fixture = RemoteFixture();
+      await tester.runAsync(fixture.start);
+      addTearDown(() => tester.runAsync(fixture.close));
+      fixture.handler = (socket, request) =>
+          fixture.reply(socket, request, null);
+      await tester.pumpWidget(
+        Foresight(fixture.remote, deviceLoader: () async => []),
+      );
+      await tester.pumpAndSettle();
+      final state = tester.state(find.byType(Workspace)) as WorkspaceTestAccess;
+      state.update(() {
+        state.sourceFeature.noteId = 3;
+        state.sourceFeature.noteTitle.text = 'Note 3';
+        state.sourceFeature.noteBody.text = 'Body of note 3';
+      });
+      // The clear commits to the profile before its event arrives.
+      fixture.owner.renewWorkspaceEpoch();
+      final cleared = fixture.owner.workspaceEpoch;
+      fixture.event({...fixture.status, 'workspace_epoch': cleared});
+      await pumpUntil(tester, () => state.sourceFeature.noteId == null);
+      expect(state.sourceFeature.noteTitle.text, isEmpty);
+      expect(state.sourceFeature.noteBody.text, isEmpty);
+      // The reset views now edit the new workspace.
+      await tester.runAsync(
+        () => fixture.remote.command(Operation.notesSave, {
+          'id': 1,
+          'title': 'New',
+          'body': '',
+        }),
+      );
+      expect(
+        fixture.requests.last['args'],
+        containsPair('workspace_epoch', cleared),
+      );
+      fixture.remote.close();
+      await pumpUntilCompleted(tester, fixture.remote.closed);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    }),
+  );
 
   testWidgets(
     'an edit dialog opened before a clear cannot change the artifact that reuses its ID',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final before = f.store.meeting('Before');
       f.store.artifact(before, 'summary', 'old summary', 'fixture');
@@ -97,14 +100,14 @@ void main() {
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await editing;
-    },
+    }),
   );
 
   const notice = 'Workspace cleared elsewhere; unsaved edits were discarded.';
 
   testWidgets(
     'a clear elsewhere reports discarded edits, never their text, and only then',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       Future<void> clearElsewhere() async {
         await tester.runAsync(
@@ -142,12 +145,12 @@ void main() {
       await tester.pumpAndSettle();
       expect(f.shell.sourceFeature.noteTitle.text, isEmpty);
       expect(find.text(notice), findsNothing);
-    },
+    }),
   );
 
   testWidgets(
     'an edit dialog is not opened while a committed clear awaits its reset',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final meeting = f.store.meeting('Before');
       f.store.artifact(meeting, 'summary', 'old summary', 'fixture');
@@ -159,37 +162,38 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsNothing);
       expect(f.shell.error, contains('cleared elsewhere'));
-    },
+    }),
   );
 
-  testWidgets('startup adopts a workspace cleared before the desktop opened', (
-    tester,
-  ) async {
-    final root = createTestTempDirectorySync('startup-epoch-');
-    final store = Store('${root.path}/app.db');
-    final connection = TestDesktopConnection(
-      Application(
-        Domain(
-          store,
-          OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+  testWidgets(
+    'startup adopts a workspace cleared before the desktop opened',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final root = createTestTempDirectorySync('startup-epoch-');
+      final store = Store('${root.path}/app.db');
+      final connection = TestDesktopConnection(
+        Application(
+          Domain(
+            store,
+            OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+          ),
         ),
-      ),
-    );
-    store.renewWorkspaceEpoch();
-    expect(connection.workspaceReplaced, isTrue);
-    await tester.pumpWidget(
-      Foresight(connection, deviceLoader: () async => []),
-    );
-    await tester.pumpAndSettle();
-    expect(connection.workspaceEpoch, store.workspaceEpoch);
-    expect(find.text(notice), findsNothing);
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pumpAndSettle();
-  });
+      );
+      store.renewWorkspaceEpoch();
+      expect(connection.workspaceReplaced, isTrue);
+      await tester.pumpWidget(
+        Foresight(connection, deviceLoader: () async => []),
+      );
+      await tester.pumpAndSettle();
+      expect(connection.workspaceEpoch, store.workspaceEpoch);
+      expect(find.text(notice), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    }),
+  );
 
   testWidgets(
     'a reset also closes the preview, graph selection and question drafts',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final meeting = f.store.meeting('Before');
       f.shell.update(() {
@@ -204,12 +208,12 @@ void main() {
       expect(f.shell.meetingFeature.meetingPreviewId, isNull);
       expect(f.shell.sourceFeature.graphSelectedDocument, isNull);
       expect(f.shell.chatFeature.questionFor(meeting).text, isEmpty);
-    },
+    }),
   );
 
   testWidgets(
     'a failed clear keeps the meeting notes it was about to discard',
-    (tester) async {
+    (tester) async => withDesktopFixtures(tester, () async {
       final f = await ControllerFixture.mount(tester);
       final meeting = f.store.meeting('Kept');
       f.shell.update(() => f.shell.meetingFeature.meetingId = meeting);
@@ -233,6 +237,6 @@ void main() {
         f.connection.calls.where((call) => call.$1 == Operation.meetingsNotes),
         hasLength(1),
       );
-    },
+    }),
   );
 }

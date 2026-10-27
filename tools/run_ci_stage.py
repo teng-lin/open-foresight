@@ -77,6 +77,23 @@ def execute(root, platform, stage, hit, cmake_args):
             timeout=1800,
         )
     elif not hit:
+        if stage == "service":
+            # Independent service validation owns its compiled products. A
+            # Core/Desktop test result is not a build prerequisite or artifact.
+            subprocess.run(
+                [
+                    "bash",
+                    str(root / "tools/build.sh"),
+                    "--platform",
+                    platform,
+                    "--stage",
+                    "core",
+                    "--build-only",
+                ],
+                cwd=root,
+                check=True,
+                timeout=3600,
+            )
         subprocess.run(
             [
                 "bash",
@@ -125,26 +142,16 @@ def run(
 ):
     stage_environment.reject_compiler_overrides()
     source = cache.git(root, "rev-parse", "HEAD").decode().strip()
-    for parent, directory in inputs.items():
-        if parent not in parents:
-            raise ValueError(f"Unexpected prerequisite: {parent}")
-        restore_input(root, platform, parent, directory, parents[parent], source)
-    required = (
-        {"native"}
-        if stage in ("core", "desktop")
-        else {"native", "core"}
-        if stage == "service"
-        else set()
-    )
-    expected_parents = {"native", "core", "desktop"} if stage == "service" else required
+    required = {"native"} if stage in ("core", "desktop", "service") else set()
+    expected_parents = required
     if set(parents) != expected_parents:
         raise ValueError(
             f"Stage {stage} requires parent identities {sorted(expected_parents)}"
         )
-    # Service integration compiles its Debug UI harness from current source. Its
-    # successful desktop prerequisite is bound by identity, not a Release bundle.
     if set(inputs) != required:
         raise ValueError(f"Stage {stage} requires input artifacts {sorted(required)}")
+    for parent, directory in inputs.items():
+        restore_input(root, platform, parent, directory, parents[parent], source)
     environment = stage_environment.with_build_settings(environment, cmake_args)
     # An inactive diagnostic option must not change historical environment
     # identities or discard compatible native compiler work. Only the core

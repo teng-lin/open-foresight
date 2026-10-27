@@ -1,3 +1,4 @@
+import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -94,6 +95,7 @@ class RecoveryControl extends control.HelperControlServiceBase {
 }
 
 void main() {
+  bootstrapSqlSupportFixture();
   late Application app;
   final native = Platform.environment['FORESIGHT_NATIVE_LIBRARY'];
   late Directory root;
@@ -237,7 +239,7 @@ void main() {
       await domain.resume();
       expect(domain.generator, isNot(same(acquired)));
       expect(domain.generator!.loaded, isTrue);
-      domain.generator!.close();
+      await domain.resetNoteEnhancementService();
     },
     skip: native == null
         ? 'Requires the native runtime supplied by the core CI gate'

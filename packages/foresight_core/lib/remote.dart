@@ -1,5 +1,6 @@
 export 'src/remote_domain.dart';
-export 'src/service.dart' show ServiceClient, ensureService;
+export 'src/service_client.dart' show ServiceClient;
+export 'src/service_startup.dart' show ensureService;
 export 'src/desktop_connection.dart';
 export 'src/operations.dart' show Operation;
 export 'src/pending_request_key.dart';
