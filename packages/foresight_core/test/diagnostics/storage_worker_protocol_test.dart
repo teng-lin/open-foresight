@@ -743,8 +743,15 @@ void main() {
     test('classify defers only while the admission lock is confirmed held', () {
       final (:worker, :path) = admittedFilesystemWorker();
       expect(probeAdmissionLock(path), AdmissionLockProbe.free);
+      // Own descriptors are read from /proc on Linux only; elsewhere unknown.
+      final ownBefore = ownAdmissionDescriptors();
+      expect(ownBefore == null, !Platform.isLinux);
       final logs = BackupDirectory('$path/logs', create: false);
       final holder = logs.open('admission.lock');
+      expect(
+        ownAdmissionDescriptors(),
+        ownBefore == null ? isNull : ownBefore + 1,
+      );
       var held = true;
       addTearDown(() {
         if (held) holder.close();
@@ -766,6 +773,7 @@ void main() {
       );
       held = false;
       holder.close();
+      expect(ownAdmissionDescriptors(), ownBefore);
       expect(probeAdmissionLock(path), AdmissionLockProbe.free);
       // The deferral changed no state: the same request now succeeds.
       expect(classify(worker).result, DiagnosticWorkerResult.ok);
