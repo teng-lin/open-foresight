@@ -264,12 +264,16 @@ Future<bool> _runAdmissionProcess(
 
   final outputSubscription = capture(process.stdout, output, outputDone);
   final errorsSubscription = capture(process.stderr, errors, errorsDone);
-  final drained = Future.wait([outputDone.future, errorsDone.future]);
   var reaped = false, success = false, cleanupComplete = false;
+  var drainComplete = false;
+  final drained = Future.wait([outputDone.future, errorsDone.future]).then((_) {
+    drainComplete = true;
+  });
   var ownsGroup = false;
   int? earlyExit;
   final exitCode = process.exitCode.then((code) {
     earlyExit = code;
+    reaped = true;
     return code;
   });
   bool recordedOwnedGroup() {
@@ -315,9 +319,9 @@ Future<bool> _runAdmissionProcess(
 
     try {
       ownsGroup = ownsGroup || recordedOwnedGroup();
-      if (ownsGroup) {
-        // Only this atomically recorded, child-created session can be signalled.
-        // Its compiler descendants inherit this group, never the caller's group.
+      // Skip once exit and EOF are observed: recorded numbers may be reused.
+      // OS reap may precede Dart's exit notification; this guard is observational.
+      if (ownsGroup && !(earlyExit != null && drainComplete)) {
         _kill(-process.pid, ProcessSignal.sigkill.signalNumber);
       }
       if (!reaped) process.kill(ProcessSignal.sigkill);
