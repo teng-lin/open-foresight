@@ -27,9 +27,13 @@ source "$task_root/tools/runtime_support_gate.sh"
 foresight_verify_runtime_support "$task_root" "$task_build" "$task_python"
 foresight_diagnostic_worker "$task_root" "$task_build" "$task_python" --verify
 # Short sockets work on macOS too. Honor disk-backed local test storage.
-task_service_temp=$(mktemp -d "${FORESIGHT_TEST_TEMP_ROOT:-/tmp}/of-svc.XXXXXX")
+task_service_temp=$(mktemp -d "${FORESIGHT_TEST_TEMP_ROOT:-/var/tmp}/of-svc.XXXXXX")
 trap 'rm -rf -- "$task_service_temp"' EXIT
+# Native external capture refuses symlink ancestors, including macOS /var.
+task_service_temp=$(cd -- "$task_service_temp" && pwd -P)
 mkdir -p "$task_root/test-results/service"
+TMPDIR="$task_service_temp" \
+FORESIGHT_TEST_TEMP_ROOT="$task_service_temp" \
 FORESIGHT_SERVICE_EXECUTABLE="$task_build/application/foresight-service" \
 FORESIGHT_MCP_EXECUTABLE="$task_build/application/foresight-mcp" \
 FORESIGHT_HELPER_EXECUTABLE="$task_build/services/helper/ForesightHelper" \
