@@ -432,7 +432,7 @@ esac
         "host_dependencies": [
             "Linux x86_64, compatible glibc/libstdc++",
             "GTK3 desktop stack",
-            "PipeWire and pw-record for capture",
+            "PipeWire libpipewire-0.3 >=1.0.5 for saved recording/playback; pw-record for legacy capture",
             "registered local generation/speech executables and model assets",
         ],
         "files": files,
