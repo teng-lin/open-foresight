@@ -128,12 +128,23 @@ int main(int argc, char **argv) {
       return 68;
     path[size] = 0;
 #endif
-    std::strcat(path, ".ready");
-    int ready = open(path, O_WRONLY | O_CREAT, 0600);
-    if (ready >= 0) {
-      auto identity = std::to_string(getpid());
-      write(ready, identity.data(), identity.size());
-      close(ready);
+    const auto published = std::string(path) + ".ready";
+    const auto staging = published + ".partial";
+    int ready =
+        open(staging.c_str(),
+             O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (ready < 0)
+      return 69;
+    auto identity = std::to_string(getpid());
+    ssize_t written;
+    do {
+      written = write(ready, identity.data(), identity.size());
+    } while (written < 0 && errno == EINTR);
+    bool closed = close(ready) == 0;
+    if (written != static_cast<ssize_t>(identity.size()) || !closed ||
+        rename(staging.c_str(), published.c_str()) != 0) {
+      unlink(staging.c_str()); // Only the staging file created above is ours.
+      return 69;
     }
     while (true)
       pause();
@@ -293,6 +304,7 @@ struct Fixture {
   }
 };
 [[maybe_unused]] void confirmed(const MediaProcessResult &r) {
+  expect(r.child_pid > 0, "positive_child_pid_required");
   expect(r.child_exit_confirmed, "missing_wait_fence");
   expect(r.closed.valid() &&
              r.closed.wait_for(0ms) == std::future_status::ready,
@@ -424,7 +436,62 @@ int main(int argc, char **argv) {
 #if defined(FORESIGHT_MEDIA_PROCESS_TEST_HOOKS) &&                             \
     FORESIGHT_MEDIA_PROCESS_TEST_HOOKS
     {
+#ifndef __APPLE__
+      // A no-leaf receipt must not query/reap arbitrary host children.
+      struct UnrelatedChild {
+        pid_t pid = fork();
+        int watched = -1;
+        UnrelatedChild() {
+          expect(pid >= 0, "unrelated_child_fork");
+          if (!pid) {
+            alarm(20);
+            while (true)
+              pause();
+          }
+          watched = static_cast<int>(syscall(SYS_pidfd_open, pid, 0));
+          if (watched < 0) {
+            // This fresh child has not been exposed to a reaping probe yet.
+            kill(pid, SIGKILL);
+            int status;
+            while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+            }
+            throw std::runtime_error("unrelated_child_watch");
+          }
+        }
+        ~UnrelatedChild() {
+          // A failed probe may already have reaped the numeric PID. Signal
+          // and collect only this stable kernel identity, never a reused PID.
+          (void)syscall(SYS_pidfd_send_signal, watched, SIGKILL, nullptr, 0);
+          siginfo_t info{};
+          while (waitid(P_PIDFD, static_cast<id_t>(watched), &info, WEXITED) <
+                     0 &&
+                 errno == EINTR) {
+          }
+          close(watched);
+        }
+      } unrelated;
+#endif
       Fixture f(base, one);
+#ifndef __APPLE__
+      struct OwnerLock {
+        int owned = -1, observer = -1;
+        ~OwnerLock() {
+          if (owned >= 0)
+            close(owned);
+          if (observer >= 0)
+            close(observer);
+        }
+      } lock;
+      auto path = f.root / "replacement-owner.lock";
+      lock.owned =
+          open(path.c_str(), O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);
+      expect(lock.owned >= 0 && !flock(lock.owned, LOCK_EX | LOCK_NB),
+             "replacement_owner_lock");
+      lock.observer = open(path.c_str(), O_RDWR | O_CLOEXEC);
+      expect(lock.observer >= 0, "replacement_lock_observer");
+      f.caps.owner_lock = lock.owned;
+      std::weak_ptr<void> reader = f.caps.keep_alive;
+#endif
       media_process_before_spawn_for_test = [&] {
         auto replacement = f.root / "replacement";
         std::filesystem::copy_file(two, replacement);
@@ -440,8 +507,32 @@ int main(int argc, char **argv) {
 #else
       expect(r.status != MediaProcessStatus::success && f.entered() == "1",
              "nested_codec_rejects_replaced_path");
+      expect(r.child_pid == -1 && r.child_exit_confirmed && r.closed.valid() &&
+                 r.closed.wait_for(0ms) == std::future_status::ready,
+             "replacement_no_leaf_closed_fence");
+      close(lock.owned);
+      lock.owned = -1;
+      f.caps.owner_lock = -1;
+      expect(!flock(lock.observer, LOCK_EX | LOCK_NB),
+             "replacement_owner_lock_retained");
+      f.caps.keep_alive.reset();
+      expect(reader.expired(), "replacement_reader_retained");
+      int status;
+      expect(waitpid(unrelated.pid, &status, WNOHANG) == 0,
+             "unrelated_child_reaped");
+      auto unreaped = r;
+      unreaped.child_pid = unrelated.pid;
+      bool rejected = false;
+      try {
+        confirmed(unreaped);
+      } catch (const std::runtime_error &error) {
+        rejected = std::string(error.what()) == "child_not_reaped";
+      }
+      expect(rejected, "positive_unreaped_child_accepted");
 #endif
+#ifdef __APPLE__
       confirmed(r);
+#endif
       ++cases;
     }
 #endif
@@ -730,6 +821,9 @@ int main(int argc, char **argv) {
       int status;
       expect(waitpid(owner, &status, 0) == owner && WIFSIGNALED(status),
              "orphan_parent_wait");
+      // Leaf exit and release of the supervisor's own lock copies are
+      // distinct observations, sharing the original five-second budget.
+      const auto exit_deadline = std::chrono::steady_clock::now() + 5s;
       [[maybe_unused]] bool exit_observed = false;
       if (phase == "active-stopped") {
         // EOF cancellation may let the supervisor kill its leaf before its
@@ -759,18 +853,34 @@ int main(int argc, char **argv) {
         }
       }
 #ifdef __APPLE__
-      timespec timeout{5, 0};
+      const auto remaining =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              exit_deadline - std::chrono::steady_clock::now());
+      const auto nanos = remaining.count() > 0 ? remaining.count() : 0;
+      timespec timeout{static_cast<time_t>(nanos / 1000000000),
+                       static_cast<long>(nanos % 1000000000)};
       expect(exit_observed ||
                  (kevent(watched, nullptr, 0, &event, 1, &timeout) == 1 &&
                   (event.fflags & NOTE_EXIT)),
              "orphan_child_survived");
 #else
+      const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(
+          exit_deadline - std::chrono::steady_clock::now());
       pollfd ended{watched, POLLIN, 0};
-      expect(poll(&ended, 1, 5000) > 0, "orphan_child_survived");
+      expect(poll(&ended, 1,
+                  remaining.count() > 0 ? static_cast<int>(remaining.count())
+                                        : 0) > 0,
+             "orphan_child_survived");
 #endif
       close(watched);
-      expect(!flock(observer, LOCK_EX | LOCK_NB),
-             "orphan_lock_retained_after_exit");
+      while (true) {
+        expect(std::chrono::steady_clock::now() < exit_deadline,
+               "orphan_lock_retained_after_exit");
+        if (!flock(observer, LOCK_EX | LOCK_NB))
+          break;
+        expect(errno == EWOULDBLOCK, "orphan_lock_observation");
+        std::this_thread::yield();
+      }
       close(observer);
       ++cases;
     }

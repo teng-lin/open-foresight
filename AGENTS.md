@@ -13,6 +13,9 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
   and review the matching inventory entries.
 - Give each failure an owner, a bounded investigation and a concrete exit
   criterion. Confirm delegated agents are active.
+- Keep unset PIDs out of wait/signal calls. Publish fixture readiness only after
+  its payload is complete, and observe process exit and resource release as
+  separate fences within one deadline.
 - Before another push, fetch the PR head, reviews and CI output; batch fixes
   against current code. Rerun failed jobs first.
 - Distinguish implemented, locally verified and CI-passed. Report source
