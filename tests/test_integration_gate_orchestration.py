@@ -374,7 +374,10 @@ def test_gate_cli_always_retains_pass_or_failure_summary(
     monkeypatch.setattr(gates, "bundle_environment", lambda bundle, env: {})
 
     def gate(args, env):
-        assert Path(env["TMPDIR"]).is_dir()
+        directory = Path(env["TMPDIR"])
+        assert directory.is_dir() and directory == directory.resolve()
+        assert env["FORESIGHT_TEST_TEMP_ROOT"] == env["TMPDIR"]
+        assert directory.stat().st_mode & 0o077 == 0
         assert env["FORESIGHT_LITERT_CACHE"].startswith(env["TMPDIR"])
         if failure:
             raise RuntimeError("gate failed")
@@ -510,3 +513,36 @@ def test_compiled_meeting_refuses_unsafe_service_staging(tmp_path, monkeypatch, 
         assert staged.read_bytes() == b"previous evidence"
     else:
         assert not staged.exists()
+
+
+@pytest.mark.parametrize("selected", ["default", "TMPDIR", "FORESIGHT_TEST_TEMP_ROOT"])
+def test_gate_cli_uses_private_canonical_selected_root(tmp_path, monkeypatch, selected):
+    parent = tmp_path / "parent"
+    parent.mkdir(mode=0o700)
+    alias = tmp_path / "alias"
+    alias.symlink_to(parent, target_is_directory=True)
+    monkeypatch.delenv("TMPDIR", raising=False)
+    monkeypatch.delenv("FORESIGHT_TEST_TEMP_ROOT", raising=False)
+    if selected != "default":
+        monkeypatch.setenv(selected, str(alias))
+    if selected == "FORESIGHT_TEST_TEMP_ROOT":
+        monkeypatch.setenv("TMPDIR", str(tmp_path / "missing-fallback"))
+    seen = []
+
+    def gate(args, env):
+        directory = Path(env["TMPDIR"])
+        seen.append(directory)
+        assert directory == directory.resolve()
+        assert directory.parent == (
+            Path("/var/tmp").resolve() if selected == "default" else parent.resolve()
+        )
+        assert env["FORESIGHT_TEST_TEMP_ROOT"] == str(directory)
+        assert directory.stat().st_mode & 0o077 == 0
+        return {"passed": 1}
+
+    monkeypatch.setattr(gates, "fast_gate", gate)
+    monkeypatch.setattr(
+        sys, "argv", ["gates", "--suite", "fast", "--output", str(tmp_path / "report")]
+    )
+    gates.main()
+    assert len(seen) == 1 and not seen[0].exists()

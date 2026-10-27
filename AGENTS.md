@@ -42,6 +42,9 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
   resource-release fences; successful signaling alone is not the exit proof.
 - Retain closed subprocess status and query-shape metadata on ownership refusal.
   A generic ownership warning does not establish incorrect directory permissions.
+- Probe injected fixtures through their actual parent boundary. An arm64 fixture
+  must retire its insertion before launching protected arm64e system utilities;
+  prove both pre-main insertion and the descendant environment.
 - Join control readers before closing or reusing their descriptors. Keep the
   receipt write channel alive until completion is published.
 - Positive owner restarts must use bounded production admission; keep immediate

@@ -806,13 +806,18 @@ def main():
             parser.error("--models is required")
         if args.suite != "fast" and args.bundle is None:
             parser.error("--bundle is required")
-        with tempfile.TemporaryDirectory(prefix="of-ci-", dir="/tmp") as directory:
+        parent = Path(
+            os.environ.get("FORESIGHT_TEST_TEMP_ROOT")
+            or os.environ.get("TMPDIR")
+            or "/var/tmp"  # noqa: S108 - mkdtemp creates an owned private child.
+        ).resolve(strict=True)
+        with tempfile.TemporaryDirectory(prefix="of-ci-", dir=parent) as directory:
             env = (
                 dict(os.environ)
                 if args.suite == "fast"
                 else bundle_environment(args.bundle, os.environ)
             )
-            env["TMPDIR"] = directory
+            env.update(TMPDIR=directory, FORESIGHT_TEST_TEMP_ROOT=directory)
             # Model fixtures are mounted read-only; compilation caches are disposable.
             env["FORESIGHT_LITERT_CACHE"] = str(Path(directory) / "litert-cache")
             if args.suite == "fast":

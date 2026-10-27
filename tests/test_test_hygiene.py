@@ -2,6 +2,7 @@
 
 import copy
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -197,3 +198,179 @@ def test_stale_python_cache_fails_before_cmake_or_native_work(tmp_path):
     assert result.returncode != 0
     assert "Cached Python interpreter no longer exists" in result.stderr
     assert "native configure" not in result.stdout
+
+
+def _load_model_probe(name):
+    spec = importlib.util.spec_from_file_location(name, ROOT / "tools" / (name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _selected_model_parent(tmp_path, monkeypatch, selected):
+    monkeypatch.delenv("TMPDIR", raising=False)
+    monkeypatch.delenv("FORESIGHT_TEST_TEMP_ROOT", raising=False)
+    if selected == "default":
+        return Path("/var/tmp").resolve()
+    parent = tmp_path / "private"
+    parent.mkdir(mode=0o700)
+    alias = tmp_path / "alias"
+    alias.symlink_to(parent, target_is_directory=True)
+    monkeypatch.setenv(selected, str(alias))
+    if selected == "FORESIGHT_TEST_TEMP_ROOT":
+        monkeypatch.setenv("TMPDIR", str(tmp_path / "invalid-fallback"))
+    return parent.resolve()
+
+
+@pytest.mark.parametrize("selected", ["default", "TMPDIR", "FORESIGHT_TEST_TEMP_ROOT"])
+@pytest.mark.parametrize("speech", ["success", "exit", "text"])
+def test_release_model_probe_owns_private_speech_scratch_and_failure_report(
+    tmp_path, monkeypatch, selected, speech
+):
+    module = _load_model_probe("test_macos_release_models")
+    parent = _selected_model_parent(tmp_path, monkeypatch, selected)
+    models, output = tmp_path / "models", tmp_path / "reports"
+    models.mkdir()
+    monkeypatch.setattr(
+        module,
+        "runtime_paths",
+        lambda app: {"FORESIGHT_WHISPER_RUNTIME": tmp_path / "whisper"},
+    )
+    downloads = []
+
+    def download(url, destination, checksum):
+        downloads.append((url, checksum))
+        destination.write_bytes(b"controlled fixture")
+
+    monkeypatch.setattr(module, "download", download)
+    commands, scratch = [], []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        if "-f" not in command:
+            assert "test_packaged_model_runtime.py" in command[1]
+            assert command[command.index("--backend") + 1] == "cpu"
+            assert kwargs["timeout"] == 300 and kwargs["check"] is True
+            return subprocess.CompletedProcess(command, 0)
+        env = kwargs["env"]
+        directory = Path(env["HOME"])
+        scratch.append(directory)
+        assert directory == directory.resolve() and directory.parent == parent
+        assert directory.stat().st_mode & 0o077 == 0
+        assert env["TMPDIR"] == env["FORESIGHT_TEST_TEMP_ROOT"] == str(directory)
+        assert "--no-gpu" in command and kwargs["timeout"] == 180
+        assert kwargs["cwd"] == "/"
+        return subprocess.CompletedProcess(
+            command,
+            int(speech == "exit"),
+            "ask not what your country" if speech != "text" else "wrong phrase",
+            "retained stderr",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "probe",
+            str(tmp_path / "app"),
+            "--models",
+            str(models),
+            "--output",
+            str(output),
+        ],
+    )
+    if speech == "success":
+        module.main()
+    else:
+        with pytest.raises(RuntimeError, match="public JFK"):
+            module.main()
+    assert len(commands) == 2 and len(downloads) == len(module.MODELS) == 3
+    assert {checksum for _, checksum in downloads} == {
+        value[3] for value in module.MODELS.values()
+    }
+    assert scratch and not scratch[0].exists()
+    report = json.loads((output / "speech.json").read_text())
+    assert report["stderr"] == "retained stderr"
+    assert report["exit_code"] == int(speech == "exit")
+
+
+@pytest.mark.parametrize("selected", ["default", "TMPDIR", "FORESIGHT_TEST_TEMP_ROOT"])
+@pytest.mark.parametrize("failure", [None, "embedding", "generation"])
+def test_packaged_model_probe_owns_canonical_scratch_on_success_and_failure(
+    tmp_path, monkeypatch, selected, failure
+):
+    module = _load_model_probe("test_packaged_model_runtime")
+    parent = _selected_model_parent(tmp_path, monkeypatch, selected)
+    resources = tmp_path / "Fixture.app/Contents/Resources"
+    resources.mkdir(parents=True)
+    config = {
+        "FORESIGHT_LITERT_RUNNER": "model",
+        "FORESIGHT_MODEL_WORKER": "model",
+        "FORESIGHT_LITERT_LIBRARY": "library",
+    }
+    (resources / "runtime.json").write_text(json.dumps(config))
+    for name in ("model", "library"):
+        (resources / name).write_bytes(b"fixture")
+    for name in ("generation", "embedding"):
+        (tmp_path / name).write_bytes(b"fixture model")
+    monkeypatch.setattr(
+        module,
+        "digest",
+        lambda path: (
+            module.GENERATION_SHA256
+            if path.name == "generation"
+            else module.EMBEDDING_SHA256
+        ),
+    )
+    observed = []
+
+    def probe(kind):
+        def execute(worker, model, backend, env, cwd, output, timeout):
+            root = Path(env["TMPDIR"])
+            observed.append((kind, root))
+            assert root == root.resolve() and root.parent == parent
+            assert root.stat().st_mode & 0o077 == 0
+            assert env["FORESIGHT_TEST_TEMP_ROOT"] == str(root)
+            assert Path(env["HOME"]).parent == root and cwd.parent == root
+            assert (cwd / "litert_lm.py").is_file()
+            assert backend == "cpu" and timeout == 600
+            if failure == kind:
+                raise RuntimeError(kind + " refused")
+            return {"passed": True}
+
+        return execute
+
+    monkeypatch.setattr(module, "embedding_probe", probe("embedding"))
+    monkeypatch.setattr(module, "generation_probe", probe("generation"))
+    output = tmp_path / "reports"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "probe",
+            "--bundle",
+            str(resources.parent.parent),
+            "--generation",
+            str(tmp_path / "generation"),
+            "--embedding",
+            str(tmp_path / "embedding"),
+            "--backend",
+            "cpu",
+            "--output",
+            str(output),
+        ],
+    )
+    if failure:
+        with pytest.raises(RuntimeError, match=failure + " refused"):
+            module.main()
+    else:
+        module.main()
+    assert [kind for kind, _ in observed] == (
+        ["embedding"] if failure == "embedding" else ["embedding", "generation"]
+    )
+    assert all(not root.exists() for _, root in observed)
+    report = json.loads((output / "report.json").read_text())
+    assert report["status"] == ("failed" if failure else "passed")
+    if failure:
+        assert report["error"] == failure + " refused"

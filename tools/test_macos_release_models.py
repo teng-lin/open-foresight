@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Release-only real-model CPU acceptance; weights stay outside the shipped app."""
+"""Packaged macOS CPU/model acceptance; weights stay outside the shipped app."""
 
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -50,7 +51,12 @@ def main():
         check=True,
         timeout=300,
     )
-    with tempfile.TemporaryDirectory(prefix="foresight-release-speech-") as home:
+    parent = Path(
+        os.environ.get("FORESIGHT_TEST_TEMP_ROOT")
+        or os.environ.get("TMPDIR")
+        or "/var/tmp"
+    ).resolve(strict=True)
+    with tempfile.TemporaryDirectory(prefix="of-speech-", dir=parent) as home:
         result = subprocess.run(
             [
                 str(paths["FORESIGHT_WHISPER_RUNTIME"]),
@@ -64,7 +70,12 @@ def main():
                 "-t",
                 "3",
             ],
-            env={"PATH": "/usr/bin:/bin", "HOME": home, "TMPDIR": home},
+            env={
+                "PATH": "/usr/bin:/bin",
+                "HOME": home,
+                "TMPDIR": home,
+                "FORESIGHT_TEST_TEMP_ROOT": home,
+            },
             cwd="/",
             capture_output=True,
             text=True,

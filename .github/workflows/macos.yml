@@ -184,6 +184,45 @@ jobs:
       run: |
         .venv/bin/python tools/verify_macos_release_runtime.py 'dist/Open Foresight.app' \
           --output test-results/macos-release-runtime.json
+    - name: Restore checksum-pinned acceptance models
+      if: ${{ !cancelled() && steps.macos-assembly.outcome == 'success' }}
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: build/acceptance-models
+        key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+        restore-keys: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+    - name: Prepare private model acceptance scratch
+      id: macos-model-temp
+      if: ${{ !cancelled() && steps.macos-assembly.outcome == 'success' }}
+      run: |
+        task_models_temp=$(mktemp -d /var/tmp/fa.XXXXXX)
+        task_models_temp=$(cd "$task_models_temp" && pwd -P)
+        printf 'root=%s\n' "$task_models_temp" >> "$GITHUB_OUTPUT"
+    - name: macOS acceptance / packaged CPU models and speech file
+      id: macos-speech-file
+      if: ${{ !cancelled() && steps.macos-assembly.outcome == 'success' && steps.macos-model-temp.outcome == 'success' }}
+      env:
+        TMPDIR: ${{ steps.macos-model-temp.outputs.root }}
+        FORESIGHT_TEST_TEMP_ROOT: ${{ steps.macos-model-temp.outputs.root }}
+      run: |
+        .venv/bin/python tools/test_macos_release_models.py 'dist/Open Foresight.app' \
+          --models build/acceptance-models --output test-results/macos-acceptance/packaged-models
+    - name: macOS acceptance / CPU models
+      id: macos-cpu-models
+      if: ${{ !cancelled() && steps.macos-assembly.outcome == 'success' && steps.macos-model-temp.outcome == 'success' }}
+      env:
+        TMPDIR: ${{ steps.macos-model-temp.outputs.root }}
+        FORESIGHT_TEST_TEMP_ROOT: ${{ steps.macos-model-temp.outputs.root }}
+      run: |
+        .venv/bin/python tools/integration_gates.py --suite models \
+          --bundle 'dist/Open Foresight.app' --models build/acceptance-models \
+          --output test-results/macos-acceptance/models
+    - name: Retire private model acceptance scratch
+      id: macos-model-cleanup
+      if: ${{ always() && steps.macos-model-temp.outcome == 'success' }}
+      env:
+        MODEL_SCRATCH: ${{ steps.macos-model-temp.outputs.root }}
+      run: rmdir "$MODEL_SCRATCH"
     - name: Installed application tooling tests
       id: macos-installed
       if: ${{ !cancelled() && steps.macos-assembly.outcome == 'success' }}
@@ -267,10 +306,13 @@ jobs:
         INFERENCE_RESULT: ${{ steps.macos-inference.outcome }}
         INSTALLED_RESULT: ${{ steps.macos-installed.outcome }}
         SMOKE_RESULT: ${{ steps.macos-smoke.outcome }}
+        SPEECH_FILE_RESULT: ${{ steps.macos-speech-file.outcome }}
+        CPU_MODELS_RESULT: ${{ steps.macos-cpu-models.outcome }}
+        MODEL_CLEANUP_RESULT: ${{ steps.macos-model-cleanup.outcome }}
       run: |
-        printf 'Mac lanes=%s build=%s assembly=%s inference=%s installed=%s smoke=%s\n' \
-          "$CHECKS_RESULT" "$BUILD_RESULT" "$ASSEMBLY_RESULT" "$INFERENCE_RESULT" "$INSTALLED_RESULT" "$SMOKE_RESULT"
-        for task_result in "$CHECKS_RESULT" "$BUILD_RESULT" "$ASSEMBLY_RESULT" "$INFERENCE_RESULT" "$INSTALLED_RESULT" "$SMOKE_RESULT"; do
+        printf 'Mac lanes=%s build=%s assembly=%s inference=%s installed=%s smoke=%s speech_file=%s cpu_models=%s model_cleanup=%s\n' \
+          "$CHECKS_RESULT" "$BUILD_RESULT" "$ASSEMBLY_RESULT" "$INFERENCE_RESULT" "$INSTALLED_RESULT" "$SMOKE_RESULT" "$SPEECH_FILE_RESULT" "$CPU_MODELS_RESULT" "$MODEL_CLEANUP_RESULT"
+        for task_result in "$CHECKS_RESULT" "$BUILD_RESULT" "$ASSEMBLY_RESULT" "$INFERENCE_RESULT" "$INSTALLED_RESULT" "$SMOKE_RESULT" "$SPEECH_FILE_RESULT" "$CPU_MODELS_RESULT" "$MODEL_CLEANUP_RESULT"; do
           [[ "$task_result" == success ]] || exit 1
         done
     needs:

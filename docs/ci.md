@@ -41,10 +41,27 @@ artifact names and provenance receipts retain their existing identities.
 | `macOS checks / contracts`, `/ native`, `/ core`, `/ desktop`, `/ service` | The equivalent independent macOS matrix stages. Each has its own outcome; the application bundle job does not rerun every stage. |
 | `Linux bundle / build` | The separate Docker application producer and checksum-bound source/build handoff. |
 | `Linux bundle / integration` | Verifies and restores that handoff without rebuilding the application, then runs native, core, desktop, compiled service, fast integration and host/cache checks through `linux_test_schedule.py`. This intentionally overlaps independent checks while the shadow transition remains active. |
-| `macOS bundle / build and smoke` | Assembles the application, verifies its runtime and runs its installed/bundle smoke consumers after the selected macOS checks. It does not imply a second complete core/desktop run. |
+| `macOS bundle / build and smoke` | Assembles the application, verifies its runtime, runs the explicit model-acceptance steps below and its installed/bundle smoke consumers after the selected macOS checks. It does not imply a second complete core/desktop run. |
 | `Linux packaging / deb contracts`, `/ rpm contracts`, `/ arch contracts` | Builds installers from the verified actual application bundle, then installs, smoke-tests, reinstalls and removes those exact bytes; DEB also cross-installs on Debian 13. These are actual package consumers, not tiny application fixtures. |
 | `macOS packaging / dmg contracts` | Ad hoc tiny DMG install/upgrade contract fixtures, separate from production signing or release publication. |
 | `Linux acceptance / CPU models`, `/ virtual audio`, `/ deb installer` | The actual candidate/model/installer consumers selected for that lane. Physical devices and opt-in environments remain separately reported. |
+
+The macOS bundle job also runs explicit **macOS acceptance / CPU models**
+steps against its just-built `.app`: the same five desktop and one core real-model
+cases selected by Linux CPU acceptance, plus packaged generation/embedding CPU
+checks and Whisper transcription of a known public WAV. Both acceptance outcomes
+are required by the Mac aggregate. Model caches are restored only; missing public
+fixtures are checksum-verified, with private scratch and retained reports. This
+uses the current job's application directly, without publishing a PR bundle or
+rebuilding it in another consumer.
+
+These common model checks are not virtual-device capture. **Linux acceptance /
+virtual audio** additionally creates private PipeWire routes and an X display,
+then tests live speech, route loss/recovery and the compiled meeting workflow.
+There is no corresponding hosted macOS virtual-route lane: actual CoreAudio
+route capture, its permissions and physical devices remain separately qualified.
+Mac service/GUI tests use controlled audio, and bundle smoke does not substitute
+for these real-model checks or claim physical microphone acceptance.
 
 Linux bundle integration is not a second name for `Linux checks / core`: it
 checks the transported application and SDK boundary as well as multiple test

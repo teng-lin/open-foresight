@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import queue
 import subprocess
@@ -325,9 +326,12 @@ def main():
             raise RuntimeError("Production models differ from the pinned setup catalog")
         report["stage"] = "package_path_resolution"
         runner, worker, config = packaged_paths(args.bundle)
-        with tempfile.TemporaryDirectory(
-            prefix="of-production-", dir="/tmp"
-        ) as temporary:
+        parent = Path(
+            os.environ.get("FORESIGHT_TEST_TEMP_ROOT")
+            or os.environ.get("TMPDIR")
+            or "/var/tmp"
+        ).resolve(strict=True)
+        with tempfile.TemporaryDirectory(prefix="of-model-", dir=parent) as temporary:
             root = Path(temporary)
             home, poisoned = root / "home", root / "untrusted working directory"
             home.mkdir()
@@ -340,6 +344,7 @@ def main():
                 "PATH": "/usr/bin:/bin",
                 "HOME": str(home),
                 "TMPDIR": str(root),
+                "FORESIGHT_TEST_TEMP_ROOT": str(root),
                 "PYTHONPATH": str(poisoned),
                 "FORESIGHT_LITERT_CACHE": str(root / "cache"),
                 **config,
