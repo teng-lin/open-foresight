@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:foresight_core/src/diagnostics/events.dart';
@@ -32,6 +34,10 @@ final _dup = _libc.lookupFunction<Int32 Function(Int32), int Function(int)>(
 final _close = _libc.lookupFunction<Int32 Function(Int32), int Function(int)>(
   'close',
 );
+final _kill = _libc
+    .lookupFunction<Int32 Function(Int32, Int32), int Function(int, int)>(
+      'kill',
+    );
 final _fcntl = _libc
     .lookupFunction<
       Int32 Function(Int32, Int32, VarArgs<()>),
@@ -109,6 +115,295 @@ Uint8List _record([int count = 1]) => Uint8List.fromList(
   ),
 );
 
+void _admissionFailureWitness(String profile, String stage) {
+  final evidence = <String, Object>{'stage': stage};
+  BackupDirectory? logs;
+  BackupFile? admission;
+  try {
+    logs = BackupDirectory('$profile/logs');
+    admission = logs.open('admission.lock');
+    evidence['admission_bytes'] = admission.size;
+    evidence['admission_probe_busy'] = !admission.tryExclusiveLease();
+    var manifests = 0, samePid = 0, busyLeases = 0;
+    for (var i = 0; i < DiagnosticStorage.slotCount; i++) {
+      final directory = BackupDirectory('$profile/logs/slot-$i', create: false);
+      try {
+        final manifest = File('${directory.path}/manifest.json');
+        if (manifest.existsSync() && manifest.lengthSync() <= 4096) {
+          final value = jsonDecode(manifest.readAsStringSync()) as Map;
+          manifests++;
+          if (value['pid'] == pid) samePid++;
+        }
+        if (directory.containsEntry('lease')) {
+          final lease = directory.open('lease');
+          try {
+            if (!lease.tryExclusiveLease()) busyLeases++;
+          } finally {
+            lease.close();
+          }
+        }
+      } finally {
+        directory.close();
+      }
+    }
+    evidence.addAll({
+      'manifest_count': manifests,
+      'same_pid_manifest_count': samePid,
+      'busy_slot_lease_count': busyLeases,
+    });
+  } catch (error) {
+    evidence['witness_error_type'] = error.runtimeType.toString();
+  } finally {
+    admission?.close();
+    logs?.close();
+  }
+  print('STORAGE_ADMISSION_FAILURE ${jsonEncode(evidence)}');
+}
+
+Future<bool> _runAdmissionProcess(
+  String name,
+  Map<String, Object> expected,
+) async {
+  if (Platform.environment['FORESIGHT_STORAGE_ADMISSION_CASE'] == name) {
+    return false;
+  }
+  // Other suites can fork while an admission description is briefly locked.
+  // CLOEXEC releases it at exec, but cannot prevent that pre-exec inheritance.
+  // This child executes the complete case without unrelated process launches.
+  final package = await Isolate.resolvePackageUri(
+    Uri.parse('package:foresight_core/foresight_core.dart'),
+  );
+  expect(package, isNotNull);
+  final root = File.fromUri(package!).parent.parent;
+  final evidence = shortTestTempRoot.createTempSync('sa-');
+  final temporary = evidence.createTempSync('t-');
+  final report = File('${evidence.path}/events.jsonl');
+  final stdout = File('${evidence.path}/stdout.log');
+  final stderr = File('${evidence.path}/stderr.log');
+  final group = File('${evidence.path}/group.json');
+  final elapsed = Stopwatch()..start();
+  Duration remaining() {
+    final left = const Duration(seconds: 20) - elapsed.elapsed;
+    if (left <= Duration.zero) {
+      throw TimeoutException('Owned admission child exceeded its total budget');
+    }
+    return left;
+  }
+
+  final output = stdout.openSync(mode: FileMode.write);
+  late final RandomAccessFile errors;
+  try {
+    errors = stderr.openSync(mode: FileMode.write);
+  } catch (_) {
+    output.closeSync();
+    rethrow;
+  }
+  late final Process process;
+  try {
+    process = await Process.start(
+      Platform.environment['FORESIGHT_PYTHON'] ?? 'python3',
+      [
+        '-c',
+        'import json,os,sys\n'
+            'os.setsid()\n'
+            'path=sys.argv[1]\n'
+            'with open(path+".next","x") as output:\n'
+            ' os.chmod(path+".next",0o600)\n'
+            ' json.dump({"pid":os.getpid(),"pgid":os.getpgrp(),"sid":os.getsid(0)},output)\n'
+            'os.replace(path+".next",path)\n'
+            'os.execv(sys.argv[2],sys.argv[2:])\n',
+        group.path,
+        Platform.resolvedExecutable,
+        'test',
+        'test/diagnostics/storage_test.dart',
+        '--plain-name',
+        name,
+        '--concurrency=1',
+        '--reporter=expanded',
+        '--file-reporter=json:${report.path}',
+      ],
+      workingDirectory: root.path,
+      environment: {
+        ...Platform.environment,
+        'FORESIGHT_STORAGE_ADMISSION_CASE': name,
+        'TMPDIR': temporary.path,
+        'FORESIGHT_TEST_TEMP_ROOT': temporary.path,
+      },
+    );
+  } catch (_) {
+    output.closeSync();
+    errors.closeSync();
+    rethrow;
+  }
+  final outputDone = Completer<void>(), errorsDone = Completer<void>();
+  Object? pipeError;
+  void complete(Completer<void> done) {
+    if (!done.isCompleted) done.complete();
+  }
+
+  StreamSubscription<List<int>> capture(
+    Stream<List<int>> stream,
+    RandomAccessFile sink,
+    Completer<void> done,
+  ) => stream.listen(
+    (bytes) {
+      try {
+        sink.writeFromSync(bytes);
+      } catch (error) {
+        pipeError ??= error;
+        complete(done);
+      }
+    },
+    onDone: () => complete(done),
+    onError: (Object error) {
+      pipeError ??= error;
+      complete(done);
+    },
+    cancelOnError: true,
+  );
+
+  final outputSubscription = capture(process.stdout, output, outputDone);
+  final errorsSubscription = capture(process.stderr, errors, errorsDone);
+  final drained = Future.wait([outputDone.future, errorsDone.future]);
+  var reaped = false, success = false, cleanupComplete = false;
+  var ownsGroup = false;
+  int? earlyExit;
+  final exitCode = process.exitCode.then((code) {
+    earlyExit = code;
+    return code;
+  });
+  bool recordedOwnedGroup() {
+    try {
+      if (FileSystemEntity.typeSync(group.path, followLinks: false) !=
+              FileSystemEntityType.file ||
+          group.lengthSync() > 256) {
+        return false;
+      }
+      final identity = jsonDecode(group.readAsStringSync());
+      return identity is Map &&
+          identity.length == 3 &&
+          identity.values.every((value) => value is int) &&
+          identity['pid'] == process.pid &&
+          identity['pgid'] == process.pid &&
+          identity['sid'] == process.pid;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void verifyGroup() {
+    expect(
+      recordedOwnedGroup(),
+      true,
+      reason: 'Child did not record its own session',
+    );
+    ownsGroup = true;
+  }
+
+  Future<void>? reaping;
+  Future<void> reap() => reaping ??= () async {
+    final cleanup = Stopwatch()..start();
+    Duration cleanupRemaining() {
+      final left = const Duration(seconds: 3) - cleanup.elapsed;
+      if (left <= Duration.zero) {
+        throw TimeoutException(
+          'Owned admission child cleanup exceeded its budget',
+        );
+      }
+      return left;
+    }
+
+    try {
+      ownsGroup = ownsGroup || recordedOwnedGroup();
+      if (ownsGroup) {
+        // Only this atomically recorded, child-created session can be signalled.
+        // Its compiler descendants inherit this group, never the caller's group.
+        _kill(-process.pid, ProcessSignal.sigkill.signalNumber);
+      }
+      if (!reaped) process.kill(ProcessSignal.sigkill);
+      final cancelled = Future.wait([
+        outputSubscription.cancel(),
+        errorsSubscription.cancel(),
+      ]);
+      complete(outputDone);
+      complete(errorsDone);
+      await exitCode.timeout(cleanupRemaining());
+      reaped = true;
+      await cancelled.timeout(cleanupRemaining());
+      cleanupComplete = true;
+    } finally {
+      output.closeSync();
+      errors.closeSync();
+    }
+  }();
+
+  addTearDown(reap);
+  try {
+    await process.stdin.close().timeout(remaining());
+    while (!group.existsSync()) {
+      if (earlyExit != null) {
+        throw StateError(
+          'Owned child exited before recording its session: $earlyExit',
+        );
+      }
+      await Future<void>.delayed(
+        const Duration(milliseconds: 1),
+      ).timeout(remaining());
+    }
+    verifyGroup();
+    final exit = await exitCode.timeout(remaining());
+    reaped = true;
+    await drained.timeout(remaining());
+    expect(pipeError, isNull, reason: 'Owned child output capture failed');
+    expect(exit, 0, reason: 'Owned admission child failed');
+    final events = report
+        .readAsLinesSync()
+        .map(jsonDecode)
+        .cast<Map>()
+        .toList();
+    expect(
+      events.where((event) => event['type'] == 'done').single['success'],
+      true,
+    );
+    final tests = events.where(
+      (event) => event['type'] == 'testDone' && event['hidden'] != true,
+    );
+    expect(tests, hasLength(1));
+    expect(tests.single['result'], 'success');
+    expect(tests.single['skipped'], false);
+    final started = events.singleWhere(
+      (event) =>
+          event['type'] == 'testStart' &&
+          (event['test'] as Map)['id'] == tests.single['testID'],
+    );
+    expect((started['test'] as Map)['name'], name);
+    const prefix = 'STORAGE_ADMISSION_COMPLETE ';
+    final completion = events.singleWhere(
+      (event) =>
+          event['type'] == 'print' &&
+          (event['message'] as String).startsWith(prefix),
+    );
+    expect(
+      jsonDecode((completion['message'] as String).substring(prefix.length)),
+      expected,
+    );
+    success = true;
+  } finally {
+    try {
+      await reap();
+    } finally {
+      if (success && cleanupComplete) {
+        evidence.deleteSync(recursive: true);
+      } else {
+        print('STORAGE_ADMISSION_CHILD_FAILURE evidence=${evidence.path}');
+        print(utf8.decode(stdout.readAsBytesSync(), allowMalformed: true));
+        print(utf8.decode(stderr.readAsBytesSync(), allowMalformed: true));
+      }
+    }
+  }
+  return true;
+}
+
 void _seedSlot(
   String profile,
   int index, {
@@ -178,7 +473,27 @@ void main() {
   );
   test(
     'retention rank precedes reserved preference and newest failure survives rollback',
-    () {
+    () async {
+      const name =
+          'retention rank precedes reserved preference and newest failure survives rollback';
+      final expected = <String, Object>{
+        'case': 'retention',
+        'scenarios': [
+          'empty',
+          'expired',
+          'healthy',
+          'reserved',
+          'protected',
+          'rollback',
+        ],
+        'slots': [5, 5, 5, 0, 1, 1],
+        'identity_checks': 6,
+      };
+      if (await _runAdmissionProcess(name, expected)) {
+        return;
+      }
+      final completed = <String>[];
+      final slots = <int>[];
       final now = DateTime.utc(2026, 10, 24);
       for (final scenario in [
         'empty',
@@ -189,11 +504,16 @@ void main() {
         'rollback',
       ]) {
         final profile = _profile();
-        DiagnosticStorage.admit(
+        final initial = DiagnosticStorage.admit(
           profile,
           DiagnosticIdentity.random(),
           DiagnosticRole.service,
-        )!.close();
+        );
+        if (initial == null) {
+          _admissionFailureWitness(profile, 'retention-initial-$scenario');
+        }
+        expect(initial, isNotNull);
+        initial!.close();
         for (var i = 0; i < 10; i++) {
           _seedSlot(profile, i, opened: now.millisecondsSinceEpoch - 1000);
         }
@@ -231,15 +551,22 @@ void main() {
             failed: now.millisecondsSinceEpoch,
           );
         }
+        final session = DiagnosticIdentity.random();
         final selected = DiagnosticStorage.admit(
           profile,
-          DiagnosticIdentity.random(),
+          session,
           DiagnosticRole.service,
           clock: () => scenario == 'rollback'
               ? now.subtract(const Duration(days: 1))
               : now,
-        )!;
+        );
+        if (selected == null) {
+          _admissionFailureWitness(profile, 'retention-$scenario');
+        }
+        expect(selected, isNotNull, reason: scenario);
         try {
+          expect(selected!.session, session.value);
+          expect(selected.role, DiagnosticRole.service);
           expect(
             selected.slot,
             scenario == 'reserved'
@@ -249,10 +576,15 @@ void main() {
                 : 5,
             reason: scenario,
           );
+          completed.add(scenario);
+          slots.add(selected.slot);
         } finally {
-          selected.close();
+          selected!.close();
         }
       }
+      print(
+        'STORAGE_ADMISSION_COMPLETE ${jsonEncode({'case': 'retention', 'scenarios': completed, 'slots': slots, 'identity_checks': completed.length})}',
+      );
     },
   );
   test(
@@ -428,13 +760,30 @@ void main() {
   );
   test(
     'independent flock probe cannot release active lease and same-process sessions do not reclaim it',
-    () {
+    () async {
+      const name =
+          'independent flock probe cannot release active lease and same-process sessions do not reclaim it';
+      if (await _runAdmissionProcess(name, {
+        'case': 'same-process',
+        'sessions': 2,
+        'independent_probe_refusals': 2,
+        'distinct_slots': true,
+        'identity_checks': 2,
+      })) {
+        return;
+      }
       final profile = _profile();
+      final session = DiagnosticIdentity.random();
       final storage = DiagnosticStorage.admit(
         profile,
-        DiagnosticIdentity.random(),
+        session,
         DiagnosticRole.mcp,
-      )!;
+      );
+      if (storage == null) {
+        _admissionFailureWitness(profile, 'same-process-first');
+      }
+      expect(storage, isNotNull);
+      expect(storage!.session, session.value);
       addTearDown(storage.close);
       final directory = BackupDirectory('$profile/logs/slot-${storage.slot}');
       final probe = directory.open('lease');
@@ -444,13 +793,22 @@ void main() {
       expect(second.tryExclusiveLease(), isFalse);
       second.close();
       directory.close();
+      final otherSession = DiagnosticIdentity.random();
       final other = DiagnosticStorage.admit(
         profile,
-        DiagnosticIdentity.random(),
+        otherSession,
         DiagnosticRole.mcp,
-      )!;
-      addTearDown(other.close);
+      );
+      if (other == null) {
+        _admissionFailureWitness(profile, 'same-process-second');
+      }
+      expect(other, isNotNull);
+      addTearDown(other!.close);
+      expect(other.session, otherSession.value);
       expect(other.slot, isNot(storage.slot));
+      print(
+        'STORAGE_ADMISSION_COMPLETE ${jsonEncode({'case': 'same-process', 'sessions': 2, 'independent_probe_refusals': 2, 'distinct_slots': other.slot != storage.slot, 'identity_checks': 2})}',
+      );
     },
   );
   test('unexpected entries unsafe aliases and tampered slots fail closed', () {
