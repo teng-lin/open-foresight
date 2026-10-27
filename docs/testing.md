@@ -4,6 +4,130 @@ The regular Flutter suite intentionally does not load multi-GB models, start an
 original application, or use a personal profile. These checks have explicit
 validation paths rather than treating a skipped test as acceptance.
 
+## Failure investigation and qualification
+
+These practices come from the service work in
+[#180](https://github.com/teng-lin/open-foresight/pull/180) and the saved-audio
+qualification in [#189](https://github.com/teng-lin/open-foresight/pull/189).
+They describe how to establish evidence; they do not declare the unresolved
+failures in those investigations fixed.
+
+### Keep the original failure authoritative
+
+Before replaying a failed case, preserve its command, source revision, tool
+versions, environment differences, expanded output, test events and subprocess
+output. Give the investigation an owner and an exit criterion. Run the exact
+failed consumer first, with the original instrumentation and execution mode.
+A quiet isolated pass is diagnostic evidence, not proof that a concurrent
+failure was harmless or caused by load. Do not call a failure flaky solely
+because it did not recur.
+
+Use one controlled probe for a concrete hypothesis, preserving the original
+assertions and deadlines. If the probe cannot establish a cause within the
+agreed scope, retain the failure as unconfirmed and report the remaining gap.
+Keep invalid experiments too, with their reason for rejection. For example,
+creating an HTTP request in one Dart error zone and awaiting its result in a
+different error zone did not provide a valid comparison of error observers.
+
+When a fixture pattern is wrong, inspect sibling call sites before another full
+run. The audio investigation initially corrected one immediate reopen while
+other positive restart fixtures still used the same incorrect operation.
+Audit the whole class, preserve intentional negative controls, verify the
+affected modules, then freeze a revision for the required full gates. Do not
+alternate one-line fixes and expensive full runs for equivalent defects.
+
+### Test ownership through independent fences
+
+| Observation | What it establishes | What still needs proof |
+| --- | --- | --- |
+| A positive child PID exited and was reaped | That exact child ended | Supervisors or inherited descriptors may still hold resources |
+| An authenticated refusal receipt has no child PID | No child was admitted through that path | Do not call `waitpid(-1)` or signal a sentinel PID; verify the refusal's actual cleanup contract |
+| The real owner lock can be acquired | The last conflicting kernel lock reference was released | A lock file's presence or absence alone establishes neither ownership nor release |
+| A readiness marker exists | Only that the marker was published | Its complete payload and the actual consumer phase must also be established |
+
+Publish fixture readiness atomically after writing and checking its complete
+payload. Observe child exit and resource release separately within one total
+monotonic deadline. Cleanup must address the owned child safely even if a
+negative control accidentally reaped it; use stable process identity where
+available rather than signaling a potentially reused numeric PID.
+
+Positive media restarts use `RecordingMedia.acquire`, the bounded production
+admission path. An unrelated fork can briefly inherit a close-on-exec descriptor
+until exec, even after the local owner closes. Acquisition may retry only actual
+checked kernel contention. Keep synchronous `RecordingMedia.open` assertions
+where the test intentionally proves immediate refusal. A reader held beyond the
+bound, cancellation, and non-contention lock failures must still be rejected.
+
+### Make timing and error tests prove their intended phase
+
+A short total budget can expire during connection setup before a retry-delay
+test receives its first response. Such a failure has not exercised retry delay.
+Establish the real connection as fixture setup, then begin the measured
+operation and assert that the request, close and retry-delay callback actually
+ran. Preserve separate cold-connection tests and the original measured budget;
+do not increase a deadline to make scheduling assumptions pass.
+
+An already-started Future can fail during cleanup even if a deadline or admission
+check throws before the normal await is installed. Observe that Future before
+the throwing check. Calculate the deadline before creating an aggregate Future
+that could otherwise be abandoned. Side observers must not replace the normal
+await or suppress the error returned to the caller. Create the controlled
+operation inside the same error zone that records uncaught errors, prove the
+old implementation fails, and require both the expected caller failure and zero
+unexpected asynchronous errors after the fix.
+
+For shutdown, a final ownership warning may replace an earlier close-stage
+exception. Record the first failing stage and error type before replacement;
+do not infer native-retirement failure from the terminal message alone. Private
+diagnostics should use fixed stage/category values, preserve shutdown ordering,
+and exclude request text, audio, tokens and profile contents. An existing
+diagnostic compatibility function may intentionally discard its message: verify
+what the consumer records before relying on a trace flag.
+
+### Qualify the entrypoint and the bytes
+
+Private local setup is not a substitute for a working checked-in launcher.
+Required environment such as `TMPDIR` and `FORESIGHT_TEST_TEMP_ROOT` must reach
+every applicable native, sanitizer and service entrypoint. Validate absent or
+invalid inputs before constructing paths; missing environment must produce a
+useful failure rather than a null-pointer crash. Use private short directories
+with normal umask `022`, so negative permission checks remain meaningful.
+Check the ownership and mode of each runtime directory the consumer validates;
+a private ancestor does not make a newly created child directory mode `0700`.
+
+Exercise standalone CMake configuration with its declared dependencies as well
+as the root build. A host-installed JSON package can hide a missing prerequisite
+in Python configuration tests. Check the intended failure message: a nonzero
+exit caused by missing dependencies does not test an invalid installation path.
+Minimal-host configuration and sanitizer execution are distinct evidence from
+an ordinary developer build.
+
+Record source revisions separately for production code, changed fixtures and
+the final tested candidate. Reusing unchanged native/codec products requires
+checking their relevant source inputs and hashes; it is not a fresh build.
+Production Dart changes require rebuilding the affected AOT and GUI products.
+For package checks, run the actual installed loaders and executables with owned
+profiles, then verify file/symlink inventory, hashes and signatures again.
+Every new bundled dependency must reach the license inventory and each affected
+package format's validation. A successfully assembled application directory or
+macOS bundle does not prove DEB, RPM or Arch assembly accepts its added files.
+Preserve strict unmapped-license failures; update the reviewed mapping rather
+than dropping notices or weakening the inventory.
+
+Likewise, widget tests and Linux UI acceptance do not establish macOS layout.
+Exercise the actual desktop flow at the supported viewport and display settings,
+including added recording controls. A small Flutter overflow is still a real
+acceptance failure; do not suppress framework errors to obtain a passing journey.
+
+Reports must distinguish the full gate from focused replays and applicable
+subsets. Include pass/fail counts, skips, deselections, coverage status and
+unexecuted environments. If tests fail before coverage generation, do not use an
+older LCOV file as current qualification. A headless subset does not satisfy an
+isolated native GUI gate. Do not fabricate display flags or use a personal
+desktop to turn a missing runner prerequisite into a pass. Preserve local and
+hosted results separately; new CI failures remain blockers even when local
+checks passed. Keep a PR in draft while required qualification remains unresolved.
+
 ## Regular pull-request gates
 
 `macos.yml` keeps the existing required platform-checks aggregation. Its Linux
