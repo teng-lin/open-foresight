@@ -5,6 +5,7 @@
 #include <charconv>
 #include <poll.h>
 #include <sys/resource.h>
+#include <thread>
 
 namespace foresight {
 namespace {
@@ -40,6 +41,44 @@ void write_all(int fd, const std::string &text) {
     at += static_cast<size_t>(n);
   }
 }
+class ControlReader {
+public:
+  ControlReader(int control, std::atomic<bool> &cancel,
+                std::atomic<uint64_t> &progress)
+      : control_(control), thread_([this, control, &cancel, &progress] {
+          while (!stopping_.load()) {
+            char command = 0;
+            ssize_t n;
+            do {
+              n = recv(control, &command, 1, 0);
+            } while (n < 0 && errno == EINTR);
+            if (n == 1 && command == 'P') {
+              ++progress;
+              continue;
+            }
+            // EOF, malformed command and explicit cancellation stop the leaf.
+            cancel = true;
+            return;
+          }
+        }) {}
+  ~ControlReader() {
+    stop();
+  }
+  void stop() noexcept {
+    if (thread_.joinable()) {
+      stopping_ = true;
+      // Wake recv without closing/reusing its descriptor. The write half
+      // remains available for the authenticated completion receipt.
+      (void)shutdown(control_, SHUT_RD);
+      thread_.join();
+    }
+  }
+
+private:
+  int control_;
+  std::atomic<bool> stopping_{false};
+  std::thread thread_;
+};
 } // namespace
 int media_supervisor_main(int argc, char **argv, const char *build_id) {
   if (argc < 2 || std::strcmp(argv[1], "--owned-supervisor"))
@@ -108,22 +147,7 @@ int media_supervisor_main(int argc, char **argv, const char *build_id) {
     std::atomic<bool> cancel{false};
     std::atomic<uint64_t> progress{0};
     limits.progress = &progress;
-    std::thread([control, &cancel, &progress] {
-      while (true) {
-        char command = 0;
-        ssize_t n;
-        do {
-          n = recv(control, &command, 1, 0);
-        } while (n < 0 && errno == EINTR);
-        if (n == 1 && command == 'P') {
-          ++progress;
-          continue;
-        }
-        // EOF, malformed command and explicit cancellation all stop the leaf.
-        cancel = true;
-        return;
-      }
-    }).detach();
+    ControlReader control_reader(control, cancel, progress);
     MediaCapabilities caps{3, multi ? 4 : -1, multi ? 5 : 4,
                            std::make_shared<int>(1)};
     if (received_owner_lock)
@@ -132,6 +156,7 @@ int media_supervisor_main(int argc, char **argv, const char *build_id) {
     // A finite observation timeout does not prove leaf exit. Keep all private
     // media/lock descriptions live until the direct launcher actually reaps it.
     result.closed.wait();
+    control_reader.stop();
     media_bootstrap_require(result.status !=
                                 MediaProcessStatus::termination_unconfirmed,
                             "supervisor_unconfirmed");

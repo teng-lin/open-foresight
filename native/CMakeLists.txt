@@ -462,6 +462,16 @@ if(BUILD_TESTING)
     $<TARGET_FILE:native_media_process_test>
     $<TARGET_FILE:native_media_fixture_1> $<TARGET_FILE:native_media_fixture_2>)
   set_tests_properties(native_media_process PROPERTIES TIMEOUT 30)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+      AND (FORESIGHT_SANITIZERS OR FORESIGHT_THREAD_SANITIZER))
+    # These executables link their own instrumented runtime. Preloading that
+    # runtime into the uninstrumented shell can fail before the fixture starts.
+    # Python ctypes hosts retain the gate's preload; fatal sanitizer options
+    # remain inherited by all tests and their children.
+    set_tests_properties(native_media_pager native_media_owned
+      native_media_process_production native_media_process
+      PROPERTIES ENVIRONMENT "LD_PRELOAD=")
+  endif()
   add_executable(native_probe_deadline_test ../tests/native/probe_deadline.cpp)
   target_compile_features(native_probe_deadline_test PRIVATE cxx_std_20)
   target_include_directories(native_probe_deadline_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
