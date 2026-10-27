@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 
@@ -63,8 +64,15 @@ def test_parallel_lanes_keep_each_suite_and_package_prerequisites_independent():
     assert '--stage "$MACOS_CHECK_STAGE" "${task_cmake_args[@]}"' in command
     assert "set -o pipefail" in command
     evidence = next(step for step in steps if step.get("if") == "always()")
-    assert evidence["with"]["name"] == "macos-${{ matrix.stage }}-evidence"
+    assert (
+        evidence["with"]["name"]
+        == "macos-${{ matrix.stage }}-evidence-${{ inputs.request_id || inputs.source || github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}"
+    )
     assert "test-results/" in evidence["with"]["path"]
+    assert {"coverage/", "apps/desktop/coverage/lcov.info"} <= set(
+        evidence["with"]["path"].splitlines()
+    )
+
     package = jobs["macos"]
     assert package["needs"] == ["changes", "distribution-number", "macos-checks"]
     assert "always()" in package["if"]
@@ -87,7 +95,15 @@ def test_parallel_lanes_keep_each_suite_and_package_prerequisites_independent():
         == commands.count("smoke_macos_bundle.py")
         == 1
     )
+    assert "macos-stages" not in jobs
+    assert not (ROOT / ".github/workflows/macos-platform-stages.yml").exists()
     for job in (checks, package):
+        assert job["env"]["FORESIGHT_MACOS_UI_TEST"] == "1"
+        assert job["env"]["FORESIGHT_REQUIRE_NATIVE_UI_TEST"] == "1"
+        lane_commands = "\n".join(step.get("run", "") for step in job["steps"])
+        assert "--coverage" not in lane_commands
+        assert "run_ci_stage" not in lane_commands
+        assert "ci_native_work.py" not in lane_commands
         assert not any(step.get("continue-on-error") for step in job["steps"])
         assert not any(
             "download-artifact@" in step.get("uses", "") for step in job["steps"]
@@ -416,7 +432,7 @@ def test_real_build_step_shell_preserves_cmake_arguments_and_stops_before_build_
     brew.write_text("#!/bin/sh\nprintf '%s\\n' " + shlex.quote(str(icu)) + "\n")
     brew.chmod(0o755)
     log = workspace / "commands.jsonl"
-    fake = '#!/usr/bin/env python3\nimport json,os,shutil,sys\nwith open(os.environ["MAC_BUILD_LOG"],"a") as f: f.write(json.dumps([os.path.basename(sys.argv[0]),sys.argv[1:]])+"\\n")\nif os.path.basename(sys.argv[0]) == "cmake": shutil.copy2(os.environ["MAC_BUILD_CACHE"],"build/CMakeCache.txt")\nif os.environ.get("MAC_FAIL_NATIVE") == "1" and "--stage" in sys.argv and sys.argv[sys.argv.index("--stage")+1] == "native": sys.exit(91)\n'
+    fake = '#!/usr/bin/env python3\nimport json,os,shutil,sys\nwith open(os.environ["MAC_BUILD_LOG"],"a") as f: f.write(json.dumps([os.path.basename(sys.argv[0]),sys.argv[1:]])+"\\n")\nif os.path.basename(sys.argv[0]) == "cmake": shutil.copy2(os.environ["MAC_BUILD_CACHE"],"build/CMakeCache.txt")\nprint("stub-build")\nif os.environ.get("MAC_FAIL_NATIVE") == "1" and "--stage" in sys.argv and sys.argv[sys.argv.index("--stage")+1] == "native": sys.exit(91)\n'
     for executable in (
         binary / "cmake",
         workspace / "tools/build.sh",
@@ -452,6 +468,10 @@ def test_real_build_step_shell_preserves_cmake_arguments_and_stops_before_build_
     if qualified:
         if native_failure:
             assert result.returncode == 91
+            assert (
+                "stub-build"
+                in (workspace / f"test-results/macos/{lane}.log").read_text()
+            )
             assert len(calls) == 2, (
                 "Failed native prerequisite must stop dependent stages"
             )
@@ -500,7 +520,13 @@ def test_real_build_step_shell_preserves_cmake_arguments_and_stops_before_build_
             assert call == ["build.sh", expected + expected_args]
     else:
         assert result.returncode == 1
-        assert "gRPC_DIR must resolve inside" in result.stderr
+        assert "gRPC_DIR must resolve inside" in result.stdout + result.stderr
+        evidence = workspace / (
+            "test-results/macos/package-build.log"
+            if lane == "package"
+            else f"test-results/macos/{lane}.log"
+        )
+        assert "gRPC_DIR must resolve inside" in evidence.read_text()
         assert len(calls) == 1
 
 
@@ -649,3 +675,42 @@ def test_document_cache_guard_skips_only_superseded_cache_work(
     else:
         assert result.returncode != 0, result.stdout + result.stderr
         assert not output.exists()
+
+
+def test_mac_matrix_covers_the_public_all_stage_contract():
+    source = (ROOT / "tools/build.sh").read_text()
+    choices = re.search(r'case "\$task_stage" in\s*([a-z|]+)\) ;;;?', source)
+    assert choices is not None
+    stages = set(choices.group(1).split("|")) - {"all"}
+    assert (
+        set(config()["jobs"]["macos-checks"]["strategy"]["matrix"]["stage"])
+        - {"contracts"}
+        == stages
+    )
+    assert "--all-stages" in source
+
+
+def test_lane_evidence_reuses_existing_reviewed_paths_and_callers_are_unique():
+    jobs = config()["jobs"]
+    lane = next(
+        step for step in jobs["macos-checks"]["steps"] if step.get("if") == "always()"
+    )
+    package = next(
+        step
+        for step in jobs["macos"]["steps"]
+        if step.get("name") == "Retain development package evidence"
+    )
+    assert lane["with"]["overwrite"] is False
+    assert set(lane["with"]["path"].splitlines()) <= set(
+        package["with"]["path"].splitlines()
+    )
+    for path in (ROOT / ".github/workflows").glob("*.yml"):
+        workflow = parse_workflow(path.read_text())
+        calls = [
+            job
+            for job in workflow.get("jobs", {}).values()
+            if job.get("uses") == "./.github/workflows/macos.yml"
+        ]
+        assert len(calls) <= 1, (
+            "Repeated same-source invocations need distinct evidence identities"
+        )

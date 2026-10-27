@@ -52,32 +52,33 @@ jobs:
       run: |
         set -o pipefail
         mkdir -p test-results/macos
-        task_cmake_args=(
-          -G Ninja
-          "-DCMAKE_PREFIX_PATH=$PWD/build/sdk"
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
-          -DCMAKE_OSX_ARCHITECTURES=arm64
-          "-DICU_ROOT=$(brew --prefix icu4c)"
-          '-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local'
-        )
-        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-          "-DPython3_EXECUTABLE=$PWD/.venv/bin/python" "${task_cmake_args[@]}"
-        .venv/bin/python tools/verify_macos_cmake_cache.py build/CMakeCache.txt \
-          --sdk build/sdk --icu "$(brew --prefix icu4c)"
-        if [[ "$MACOS_CHECK_STAGE" != native ]]; then
-          tools/build.sh --platform macos --stage native --build-only "${task_cmake_args[@]}"
-        fi
-        if [[ "$MACOS_CHECK_STAGE" == service ]]; then
-          tools/build.sh --platform macos --stage core --build-only "${task_cmake_args[@]}"
-        fi
-        tools/build.sh --platform macos --stage "$MACOS_CHECK_STAGE" "${task_cmake_args[@]}" \
-          2>&1 | tee "test-results/macos/${MACOS_CHECK_STAGE}.log"
+        {
+          task_cmake_args=(
+            -G Ninja
+            "-DCMAKE_PREFIX_PATH=$PWD/build/sdk"
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+            -DCMAKE_OSX_ARCHITECTURES=arm64
+            "-DICU_ROOT=$(brew --prefix icu4c)"
+            '-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local'
+          )
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            "-DPython3_EXECUTABLE=$PWD/.venv/bin/python" "${task_cmake_args[@]}"
+          .venv/bin/python tools/verify_macos_cmake_cache.py build/CMakeCache.txt \
+            --sdk build/sdk --icu "$(brew --prefix icu4c)"
+          if [[ "$MACOS_CHECK_STAGE" != native ]]; then
+            tools/build.sh --platform macos --stage native --build-only "${task_cmake_args[@]}"
+          fi
+          if [[ "$MACOS_CHECK_STAGE" == service ]]; then
+            tools/build.sh --platform macos --stage core --build-only "${task_cmake_args[@]}"
+          fi
+          tools/build.sh --platform macos --stage "$MACOS_CHECK_STAGE" "${task_cmake_args[@]}"
+        } 2>&1 | tee "test-results/macos/${MACOS_CHECK_STAGE}.log"
     - name: Retain every macOS lane's raw evidence
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
-        name: macos-${{ matrix.stage }}-evidence
-        overwrite: true
+        name: macos-${{ matrix.stage }}-evidence-${{ inputs.request_id || inputs.source || github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
+        overwrite: false
         path: |
           build/Testing/Temporary/LastTest.log
           test-results/
@@ -120,20 +121,24 @@ jobs:
     - name: Build the macOS application for independent package checks
       id: macos-build
       run: |
-        task_cmake_args=(
-          -G Ninja
-          "-DCMAKE_PREFIX_PATH=$PWD/build/sdk"
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
-          -DCMAKE_OSX_ARCHITECTURES=arm64
-          "-DICU_ROOT=$(brew --prefix icu4c)"
-          '-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local'
-        )
-        # Qualify resolved dependency roots before compiling any application code.
-        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-          "-DPython3_EXECUTABLE=$PWD/.venv/bin/python" "${task_cmake_args[@]}"
-        .venv/bin/python tools/verify_macos_cmake_cache.py build/CMakeCache.txt \
-          --sdk build/sdk --icu "$(brew --prefix icu4c)"
-        tools/build.sh --platform macos --stage all --build-only "${task_cmake_args[@]}"
+        set -o pipefail
+        mkdir -p test-results/macos
+        {
+          task_cmake_args=(
+            -G Ninja
+            "-DCMAKE_PREFIX_PATH=$PWD/build/sdk"
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+            -DCMAKE_OSX_ARCHITECTURES=arm64
+            "-DICU_ROOT=$(brew --prefix icu4c)"
+            '-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local'
+          )
+          # Qualify resolved dependency roots before compiling any application code.
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            "-DPython3_EXECUTABLE=$PWD/.venv/bin/python" "${task_cmake_args[@]}"
+          .venv/bin/python tools/verify_macos_cmake_cache.py build/CMakeCache.txt \
+            --sdk build/sdk --icu "$(brew --prefix icu4c)"
+          tools/build.sh --platform macos --stage all --build-only "${task_cmake_args[@]}"
+        } 2>&1 | tee test-results/macos/package-build.log
     - name: Fetch verified macos-runtime
       env:
         GH_TOKEN: ${{ github.token }}

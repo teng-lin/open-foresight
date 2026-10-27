@@ -729,3 +729,44 @@ def test_shadow_host_prepares_pinned_base_before_offline_cache_fixture(
     else:
         assert result.returncode != 0, result.stdout + result.stderr
     assert commands == expected
+
+
+def test_service_setup_contains_the_core_source_build_prerequisites():
+    steps = yaml.safe_load(
+        (ROOT / ".github/actions/setup-linux-stage/action.yml").read_text()
+    )["runs"]["steps"]
+    named = {step.get("name"): step for step in steps}
+    packages = named["Install Linux application toolchain"]
+    assert "if" not in packages
+    assert {"cmake", "ninja", "gcc", "python", "python-pip", "uv", "pkgconf"} <= set(
+        packages["run"].split()
+    )
+    python = named["Install locked Python development dependencies"]
+    assert "if" not in python
+    assert "--require-hashes -r requirements-dev.lock" in python["run"]
+    for name in (
+        "Verify the pinned Linux Flutter SDK",
+        "Resolve locked language prerequisites for isolated stages",
+    ):
+        assert named[name]["if"] == "inputs.stage != 'native'"
+    assert (
+        "dart pub get --enforce-lockfile"
+        in named["Resolve locked language prerequisites for isolated stages"]["run"]
+    )
+    assert (
+        named["Warm the pinned desktop engine cache"]["if"]
+        == "inputs.stage == 'desktop' || inputs.stage == 'service'"
+    )
+
+
+def test_parent_aggregate_keeps_all_independent_linux_stages_required():
+    parent = workflow("macos.yml")["jobs"]
+    assert (
+        parent["linux-native"]["uses"]
+        == "./.github/workflows/linux-platform-stages.yml"
+    )
+    assert "linux-native" in parent["platform-checks"]["needs"]
+    assert parent["platform-checks"]["if"] == "always()"
+    jobs = workflow("linux-platform-stages.yml")["jobs"]
+    assert set(jobs) == {f"{stage}-linux" for stage in STAGES}
+    assert not any(job.get("continue-on-error") for job in jobs.values())
