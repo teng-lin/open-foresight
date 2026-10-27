@@ -163,6 +163,38 @@ DiagnosticWorkerReply classify(
     genuineFailure: genuine,
   ).encode(),
 );
+
+/// Expect a real-filesystem worker reply to be ok. When it is not, name the
+/// operation and probe the admission lock (checked), without retrying.
+void expectWorkerOk(
+  DiagnosticWorkerReply reply,
+  String profilePath,
+  String operation,
+) {
+  expect(
+    reply.result,
+    DiagnosticWorkerResult.ok,
+    reason: reply.result == DiagnosticWorkerResult.ok
+        ? null
+        : '$operation returned ${reply.result.name}; '
+              '${admissionLockEvidence(profilePath)}',
+  );
+}
+
+/// Production admission on a real profile, or a failure with lock evidence.
+DiagnosticStorage admitWithEvidence(String profilePath, DiagnosticRole role) {
+  final storage = DiagnosticStorage.admit(
+    profilePath,
+    DiagnosticIdentity.random(),
+    role,
+  );
+  if (storage != null) return storage;
+  fail(
+    'DiagnosticStorage.admit returned null; '
+    '${admissionLockEvidence(profilePath)}',
+  );
+}
+
 void admitted(DiagnosticStorageWorkerState state) {
   expect(
     state.handle(DiagnosticWorkerFrame.init, init().encode()).result,
@@ -274,11 +306,12 @@ void main() {
         DiagnosticWorkerResult.ok,
       );
       final first = worker.handle(4, empty);
-      expect(first.result, DiagnosticWorkerResult.ok);
+      expectWorkerOk(first, path, 'admit');
       expect(listed, isNotEmpty);
-      expect(
-        classify(worker, role: DiagnosticRole.candidate).result,
-        DiagnosticWorkerResult.ok,
+      expectWorkerOk(
+        classify(worker, role: DiagnosticRole.candidate),
+        path,
+        'classify',
       );
       final bytes = jsonBytes(record());
       expect(worker.handle(6, bytes).result, DiagnosticWorkerResult.ok);
@@ -292,11 +325,7 @@ void main() {
         '"role":"arbitrary","role":"candidate"',
       );
       manifest.writeAsStringSync(malformed);
-      final next = DiagnosticStorage.admit(
-        path,
-        DiagnosticIdentity.random(),
-        DiagnosticRole.candidate,
-      )!;
+      final next = admitWithEvidence(path, DiagnosticRole.candidate);
       addTearDown(next.close);
       expect(next.slot, isNot(first.slot));
       expect(segment.readAsBytesSync(), bytes);
@@ -685,16 +714,9 @@ void main() {
         DiagnosticWorkerResult.ok,
       );
       final admitted = worker.handle(4, empty);
-      expect(admitted.result, DiagnosticWorkerResult.ok);
+      expectWorkerOk(admitted, path, 'admit');
       expect(listed, isNotEmpty);
-      final classified = classify(worker);
-      expect(
-        classified.result,
-        DiagnosticWorkerResult.ok,
-        reason: classified.result == DiagnosticWorkerResult.retry
-            ? 'classify deferred (retry); ${admissionLockEvidence(path)}'
-            : 'classify did not defer: result=${classified.result}',
-      );
+      expectWorkerOk(classify(worker), path, 'classify');
       final bytes = jsonBytes(record());
       expect(worker.handle(6, bytes).result, DiagnosticWorkerResult.ok);
       final segment = File('$path/logs/slot-${admitted.slot}/0.jsonl');
