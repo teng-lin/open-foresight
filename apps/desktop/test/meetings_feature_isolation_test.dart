@@ -156,6 +156,7 @@ class _RefreshingSpeechReader implements StoreReader {
   final replies = StreamController<ReadResult<ModelRegistration?>>.broadcast(
     sync: true,
   );
+  Future<void> close() => replies.close();
   @override
   String get workspaceEpoch => delegate.workspaceEpoch;
   @override
@@ -266,7 +267,7 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(1400, 1000));
       addTearDown(() async {
         await pumpUntilCompleted(tester, controller.dispose());
-        await connection.store.replies.close();
+        await connection.store.close();
         connection.close();
         await pumpUntilCompleted(tester, connection.closed);
         await tester.binding.setSurfaceSize(null);
