@@ -282,6 +282,9 @@ CREATE TRIGGER transcript_attribution_manual_replace_guard BEFORE INSERT ON tran
 CREATE TRIGGER transcript_attribution_insert AFTER INSERT ON transcript_attributions
  WHEN NEW.rendered_name!='' AND EXISTS(SELECT 1 FROM transcript WHERE id=NEW.transcript_id AND final=1) BEGIN
  ${_attributionInvalidation('NEW.transcript_id')} END;
+CREATE TRIGGER transcript_attribution_replace BEFORE INSERT ON transcript_attributions
+ WHEN NEW.rendered_name='' AND EXISTS(SELECT 1 FROM transcript_attributions WHERE transcript_id=NEW.transcript_id AND rendered_name!='') AND EXISTS(SELECT 1 FROM transcript WHERE id=NEW.transcript_id AND final=1) BEGIN
+ ${_attributionInvalidation('NEW.transcript_id')} END;
 CREATE TRIGGER transcript_attribution_update AFTER UPDATE ON transcript_attributions
  WHEN OLD.rendered_name IS NOT NEW.rendered_name AND EXISTS(SELECT 1 FROM transcript WHERE id=NEW.transcript_id AND final=1) BEGIN
  ${_attributionInvalidation('NEW.transcript_id')} END;
@@ -333,11 +336,11 @@ CREATE VIEW source_contents AS SELECT s.id,CASE WHEN s.generated=1 AND m.meeting
         'AND NOT EXISTS(SELECT 1 FROM meeting_transcript_changes WHERE transcript_id=$transcript AND projected=0)';
     return '''
  UPDATE meetings SET revision=revision+1 WHERE id=$meeting;
- DELETE FROM meeting_index_segments WHERE transcript_id=$transcript AND $reproject;
- UPDATE sources SET revision=revision+1,state='pending',error='' WHERE generated=1 AND deleted=0 AND $reproject AND
+ UPDATE sources SET revision=revision+1,state='pending',error='' WHERE generated=1 AND deleted=0 AND
   id IN(SELECT source_id FROM meeting_transcript_sources WHERE meeting_id=$meeting);
- UPDATE source_details SET changed=CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) WHERE $reproject AND source_id IN
+ UPDATE source_details SET changed=CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) WHERE source_id IN
   (SELECT m.source_id FROM meeting_transcript_sources m JOIN sources s ON s.id=m.source_id WHERE m.meeting_id=$meeting AND s.generated=1 AND s.deleted=0);
+ DELETE FROM meeting_index_segments WHERE transcript_id=$transcript AND $reproject;
  INSERT INTO meeting_transcript_changes(meeting_id,transcript_id,changed) SELECT $meeting,$transcript,unixepoch()*1000 WHERE $reproject
   ON CONFLICT(meeting_id,transcript_id) DO UPDATE SET version=version+1,projected=0,changed=excluded.changed;
 ''';

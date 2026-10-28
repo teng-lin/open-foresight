@@ -146,6 +146,7 @@ void preMeetingAttributionFixture(Database db) {
     'transcript_attribution_participant_update',
     'transcript_attribution_manual_guard',
     'transcript_attribution_manual_replace_guard',
+    'transcript_attribution_replace',
     'transcript_attribution_insert',
     'transcript_attribution_update',
     'transcript_attribution_delete',
