@@ -287,6 +287,32 @@ bool ends_with_marker(NSString *text, NSString *marker, NSUInteger &separator) {
   return true;
 }
 
+// True when the text holds nothing a person could read: whitespace, control or
+// invisible format characters (zero-width space/joiners, bidi marks, BOM).
+bool invisible_only(NSString *text) {
+  NSCharacterSet *space = NSCharacterSet.whitespaceAndNewlineCharacterSet;
+  for (NSUInteger i = 0; i < text.length; ++i) {
+    unichar c = [text characterAtIndex:i];
+    bool invisible = [space characterIsMember:c] || c < 0x20 ||
+                     (c >= 0x7F && c < 0xA0) || c == 0x00AD || c == 0x061C ||
+                     c == 0x180E || (c >= 0x200B && c <= 0x200F) ||
+                     (c >= 0x202A && c <= 0x202E) ||
+                     (c >= 0x2060 && c <= 0x206F) || c == 0xFEFF;
+    if (!invisible)
+      return false;
+  }
+  return true;
+}
+
+// A tile is `<name>, <audio status>[, <active marker>][, other details]`.
+//
+// The status anchors on its LAST occurrence: Zoom writes it after the name, so
+// a name that itself contains a status phrase (of this or another locale) must
+// not truncate the real name. The research rule took the earliest phrase.
+//
+// A description with an active marker but no audio status is not accepted as a
+// tile: that structure is unvalidated and a participant named "Eve, Active
+// speaker" would otherwise become a speaker. It marks the read incomplete.
 std::optional<Tile> parse_tile(const AxNode &node, bool &dropped) {
   NSString *description = to_ns(node.description);
   if (!description) {
@@ -302,46 +328,43 @@ std::optional<Tile> parse_tile(const AxNode &node, bool &dropped) {
   for (const auto &locale : decoded_locales()) {
     for (int muted = 0; muted < 2; ++muted) {
       NSString *phrase = muted ? locale.muted : locale.unmuted;
-      NSRange range = [description rangeOfString:phrase options:kFold];
+      NSRange range = [description rangeOfString:phrase
+                                         options:kFold | NSBackwardsSearch];
       if (range.location == NSNotFound)
         continue;
-      // The earliest status wins; a longer phrase wins a tie.
-      if (best.locale == nullptr || range.location < best.range.location ||
+      // The last status wins; a longer phrase wins a tie.
+      if (best.locale == nullptr || range.location > best.range.location ||
           (range.location == best.range.location &&
            range.length > best.range.length))
         best = {&locale, range,
                 muted ? AudioState::Muted : AudioState::Unmuted};
     }
   }
-  Tile tile;
-  tile.object_id = node.object_id;
-  NSString *raw_name = nil;
-  if (best.locale) {
-    raw_name = [description substringToIndex:best.range.location];
-    NSString *rest =
-        trimmed([description substringFromIndex:NSMaxRange(best.range)]);
-    NSUInteger separator = 0;
-    tile.active = ends_with_marker(rest, best.locale->active, separator);
-    tile.audio = best.audio;
-    tile.locale = best.locale;
-  } else {
-    // No audio status: accept only an explicit trailing active-speaker marker.
+  if (!best.locale) {
     NSString *whole = trimmed(description);
     for (const auto &locale : decoded_locales()) {
       NSUInteger separator = 0;
       if (ends_with_marker(whole, locale.active, separator)) {
-        raw_name = [whole substringToIndex:separator];
-        tile.active = true;
-        tile.locale = &locale;
+        dropped = true;
         break;
       }
     }
+    return std::nullopt;
   }
-  if (!raw_name)
+  Tile tile;
+  tile.object_id = node.object_id;
+  NSString *rest =
+      trimmed([description substringFromIndex:NSMaxRange(best.range)]);
+  NSUInteger separator = 0;
+  tile.active = ends_with_marker(rest, best.locale->active, separator);
+  tile.audio = best.audio;
+  tile.locale = best.locale;
+  NSString *name = trimmed(strip_trailing_separators(
+      [description substringToIndex:best.range.location]));
+  if (invisible_only(name)) {
+    dropped = true; // a status without a readable name is an unnamed tile
     return std::nullopt;
-  NSString *name = trimmed(strip_trailing_separators(raw_name));
-  if (name.length == 0)
-    return std::nullopt;
+  }
   tile.name = to_utf8(name);
   if (tile.name.empty() || tile.name.size() > kMaxNameBytes) {
     dropped = true;
@@ -410,9 +433,7 @@ std::optional<std::string> parse_self_label(NSString *value,
 }
 
 struct SelfEvidence {
-  std::vector<std::string> names; // distinct comparison keys already deduped
-  std::vector<std::string> display;
-  std::vector<const DecodedLocale *> locales;
+  std::vector<std::string> names; // distinct comparison keys
 };
 
 void collect_self_text(const AxNode &node, int depth, Context &context,
@@ -426,8 +447,6 @@ void collect_self_text(const AxNode &node, int depth, Context &context,
         if (std::find(evidence.names.begin(), evidence.names.end(), key) ==
             evidence.names.end()) {
           evidence.names.push_back(key);
-          evidence.display.push_back(*name);
-          evidence.locales.push_back(&locale);
         }
       }
     }
@@ -437,32 +456,28 @@ void collect_self_text(const AxNode &node, int depth, Context &context,
 }
 
 void collect_self(const AxNode &node, int depth, Context &context,
-                  SelfEvidence &evidence) {
+                  const DecodedLocale &locale, SelfEvidence &evidence) {
   if (!visit(context, depth))
     return;
   if (node.role == "AXOutline") {
     if (NSString *description = to_ns(node.description)) {
-      NSString *label = trimmed(description);
-      bool matched = false;
-      // Spanish and Portuguese share this label, so every matching locale
-      // reads the rows with its own self word; the visit shares the budget.
-      for (const auto &locale : decoded_locales()) {
-        if (fold_equal(label, locale.participants_list)) {
-          collect_self_text(node, depth, context, locale, evidence);
-          matched = true;
-        }
-      }
-      if (matched)
+      if (fold_equal(trimmed(description), locale.participants_list)) {
+        // The Participants-list visit shares this pass's node budget.
+        collect_self_text(node, depth, context, locale, evidence);
         return;
+      }
     }
   }
   for (const auto &child : node.children)
-    collect_self(child, depth + 1, context, evidence);
+    collect_self(child, depth + 1, context, locale, evidence);
 }
 
 struct Compact {
   const DecodedLocale *locale = nullptr;
   size_t labels = 0;
+  // A direct static text with an empty or undecodable value: it could have been
+  // the talking label, so absence cannot be asserted.
+  bool unreadable = false;
   std::optional<std::string> name;
 };
 
@@ -490,8 +505,10 @@ std::optional<Compact> parse_compact(const AxNode &window) {
       if (child.role != "AXStaticText")
         continue;
       NSString *value = to_ns(child.value);
-      if (!value)
+      if (!value || value.length == 0) {
+        compact.unreadable = true;
         continue;
+      }
       for (NSString *prefix : locale.talking) {
         if (!prefix)
           continue;
@@ -501,7 +518,7 @@ std::optional<Compact> parse_compact(const AxNode &window) {
           continue;
         ++compact.labels;
         NSString *name = trimmed([value substringFromIndex:NSMaxRange(range)]);
-        bool usable = name.length > 0;
+        bool usable = !invisible_only(name);
         for (NSUInteger i = 0; usable && i < name.length; ++i) {
           unichar c = [name characterAtIndex:i];
           // A list of names is not one speaker.
@@ -605,7 +622,8 @@ ParseResult parse_snapshot(const AxSnapshot &snapshot) {
     return unavailable("unexpected_root");
   }
   if (windows.empty())
-    return unavailable("no_meeting_window");
+    return unavailable(snapshot.truncated ? "incomplete_read"
+                                          : "no_meeting_window");
 
   bool dropped = false;
   Context tile_context;
@@ -652,8 +670,13 @@ ParseResult parse_snapshot(const AxSnapshot &snapshot) {
     if (compact_windows > 1)
       return unavailable("ambiguous_windows");
   }
-  if (tiles.empty() && !compact)
-    return unavailable("no_participant_evidence");
+  if (tiles.empty() && !compact) {
+    // No evidence from an incomplete read is a failed read, never a quiet
+    // meeting: the missing part of the tree may have held the tiles.
+    bool incomplete = snapshot.truncated || tile_context.truncated || dropped;
+    return unavailable(incomplete ? "incomplete_read"
+                                  : "no_participant_evidence");
+  }
 
   if (tiles.size() > kMaxParticipants) {
     tiles.resize(kMaxParticipants);
@@ -687,27 +710,29 @@ ParseResult parse_snapshot(const AxSnapshot &snapshot) {
   bool compact_conflict = false;
   if (compact) {
     note_locale(compact->locale);
-    if (compact->name && compact->labels == 1) {
+    if (compact->name && compact->labels == 1 && !compact->unreadable) {
       Participant participant;
       participant.name = *compact->name;
       participant.key = comparison_key(participant.name);
       result.participants.push_back(std::move(participant));
       result.speakers.push_back({0, Method::CompactTalkingLabel});
-    } else if (compact->labels > 0) {
+    } else if (compact->labels > 0 || compact->unreadable) {
       compact_conflict = true; // several or unusable labels: unknown speaker
     }
   }
 
-  SelfEvidence self_evidence;
-  Context self_context;
-  for (const auto *window : windows)
-    collect_self(*window, 0, self_context, self_evidence);
-  if (self_context.truncated)
-    dropped = true;
-  for (const auto *seen : self_evidence.locales)
-    note_locale(seen);
+  // Locale comes from tile statuses and compact controls only. The
+  // Participants-list label is shared by some locales (Spanish, Portuguese) and
+  // a self word must never contradict an established meeting locale.
   if (conflict)
     return unavailable("locale_conflict");
+  SelfEvidence self_evidence;
+  Context self_context;
+  if (locale)
+    for (const auto *window : windows)
+      collect_self(*window, 0, self_context, *locale, self_evidence);
+  if (self_context.truncated)
+    dropped = true;
   if (self_evidence.names.size() == 1) {
     // Mark self only when exactly one participant carries that name.
     size_t matches = 0, index = 0;

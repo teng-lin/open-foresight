@@ -111,6 +111,20 @@ void check_scenario(const json &scenario) {
           name + ": participant name " + result.participants[i].name);
     CHECK(result.participants[i].self == participants[i]["self"].get<bool>(),
           name + ": self flag of " + result.participants[i].name);
+    if (participants[i].contains("key"))
+      CHECK(result.participants[i].key ==
+                participants[i]["key"].get<std::string>(),
+            name + ": comparison key of " + result.participants[i].name);
+    if (participants[i].contains("audio")) {
+      const char *audio =
+          result.participants[i].audio == foresight::zoom::AudioState::Muted
+              ? "muted"
+          : result.participants[i].audio == foresight::zoom::AudioState::Unmuted
+              ? "unmuted"
+              : "unknown";
+      CHECK(audio == participants[i]["audio"].get<std::string>(),
+            name + ": audio state of " + result.participants[i].name);
+    }
     if (participants[i].contains("object_id"))
       CHECK(result.participants[i].object_id ==
                 participants[i]["object_id"].get<uint64_t>(),
@@ -120,6 +134,9 @@ void check_scenario(const json &scenario) {
   CHECK(result.speakers.size() == speakers.size(), name + ": speaker count");
   for (size_t i = 0; i < speakers.size() && i < result.speakers.size(); ++i) {
     const auto &speaker = result.speakers[i];
+    CHECK(speaker.participant == speakers[i]["index"].get<size_t>(),
+          name + ": speaker refers to participant index " +
+              std::to_string(speaker.participant));
     CHECK(speaker.participant < result.participants.size(),
           name + ": speaker index in range");
     if (speaker.participant < result.participants.size())
@@ -168,13 +185,13 @@ void check_locale(const json &locale) {
     CHECK(result.speakers.size() == 1 && result.speakers[0].participant == 1,
           id + ": only the marked tile speaks");
   }
-  // Marker without a status phrase.
+  // A marker without a status phrase is an unvalidated structure: no speaker.
   {
     ParseResult result = foresight::zoom::parse_snapshot(
         single_window({node("AXTabGroup", ada + ", " + active)}));
-    CHECK(result.available && result.speakers.size() == 1 &&
-              result.locale == id,
-          id + ": marker-only tile");
+    CHECK(!result.available && result.reason == "incomplete_read" &&
+              result.speakers.empty(),
+          id + ": marker-only tile is not a speaker");
   }
   // Compact window, both label forms Zoom ships.
   for (const char *key : {"talking_format", "talking_key"}) {
@@ -328,8 +345,9 @@ void check_bounds_and_malformed() {
     ParseResult result = foresight::zoom::parse_snapshot(single_window(
         {node("AXTabGroup", std::string("\xff") + status),
          node("AXTabGroup", std::string(",,, ") + "Computer audio muted")}));
-    CHECK(!result.available && result.speakers.empty(),
-          "malformed tiles produce no speaker");
+    CHECK(!result.available && result.speakers.empty() &&
+              result.reason == "incomplete_read",
+          "malformed tiles produce no speaker and a failed read");
   }
   // Pure function: repeated parses agree.
   {

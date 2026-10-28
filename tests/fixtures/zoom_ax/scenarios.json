@@ -27,7 +27,9 @@
     "participants": [
      {
       "name": "Alice Example",
-      "self": false
+      "self": false,
+      "audio": "unmuted",
+      "key": "alice example"
      }
     ],
     "speakers": []
@@ -59,7 +61,9 @@
     "participants": [
      {
       "name": "Alice Example",
-      "self": false
+      "self": false,
+      "audio": "muted",
+      "key": "alice example"
      }
     ],
     "speakers": []
@@ -95,17 +99,20 @@
     "participants": [
      {
       "name": "Alice Example",
-      "self": false
+      "self": false,
+      "audio": "unmuted"
      },
      {
       "name": "Bob Example",
-      "self": false
+      "self": false,
+      "audio": "unmuted"
      }
     ],
     "speakers": [
      {
       "name": "Alice Example",
-      "method": "participant_status"
+      "method": "participant_status",
+      "index": 0
      }
     ]
    }
@@ -136,19 +143,21 @@
     "participants": [
      {
       "name": "Alice Example",
-      "self": false
+      "self": false,
+      "audio": "muted"
      }
     ],
     "speakers": [
      {
       "name": "Alice Example",
-      "method": "participant_status"
+      "method": "participant_status",
+      "index": 0
      }
     ]
    }
   },
   {
-   "name": "active marker without audio status",
+   "name": "active marker without audio status is not a tile",
    "truncated": false,
    "snapshot": {
     "role": "AXApplication",
@@ -166,22 +175,8 @@
     ]
    },
    "expected": {
-    "available": true,
-    "complete": true,
-    "locale": "en",
-    "window_index": 0,
-    "participants": [
-     {
-      "name": "Alice Example",
-      "self": false
-     }
-    ],
-    "speakers": [
-     {
-      "name": "Alice Example",
-      "method": "participant_status"
-     }
-    ]
+    "available": false,
+    "reason": "incomplete_read"
    }
   },
   {
@@ -264,11 +259,13 @@
     "speakers": [
      {
       "name": "Alice Example",
-      "method": "participant_status"
+      "method": "participant_status",
+      "index": 0
      },
      {
       "name": "Bob Example",
-      "method": "participant_status"
+      "method": "participant_status",
+      "index": 1
      }
     ]
    }
@@ -313,7 +310,8 @@
     "speakers": [
      {
       "name": "Example, Alice",
-      "method": "participant_status"
+      "method": "participant_status",
+      "index": 0
      }
     ]
    }
@@ -461,7 +459,7 @@
    }
   },
   {
-   "name": "tile with empty name is ignored",
+   "name": "tile with empty name is an unreadable tile",
    "truncated": false,
    "snapshot": {
     "role": "AXApplication",
@@ -484,7 +482,7 @@
    },
    "expected": {
     "available": false,
-    "reason": "no_participant_evidence"
+    "reason": "incomplete_read"
    }
   },
   {
@@ -525,7 +523,8 @@
     "speakers": [
      {
       "name": "Alice Example",
-      "method": "participant_status"
+      "method": "participant_status",
+      "index": 0
      }
     ]
    }
@@ -612,7 +611,8 @@
     "speakers": [
      {
       "name": "Alice Example",
-      "method": "participant_status"
+      "method": "participant_status",
+      "index": 0
      }
     ]
    }
@@ -687,7 +687,8 @@
     "speakers": [
      {
       "name": "Alice Example",
-      "method": "participant_status"
+      "method": "participant_status",
+      "index": 0
      }
     ]
    }
@@ -1238,7 +1239,8 @@
     "speakers": [
      {
       "name": "Alice Example",
-      "method": "compact_talking_label"
+      "method": "compact_talking_label",
+      "index": 0
      }
     ]
    }
@@ -1283,7 +1285,8 @@
     "speakers": [
      {
       "name": "Alice Example",
-      "method": "compact_talking_label"
+      "method": "compact_talking_label",
+      "index": 0
      }
     ]
    }
@@ -1328,7 +1331,8 @@
     "speakers": [
      {
       "name": "Alice Example",
-      "method": "compact_talking_label"
+      "method": "compact_talking_label",
+      "index": 0
      }
     ]
    }
@@ -1634,7 +1638,7 @@
    },
    "expected": {
     "available": false,
-    "reason": "no_participant_evidence"
+    "reason": "incomplete_read"
    }
   },
   {
@@ -1687,7 +1691,8 @@
     "speakers": [
      {
       "name": "Alice Example",
-      "method": "participant_status"
+      "method": "participant_status",
+      "index": 0
      }
     ]
    }
@@ -1732,7 +1737,8 @@
     "speakers": [
      {
       "name": "张三",
-      "method": "compact_talking_label"
+      "method": "compact_talking_label",
+      "index": 0
      }
     ]
    }
@@ -1793,7 +1799,8 @@
     "speakers": [
      {
       "name": "Alice Example",
-      "method": "compact_talking_label"
+      "method": "compact_talking_label",
+      "index": 0
      }
     ]
    }
@@ -2031,7 +2038,8 @@
     "speakers": [
      {
       "name": "Alice Example",
-      "method": "participant_status"
+      "method": "participant_status",
+      "index": 0
      }
     ]
    }
@@ -2103,7 +2111,8 @@
     "speakers": [
      {
       "name": "张三",
-      "method": "participant_status"
+      "method": "participant_status",
+      "index": 0
      }
     ]
    }
@@ -2242,13 +2251,14 @@
     "speakers": [
      {
       "name": "Alice Example",
-      "method": "participant_status"
+      "method": "participant_status",
+      "index": 0
      }
     ]
    }
   },
   {
-   "name": "earliest audio status ends the name",
+   "name": "final audio status anchors the name",
    "truncated": false,
    "snapshot": {
     "role": "AXApplication",
@@ -2272,8 +2282,9 @@
     "window_index": 0,
     "participants": [
      {
-      "name": "Ada",
-      "self": false
+      "name": "Ada, Computer audio muted",
+      "self": false,
+      "audio": "unmuted"
      }
     ],
     "speakers": []
@@ -2311,9 +2322,624 @@
     "speakers": [
      {
       "name": "Åsa Éclair",
-      "method": "participant_status"
+      "method": "participant_status",
+      "index": 0
      }
     ]
+   }
+  },
+  {
+   "name": "application without windows and a truncated read",
+   "truncated": true,
+   "snapshot": {
+    "role": "AXApplication"
+   },
+   "expected": {
+    "available": false,
+    "reason": "incomplete_read"
+   }
+  },
+  {
+   "name": "truncated read without evidence is a failed read",
+   "truncated": true,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXStaticText",
+        "value": "Home"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": false,
+    "reason": "incomplete_read"
+   }
+  },
+  {
+   "name": "name containing another locale status phrase",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "Zoë, 电脑音频开启, Computer audio unmuted"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": true,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "Zoë, 电脑音频开启",
+      "self": false
+     }
+    ],
+    "speakers": []
+   }
+  },
+  {
+   "name": "name containing its own status phrase",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "Computer audio muted, Computer audio unmuted, Active speaker"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": true,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "Computer audio muted",
+      "self": false
+     }
+    ],
+    "speakers": [
+     {
+      "name": "Computer audio muted",
+      "method": "participant_status",
+      "index": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "name ending in the active marker text is not active",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "Mallory, Active speaker, Computer audio muted"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": true,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "Mallory, Active speaker",
+      "self": false
+     }
+    ],
+    "speakers": []
+   }
+  },
+  {
+   "name": "marker-only tile never becomes a speaker",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "Mallory, Active speaker"
+       },
+       {
+        "role": "AXTabGroup",
+        "description": "Alice Example, Computer audio unmuted"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": false,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "Alice Example",
+      "self": false
+     }
+    ],
+    "speakers": []
+   }
+  },
+  {
+   "name": "unnamed active tile makes the read incomplete",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": ", Computer audio unmuted, Active speaker"
+       },
+       {
+        "role": "AXTabGroup",
+        "description": "Alice Example, Computer audio unmuted"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": false,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "Alice Example",
+      "self": false
+     }
+    ],
+    "speakers": []
+   }
+  },
+  {
+   "name": "zero-width-only name is unnamed",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "​‍﻿, Computer audio unmuted, Active speaker"
+       },
+       {
+        "role": "AXTabGroup",
+        "description": "Alice Example, Computer audio unmuted"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": false,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "Alice Example",
+      "self": false
+     }
+    ],
+    "speakers": []
+   }
+  },
+  {
+   "name": "no-break spaces at the edges are trimmed",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": " Alice Example , Computer audio unmuted"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": true,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "Alice Example",
+      "self": false,
+      "key": "alice example"
+     }
+    ],
+    "speakers": []
+   }
+  },
+  {
+   "name": "right-to-left name",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "שלום עולם, Computer audio unmuted, Active speaker"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": true,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "שלום עולם",
+      "self": false
+     }
+    ],
+    "speakers": [
+     {
+      "name": "שלום עולם",
+      "method": "participant_status",
+      "index": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "emoji and zwj sequences keep their spelling",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "👩‍💻 Dev Example, Computer audio muted"
+       },
+       {
+        "role": "AXTabGroup",
+        "description": "🙂, Computer audio unmuted, Active speaker"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": true,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "👩‍💻 Dev Example",
+      "self": false
+     },
+     {
+      "name": "🙂",
+      "self": false
+     }
+    ],
+    "speakers": [
+     {
+      "name": "🙂",
+      "method": "participant_status",
+      "index": 1
+     }
+    ]
+   }
+  },
+  {
+   "name": "portuguese self word does not conflict with a spanish meeting",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "Joao Example, Audio de la computadora no silenciado"
+       }
+      ]
+     },
+     {
+      "role": "AXWindow",
+      "object_id": 200,
+      "children": [
+       {
+        "role": "AXOutline",
+        "description": "Lista de participantes",
+        "children": [
+         {
+          "role": "AXStaticText",
+          "value": "Joao Example (eu)"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": true,
+    "locale": "es",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "Joao Example",
+      "self": false
+     }
+    ],
+    "speakers": []
+   }
+  },
+  {
+   "name": "spanish self word marks self in a spanish meeting",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "Joao Example, Audio de la computadora no silenciado"
+       }
+      ]
+     },
+     {
+      "role": "AXWindow",
+      "object_id": 200,
+      "children": [
+       {
+        "role": "AXOutline",
+        "description": "Lista de participantes",
+        "children": [
+         {
+          "role": "AXStaticText",
+          "value": "Joao Example (yo)"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": true,
+    "locale": "es",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "Joao Example",
+      "self": true
+     }
+    ],
+    "speakers": []
+   }
+  },
+  {
+   "name": "portuguese self word marks self in a portuguese meeting",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "Joao Example, Áudio do computador ativado"
+       }
+      ]
+     },
+     {
+      "role": "AXWindow",
+      "object_id": 200,
+      "children": [
+       {
+        "role": "AXOutline",
+        "description": "Lista de participantes",
+        "children": [
+         {
+          "role": "AXStaticText",
+          "value": "Joao Example (eu)"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": true,
+    "locale": "pt",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "Joao Example",
+      "self": true
+     }
+    ],
+    "speakers": []
+   }
+  },
+  {
+   "name": "compact empty static text is unreadable",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 900,
+      "children": [
+       {
+        "role": "AXButton",
+        "description": "Hide thumbnail video"
+       },
+       {
+        "role": "AXButton",
+        "description": "Show active speaker video"
+       },
+       {
+        "role": "AXStaticText",
+        "value": ""
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": false,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [],
+    "speakers": []
+   }
+  },
+  {
+   "name": "compact label beside an unreadable sibling is not trusted",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 900,
+      "children": [
+       {
+        "role": "AXButton",
+        "description": "Hide thumbnail video"
+       },
+       {
+        "role": "AXButton",
+        "description": "Show active speaker video"
+       },
+       {
+        "role": "AXStaticText",
+        "value": "Talking: Alice Example"
+       },
+       {
+        "role": "AXStaticText",
+        "value": ""
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": false,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [],
+    "speakers": []
+   }
+  },
+  {
+   "name": "compact invisible-only name is unusable",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 900,
+      "children": [
+       {
+        "role": "AXButton",
+        "description": "Hide thumbnail video"
+       },
+       {
+        "role": "AXButton",
+        "description": "Show active speaker video"
+       },
+       {
+        "role": "AXStaticText",
+        "value": "Talking: ​"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": false,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [],
+    "speakers": []
    }
   }
  ]
