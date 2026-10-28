@@ -622,7 +622,8 @@ void main() {
       );
       open = false;
       lock.close();
-      // A closed descriptor is a non-contention failure, never "held".
+      // A closed BackupFile is refused before flock (its Dart _closed guard),
+      // so this covers the probe's classification, not the errno path.
       expect(probeLease(lock), AdmissionLockProbe.refused);
       expect(ownAdmissionDescriptors(path), anyOf(isNull, 0));
       // A fork elsewhere may keep the closed description alive until exec.

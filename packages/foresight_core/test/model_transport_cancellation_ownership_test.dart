@@ -638,6 +638,34 @@ void main() {
     timeout: const Timeout(Duration(seconds: 40)),
   );
 
+  test(
+    'a cold launch longer than the five-second setup bound fails at it with its phase',
+    () async {
+      // Same 5.5 s cold start, default 5 s setup budget: the worker starts its
+      // delay after the request, so it cannot reach the barrier in time.
+      final clock = Stopwatch()..start();
+      await expectLater(
+        brokenConfigPipeScenario([
+          'initial',
+        ], startupDelay: const Duration(milliseconds: 5500)),
+        throwsA(
+          isA<TestFailure>().having(
+            (e) => e.message,
+            'message',
+            allOf(
+              contains('Closed-stdin setup'),
+              contains('attempt=initial'),
+              contains('last observed phase: launched'),
+            ),
+          ),
+        ),
+      );
+      expect(clock.elapsed, greaterThanOrEqualTo(const Duration(seconds: 5)));
+      expect(clock.elapsed, lessThan(const Duration(seconds: 12)));
+    },
+    timeout: const Timeout(Duration(seconds: 40)),
+  );
+
   test('a retirement that never settles fails at its bound with its phase', () {
     final trace = PhaseTrace()
       ..enter('launched')

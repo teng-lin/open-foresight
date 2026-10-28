@@ -11,7 +11,9 @@ enum AdmissionLockProbe {
   /// (possibly an inherited, not yet closed one) holds the lock.
   held,
 
-  /// The probe failed for another reason; this is not contention.
+  /// The checked lease refused: a closed file, or any errno other than
+  /// EWOULDBLOCK/EAGAIN. Tests cover only the closed-file case; the errno path
+  /// is not exercised (see the known gap in docs/testing.md).
   refused,
 
   /// The lock file or directory could not be opened for the probe.
