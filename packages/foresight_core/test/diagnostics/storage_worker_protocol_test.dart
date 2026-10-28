@@ -19,23 +19,24 @@ const build =
 final session = DiagnosticIdentity.parse('0123456789abcdef0123456789abcdef')!;
 final empty = Uint8List(0);
 
-/// Positive filesystem admission may encounter transient kernel contention. A retry
+/// Positive filesystem operations may encounter transient kernel contention. A retry
 /// alone is insufficient: require an independent checked kernel refusal, then
 /// wait for release without spending further protocol admission attempts.
-Future<DiagnosticWorkerReply> _admitFilesystem(
-  DiagnosticStorageWorkerState worker,
-  String profile, {
+Future<DiagnosticWorkerReply> _withFilesystemContention(
+  String profile,
+  DiagnosticWorkerReply Function() request, {
+  required DiagnosticHealthReason retryReason,
   void Function()? contended,
 }) async {
   final elapsed = Stopwatch()..start();
   const budget = Duration(seconds: 3);
   for (var attempt = 1; attempt <= 5; attempt++) {
-    final reply = worker.handle(DiagnosticWorkerFrame.admit, empty);
+    final reply = request();
     if (reply.result == DiagnosticWorkerResult.ok) return reply;
     if (reply.result != DiagnosticWorkerResult.retry ||
-        reply.reason != DiagnosticHealthReason.storageUnavailable) {
+        reply.reason != retryReason) {
       throw TestFailure(
-        'Filesystem admission failed: attempt=$attempt '
+        'Filesystem operation failed: attempt=$attempt '
         'result=${reply.result.name} reason=${reply.reason.name}',
       );
     }
@@ -45,7 +46,7 @@ Future<DiagnosticWorkerReply> _admitFilesystem(
       try {
         if (lock.size != 0 || lock.tryExclusiveLeaseChecked()) {
           throw TestFailure(
-            'Filesystem admission retry lacks kernel contention: '
+            'Filesystem operation retry lacks kernel contention: '
             'attempt=$attempt reason=${reply.reason.name}',
           );
         }
@@ -61,8 +62,19 @@ Future<DiagnosticWorkerReply> _admitFilesystem(
       root.close();
     }
   }
-  throw TestFailure('Filesystem admission exhausted its five attempts');
+  throw TestFailure('Filesystem operation exhausted its five attempts');
 }
+
+Future<DiagnosticWorkerReply> _admitFilesystem(
+  DiagnosticStorageWorkerState worker,
+  String profile, {
+  void Function()? contended,
+}) => _withFilesystemContention(
+  profile,
+  () => worker.handle(DiagnosticWorkerFrame.admit, empty),
+  retryReason: DiagnosticHealthReason.storageUnavailable,
+  contended: contended,
+);
 
 final _libc = DynamicLibrary.process();
 final _dup = _libc.lookupFunction<Int32 Function(Int32), int Function(int)>(
@@ -619,42 +631,59 @@ void main() {
     expect(Directory('$path/logs').listSync(), isEmpty);
     expect(worker.handle(8, empty).reason, DiagnosticHealthReason.closed);
   });
-  test('positive fixture refuses retries without kernel contention', () async {
-    final path = workerProfile();
-    final profile = BackupDirectory(path);
-    final root = profile.child('logs');
-    profile.close();
-    final lock = root.open('admission.lock', create: true);
-    addTearDown(() {
-      lock.close();
-      root.close();
-    });
-    var calls = 0;
-    final worker = DiagnosticStorageWorkerState.forTesting(
-      parentPid: pid,
-      buildId: build,
-      factory: (_, _, _) {
-        calls++;
-        return null;
+  for (final classification in [false, true]) {
+    test(
+      'positive fixture refuses retries without kernel contention (classification=$classification)',
+      () async {
+        final path = workerProfile();
+        final profile = BackupDirectory(path);
+        final root = profile.child('logs');
+        profile.close();
+        final lock = root.open('admission.lock', create: true);
+        addTearDown(() {
+          lock.close();
+          root.close();
+        });
+        var calls = 0;
+        final sink = Sink()..contend = true;
+        final worker = DiagnosticStorageWorkerState.forTesting(
+          parentPid: pid,
+          buildId: build,
+          factory: (_, _, _) {
+            calls++;
+            return classification ? sink : null;
+          },
+        );
+        addTearDown(() => worker.handle(8, empty));
+        expect(
+          worker.handle(2, init(path).encode()).result,
+          DiagnosticWorkerResult.ok,
+        );
+        if (classification) {
+          expect(worker.handle(4, empty).result, DiagnosticWorkerResult.ok);
+          calls = 0;
+        }
+        await expectLater(
+          classification
+              ? _withFilesystemContention(
+                  path,
+                  () => classify(worker),
+                  retryReason: DiagnosticHealthReason.healthy,
+                )
+              : _admitFilesystem(worker, path),
+          throwsA(
+            isA<TestFailure>().having(
+              (error) => error.message,
+              'message',
+              contains('lacks kernel contention'),
+            ),
+          ),
+        );
+        expect(calls, classification ? 0 : 1);
+        expect(sink.classifications, classification ? 1 : 0);
       },
     );
-    addTearDown(() => worker.handle(8, empty));
-    expect(
-      worker.handle(2, init(path).encode()).result,
-      DiagnosticWorkerResult.ok,
-    );
-    await expectLater(
-      _admitFilesystem(worker, path),
-      throwsA(
-        isA<TestFailure>().having(
-          (error) => error.message,
-          'message',
-          contains('lacks kernel contention'),
-        ),
-      ),
-    );
-    expect(calls, 1);
-  });
+  }
   test('INIT grants no files and admission retries stay at five', () {
     var calls = 0;
     final worker = DiagnosticStorageWorkerState.forTesting(
@@ -797,7 +826,25 @@ void main() {
         expect(admitted.result, DiagnosticWorkerResult.ok);
         if (contend) expect(sawContention, isTrue);
         expect(listed, isNotEmpty);
-        expect(classify(worker).result, DiagnosticWorkerResult.ok);
+        final manifest = File('$path/logs/slot-${admitted.slot}/manifest.json');
+        final beforeClassification = manifest.readAsBytesSync();
+        if (contend) {
+          heldLock = logs!.open('admission.lock');
+          await eventually(heldLock.tryExclusiveLeaseChecked);
+        }
+        var classificationContended = false;
+        final classified = await _withFilesystemContention(
+          path,
+          () => classify(worker),
+          retryReason: DiagnosticHealthReason.healthy,
+          contended: () {
+            classificationContended = true;
+            expect(manifest.readAsBytesSync(), beforeClassification);
+            heldLock?.close();
+          },
+        );
+        expect(classified.result, DiagnosticWorkerResult.ok);
+        if (contend) expect(classificationContended, isTrue);
         final bytes = jsonBytes(record());
         expect(worker.handle(6, bytes).result, DiagnosticWorkerResult.ok);
         final segment = File('$path/logs/slot-${admitted.slot}/0.jsonl');
