@@ -9,9 +9,12 @@ import 'package:foresight_core/src/diagnostics/storage.dart';
 import 'package:foresight_core/src/diagnostics/storage_worker_dispatch.dart';
 import 'package:foresight_core/src/diagnostics/storage_worker_protocol.dart';
 import 'package:foresight_core/src/persistence/backup_files.dart';
+import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 import 'package:path/path.dart' as p;
+
+import '../support/admission_lock_evidence.dart';
 
 const build =
     '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
@@ -160,6 +163,38 @@ DiagnosticWorkerReply classify(
     genuineFailure: genuine,
   ).encode(),
 );
+
+/// Expect a real-filesystem worker reply to be ok. When it is not, name the
+/// operation and probe the admission lock (checked), without retrying.
+void expectWorkerOk(
+  DiagnosticWorkerReply reply,
+  String profilePath,
+  String operation,
+) {
+  expect(
+    reply.result,
+    DiagnosticWorkerResult.ok,
+    reason: reply.result == DiagnosticWorkerResult.ok
+        ? null
+        : '$operation returned ${reply.result.name}; '
+              '${admissionLockEvidence(profilePath)}',
+  );
+}
+
+/// Production admission on a real profile, or a failure with lock evidence.
+DiagnosticStorage admitWithEvidence(String profilePath, DiagnosticRole role) {
+  final storage = DiagnosticStorage.admit(
+    profilePath,
+    DiagnosticIdentity.random(),
+    role,
+  );
+  if (storage != null) return storage;
+  fail(
+    'DiagnosticStorage.admit returned null; '
+    '${admissionLockEvidence(profilePath)}',
+  );
+}
+
 void admitted(DiagnosticStorageWorkerState state) {
   expect(
     state.handle(DiagnosticWorkerFrame.init, init().encode()).result,
@@ -271,11 +306,12 @@ void main() {
         DiagnosticWorkerResult.ok,
       );
       final first = worker.handle(4, empty);
-      expect(first.result, DiagnosticWorkerResult.ok);
+      expectWorkerOk(first, path, 'admit');
       expect(listed, isNotEmpty);
-      expect(
-        classify(worker, role: DiagnosticRole.candidate).result,
-        DiagnosticWorkerResult.ok,
+      expectWorkerOk(
+        classify(worker, role: DiagnosticRole.candidate),
+        path,
+        'classify',
       );
       final bytes = jsonBytes(record());
       expect(worker.handle(6, bytes).result, DiagnosticWorkerResult.ok);
@@ -289,11 +325,7 @@ void main() {
         '"role":"arbitrary","role":"candidate"',
       );
       manifest.writeAsStringSync(malformed);
-      final next = DiagnosticStorage.admit(
-        path,
-        DiagnosticIdentity.random(),
-        DiagnosticRole.candidate,
-      )!;
+      final next = admitWithEvidence(path, DiagnosticRole.candidate);
       addTearDown(next.close);
       expect(next.slot, isNot(first.slot));
       expect(segment.readAsBytesSync(), bytes);
@@ -682,9 +714,9 @@ void main() {
         DiagnosticWorkerResult.ok,
       );
       final admitted = worker.handle(4, empty);
-      expect(admitted.result, DiagnosticWorkerResult.ok);
+      expectWorkerOk(admitted, path, 'admit');
       expect(listed, isNotEmpty);
-      expect(classify(worker).result, DiagnosticWorkerResult.ok);
+      expectWorkerOk(classify(worker), path, 'classify');
       final bytes = jsonBytes(record());
       expect(worker.handle(6, bytes).result, DiagnosticWorkerResult.ok);
       final segment = File('$path/logs/slot-${admitted.slot}/0.jsonl');
@@ -696,11 +728,131 @@ void main() {
       final slot = BackupDirectory('$path/logs/slot-${admitted.slot}');
       final lease = slot.open('lease');
       try {
-        expect(lease.tryExclusiveLease(), isTrue);
+        final acquired = lease.tryExclusiveLease();
+        expect(
+          acquired,
+          isTrue,
+          reason: acquired
+              ? null
+              : 'slot lease not released after RETIRED; a second checked '
+                    'attempt on it observed ${probeLease(lease).name}',
+        );
       } finally {
         lease.close();
         slot.close();
       }
     },
   );
+
+  group('admission contention', () {
+    ({DiagnosticStorageWorkerState worker, String path})
+    admittedFilesystemWorker() {
+      final parent = BackupDirectory(
+        createTestTempDirectorySync('diag-admission-').path,
+        private: false,
+      );
+      final profile = parent.child('profile');
+      final profilePath = profile.path;
+      profile.close();
+      parent.close();
+      final worker = DiagnosticStorageWorkerState.authenticated(
+        parentPid: pid,
+        buildId: build,
+        directoryReader: _streamReader,
+      );
+      addTearDown(() {
+        if (!worker.retired) worker.handle(8, empty);
+      });
+      expect(
+        worker.handle(2, init(profilePath).encode()).result,
+        DiagnosticWorkerResult.ok,
+      );
+      expect(worker.handle(4, empty).result, DiagnosticWorkerResult.ok);
+      return (worker: worker, path: profilePath);
+    }
+
+    test(
+      'classify defers only while the admission lock is confirmed held',
+      () async {
+        final (:worker, :path) = admittedFilesystemWorker();
+        // Own descriptors are read from /proc on Linux only; elsewhere unknown.
+        final ownBefore = ownAdmissionDescriptors(path);
+        expect(ownBefore == null, !Platform.isLinux);
+        final logs = BackupDirectory('$path/logs', create: false);
+        final holder = logs.open('admission.lock');
+        var held = false;
+        addTearDown(() {
+          if (held) holder.close();
+          logs.close();
+        });
+        expect(
+          ownAdmissionDescriptors(path),
+          ownBefore == null ? isNull : ownBefore + 1,
+        );
+        // Suites share one process, so a fork elsewhere can briefly keep a
+        // closed admission description alive until exec. Acquire the holder
+        // only once that checked contention has cleared.
+        await eventually(
+          holder.tryExclusiveLeaseChecked,
+          label: 'holder acquires admission.lock',
+          describe: () => admissionLockEvidence(path),
+        );
+        held = true;
+        // A separate open description contends with the kernel, deterministically.
+        expect(probeAdmissionLock(path), AdmissionLockProbe.held);
+        for (var attempt = 0; attempt < 3; attempt++) {
+          expect(
+            classify(worker).result,
+            DiagnosticWorkerResult.retry,
+            reason: 'attempt $attempt',
+          );
+        }
+        expect(
+          admissionLockEvidence(path),
+          contains('held - kernel EWOULDBLOCK confirmed'),
+        );
+        held = false;
+        holder.close();
+        expect(ownAdmissionDescriptors(path), ownBefore);
+        // A description inherited by a concurrent fork may outlive
+        // holder.close() until that child execs. Observe the lock itself, within
+        // the default bound, until the checked probe acquires it; held is that
+        // known window, anything else is unexplained. Then call the product once.
+        await eventually(
+          () {
+            final probe = probeAdmissionLock(path);
+            expect(
+              probe,
+              anyOf(AdmissionLockProbe.free, AdmissionLockProbe.held),
+              reason: 'unexplained admission lock state',
+            );
+            return probe == AdmissionLockProbe.free;
+          },
+          label: 'inherited admission description released',
+          describe: () => admissionLockEvidence(path),
+        );
+        // The deferral changed no state: the same request now succeeds.
+        expectWorkerOk(classify(worker), path, 'classify after release');
+        expect(
+          worker.handle(6, jsonBytes(record())).result,
+          DiagnosticWorkerResult.ok,
+        );
+      },
+    );
+
+    test('evidence probe separates contention, refusal and an absent lock', () {
+      final path = admittedFilesystemWorker().path;
+      final logs = BackupDirectory('$path/logs', create: false);
+      addTearDown(logs.close);
+      final lock = logs.open('admission.lock');
+      lock.close();
+      // A closed descriptor is a non-contention failure, never "held".
+      expect(probeLease(lock), AdmissionLockProbe.refused);
+      expect(
+        probeAdmissionLock('$path/missing'),
+        AdmissionLockProbe.unopenable,
+      );
+      expect(admissionLockEvidence('$path/missing'), contains('unopenable'));
+    });
+  });
 }
