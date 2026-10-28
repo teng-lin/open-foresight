@@ -89,6 +89,22 @@ These add diagnostics and cleanup. They are not retries and do not extend any
 budget. A failure message that names a phase is evidence for investigation; it
 does not establish the cause of a failure that has not been reproduced.
 
+### Known gap: diagnostic admission treats any lock errno as `retry`
+
+`DiagnosticStorage.admit` and `classify` take `admission.lock` with the
+unchecked `tryExclusiveLease`, so a non-contention `flock` errno is reported the
+same as contention: `admit` returns null and the worker answers `retry`. The
+checked lease distinguishes them, but it reads errno in a second FFI call, which
+is not a reliable errno read in Dart
+([dart-lang/sdk#38832](https://github.com/dart-lang/sdk/issues/38832)); a
+misread EWOULDBLOCK would mark the sink failed and disable it permanently.
+Production is unchanged here. The recommended follow-up is a native shim that
+returns the `flock` result and errno together. Until then the fixtures only
+report evidence (`admission_lock_evidence.dart`) and do not claim that a
+`retry` was contention. The cause of the intermittent `retry` seen when suites
+run concurrently in one process is unknown; a fork in another suite keeping a
+closed lock description alive until exec is a hypothesis, not a finding.
+
 ### Make timing and error tests prove their intended phase
 
 A short total budget can expire during connection setup before a retry-delay
