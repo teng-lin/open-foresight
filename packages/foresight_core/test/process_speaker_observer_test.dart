@@ -867,6 +867,101 @@ void main() {
     );
   });
 
+  group('a full request queue', () {
+    test('a refused start is retried with a fresh identifier', () async {
+      h = Harness();
+      h.behaviors.single.busyRemaining = 2;
+      await h.observer.start('s1');
+      final starts = h.helpers.single.requests
+          .where((r) => r['type'] == 'start')
+          .toList();
+      expect(starts, hasLength(3));
+      expect(starts.map((r) => r['id']).toSet(), hasLength(3));
+      expect(
+        h.diagnostics
+            .where((d) => d.code == SpeakerObserverDiagnosticCode.busyRetried)
+            .map((d) => d.value),
+        [1, 2],
+      );
+      await settle();
+      expect(h.states.map((s) => s.status), [ObserverStatus.running]);
+    });
+
+    test('busy answers to clock probes and queries are retried too', () async {
+      h = Harness();
+      h.behaviors.single
+        ..busyRemaining = 3
+        ..busyTypes = {'clock', 'capabilities'};
+      await h.observer.start('s1');
+      expect((await h.observer.inspect()).available, true);
+      expect(
+        h.helpers.single.requestTypes.where((t) => t == 'clock'),
+        hasLength(3 + 3),
+      );
+      h.behaviors.single.busyRemaining = 1;
+      expect((await h.observer.inspect()).available, true);
+    });
+
+    test(
+      'a start that stays busy fails with a retryable code and reaps',
+      () async {
+        h = Harness();
+        h.behaviors.single.busyRemaining = -1;
+        final error = await errorOf(h.observer.start('s1'));
+        expect(error, failureOf(SpeakerObserverFailure.helperError));
+        expect((error as SpeakerObserverException).helperCode, 'busy');
+        expect(
+          h.helpers.single.requestTypes.where((t) => t == 'start'),
+          hasLength(4),
+        );
+        expect(h.allReaped, true);
+        // Nothing was left behind: the very same start can be tried again.
+        h.behaviors.single.busyRemaining = 0;
+        await h.observer.start('s1');
+      },
+    );
+
+    test('a restart refused as busy is retried inside the budget', () async {
+      h = Harness();
+      h.behaviors.add(HelperBehavior()..busyRemaining = -1);
+      h.behaviors.add(HelperBehavior());
+      await h.observer.start('s1');
+      h.helpers.single.exit(1);
+      await eventually(
+        () =>
+            h.helpers.length == 3 &&
+            h.states.last.status == ObserverStatus.running,
+      );
+      expect(h.states.last.restartCount, 2);
+    });
+
+    test('stop ends a busy retry wait at once', () async {
+      h = Harness(
+        config: SpeakerObserverConfig(
+          executable: '/fake/helper',
+          pollMs: 50,
+          readDeadlineMs: 50,
+          backoffInitial: const Duration(seconds: 20),
+          backoffMax: const Duration(seconds: 20),
+          exitGrace: const Duration(milliseconds: 100),
+          termGrace: const Duration(milliseconds: 100),
+          killGrace: const Duration(milliseconds: 100),
+        ),
+      );
+      h.behaviors.single.busyRemaining = -1;
+      final start = errorOf(h.observer.start('s1'));
+      await eventually(
+        () => h.diagnosticCodes.contains(
+          SpeakerObserverDiagnosticCode.busyRetried,
+        ),
+      );
+      final elapsed = Stopwatch()..start();
+      await h.observer.stop();
+      expect(elapsed.elapsed, lessThan(const Duration(seconds: 3)));
+      expect(await start, failureOf(SpeakerObserverFailure.cancelled));
+    });
+  });
+
   group('implausible input', () {
     test(
       'a read from the far future restarts the helper and does not poison attribution',

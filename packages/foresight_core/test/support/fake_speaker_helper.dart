@@ -16,8 +16,13 @@ class HelperBehavior {
   String capabilityReason = '';
   bool answerStop = true;
 
-  /// `ok`, `error` or `wrong_session`.
+  /// `ok`, `error`, `wrong_session` or `null_session`.
   String stopReply = 'ok';
+
+  /// Answer this many requests of [busyTypes] with `error` / `busy` (a full
+  /// request queue); negative means every one.
+  int busyRemaining = 0;
+  Set<String> busyTypes = const {'start'};
   int stopExitStatus = 0;
   bool exitOnStdinClose = true;
   bool exitOnTerm = true;
@@ -199,6 +204,12 @@ class FakeHelper implements Process {
     final request = jsonDecode(line) as Map<String, dynamic>;
     requests.add(request);
     final id = request['id'];
+    if (behavior.busyRemaining != 0 &&
+        behavior.busyTypes.contains(request['type'])) {
+      if (behavior.busyRemaining > 0) behavior.busyRemaining--;
+      send('error', {'id': id, 'code': 'busy', 'message': 'queue full'});
+      return;
+    }
     switch (request['type']) {
       case 'capabilities' || 'setup':
         if (!behavior.answerCapabilities) return;
@@ -254,6 +265,8 @@ class FakeHelper implements Process {
         if (!behavior.answerStop) return;
         if (behavior.stopReply == 'error') {
           send('error', {'id': id, 'code': 'stop_failed', 'message': 'x'});
+        } else if (behavior.stopReply == 'null_session') {
+          send('stopped', {'id': id, 'session': null});
         } else if (behavior.stopReply == 'wrong_session') {
           send('stopped', {'id': id, 'session': 'someone-else'});
         } else {

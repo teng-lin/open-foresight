@@ -45,6 +45,7 @@ enum SpeakerObserverDiagnosticCode {
   stderrFlood,
   clockMeasured,
   clockRejected,
+  busyRetried,
   launchNotFound,
   launchNotExecutable,
   launchTimeout,
@@ -292,6 +293,7 @@ final class _Connection {
   final Map<String, Completer<ObserverFrame>> _pending = {};
   final Set<String> _abandoned = {};
   final Completer<HelloFrame> _hello = Completer();
+  final Completer<void> _ended = Completer();
   final Stopwatch _window = Stopwatch()..start();
   StreamSubscription<ObserverFrame>? _frames;
   StreamSubscription<List<int>>? _errors;
@@ -575,6 +577,7 @@ final class _Connection {
   void fail(SpeakerObserverException exception) {
     if (failure != null || _closing) return;
     failure = exception;
+    if (!_ended.isCompleted) _ended.complete();
     for (final completer in _pending.values) {
       completer.completeError(exception);
     }
@@ -647,8 +650,12 @@ final class _Connection {
 
   Future<_ReapResult> terminate() => _terminating ??= _terminate();
 
+  /// Completes when the connection failed or began terminating.
+  Future<void> get ended => _ended.future;
+
   Future<_ReapResult> _terminate() async {
     _closing = true;
+    if (!_ended.isCompleted) _ended.complete();
     final cancelled =
         failure ??
         const SpeakerObserverException(SpeakerObserverFailure.cancelled);
@@ -868,7 +875,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     final live = _conn;
     if (_phase == _Phase.running && live != null && live.live) {
       // Never let a slow probe kill the recording's observer.
-      return _capabilities(live, make(_nextId()), failOnTimeout: false);
+      return _capabilities(live, make, failOnTimeout: false);
     }
     if (_phase != _Phase.idle) {
       throw const SpeakerObserverException(SpeakerObserverFailure.busy);
@@ -894,7 +901,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
         );
         _shot = connection;
         try {
-          return await _capabilities(connection, make(_nextId()));
+          return await _capabilities(connection, make);
         } finally {
           await _reap(connection);
         }
@@ -917,18 +924,41 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     }
   }
 
+  /// The helper's request queue was full (`error` / `busy`): nothing changed
+  /// and the request may simply be sent again, so it is, a few times, with a
+  /// fresh identifier. The wait ends early if the connection does.
+  Future<ObserverFrame> _request(
+    _Connection connection,
+    ObserverRequest Function(String id) make, {
+    bool failOnTimeout = true,
+    void Function()? beforeAttempt,
+  }) async {
+    for (var attempt = 0; ; attempt++) {
+      beforeAttempt?.call();
+      final reply = await connection.request(
+        make(_nextId()),
+        config.requestTimeout,
+        failOnTimeout: failOnTimeout,
+      );
+      if (reply is! ErrorFrame || reply.code != 'busy' || attempt >= 3) {
+        return reply;
+      }
+      _diagnostic(SpeakerObserverDiagnosticCode.busyRetried, attempt + 1);
+      await Future.any<void>([
+        Future<void>.delayed(config.backoffInitial),
+        connection.ended,
+      ]);
+    }
+  }
+
   Future<ObserverCapabilities> _capabilities(
     _Connection connection,
-    ObserverRequest request, {
+    ObserverRequest Function(String id) make, {
     bool failOnTimeout = true,
   }) async {
     final reply = _expect<CapabilitiesFrame>(
       connection,
-      await connection.request(
-        request,
-        config.requestTimeout,
-        failOnTimeout: failOnTimeout,
-      ),
+      await _request(connection, make, failOnTimeout: failOnTimeout),
     );
     final hello = connection.hello;
     return ObserverCapabilities(
@@ -1055,15 +1085,16 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
       _requireCurrent(generation);
       connection.clock = await _measureClock(connection);
       _requireCurrent(generation);
-      final reply = await connection.request(
-        StartRequest(
-          id: _nextId(),
+      final reply = await _request(
+        connection,
+        (id) => StartRequest(
+          id: id,
           session: session,
           pollMs: config.pollMs,
           deadlineMs: config.readDeadlineMs,
         ),
-        config.requestTimeout,
       );
+      _requireCurrent(generation);
       if (reply is CapabilitiesFrame) {
         if (reply.state == ObserverAvailability.available) {
           // "Available" answers a capabilities request, not a start.
@@ -1098,12 +1129,14 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     _ClockFix? best;
     var bestRtt = 0;
     for (var i = 0; i < config.clockProbes; i++) {
-      final before = _clockUs();
+      var before = 0;
       final reply = _expect<ClockFrame>(
         connection,
-        await connection.request(
-          ClockRequest(_nextId()),
-          config.requestTimeout,
+        await _request(
+          connection,
+          (id) => ClockRequest(id),
+          // Anchor the round trip to the attempt that was answered.
+          beforeAttempt: () => before = _clockUs(),
         ),
       );
       final after = _clockUs();
@@ -1438,7 +1471,8 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
             StopRequest(_nextId()),
             config.exitGrace,
           );
-          if (reply is! StoppedFrame || reply.session != session) {
+          if (reply is! StoppedFrame ||
+              (reply.session != null && reply.session != session)) {
             unclean = reply is ErrorFrame
                 ? SpeakerObserverFailure.helperError
                 : SpeakerObserverFailure.protocolError;

@@ -175,8 +175,12 @@ final class ErrorFrame extends ObserverFrame {
 }
 
 final class StoppedFrame extends ObserverFrame {
-  const StoppedFrame(super.seq, {required this.id, required this.session});
-  final String id, session;
+  const StoppedFrame(super.seq, {required this.id, this.session});
+  final String id;
+
+  /// The session the stopped `start` belonged to; null when `stop` arrived
+  /// before any `start` was accepted.
+  final String? session;
 }
 
 // Encoding.
@@ -428,7 +432,7 @@ final class _FrameReader {
     'stopped' => StoppedFrame(
       seq,
       id: _opaqueField(json, 'id'),
-      session: _opaqueField(json, 'session'),
+      session: json['session'] == null ? null : _opaqueField(json, 'session'),
     ),
     _ => throw const ObserverProtocolException(
       ObserverProtocolErrorCode.unknownType,

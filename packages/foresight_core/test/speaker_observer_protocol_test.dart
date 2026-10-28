@@ -643,6 +643,46 @@ void main() {
       );
     });
 
+    test('stopped may carry a null or absent session, never a bad one', () {
+      final frames = ObserverFrameDecoder().add(
+        utf8.encode(
+          line(frame('stopped', 0, {'id': 'a', 'session': null})) +
+              line(frame('stopped', 1, {'id': 'b'})) +
+              line(frame('stopped', 2, {'id': 'c', 'session': 's1'})),
+        ),
+      );
+      expect(frames.map((f) => (f as StoppedFrame).session), [
+        null,
+        null,
+        's1',
+      ]);
+      for (final bad in ['', 'bad\nid', 7]) {
+        expect(
+          decodeFailure(
+            line(frame('stopped', 0, {'id': 'a', 'session': bad})),
+          ).code,
+          ObserverProtocolErrorCode.malformed,
+        );
+      }
+    });
+
+    test('a busy refusal is an ordinary error frame', () {
+      final frames = ObserverFrameDecoder().add(
+        utf8.encode(
+          line(
+            frame('error', 0, {
+              'id': 'r1',
+              'code': 'busy',
+              'message': 'queue full',
+            }),
+          ),
+        ),
+      );
+      final error = frames.single as ErrorFrame;
+      expect(error.code, 'busy');
+      expect(error.id, 'r1');
+    });
+
     test('an unavailable frame may omit its reason', () {
       final frames = ObserverFrameDecoder().add(
         utf8.encode(

@@ -118,7 +118,7 @@ thread (between reads); `clock` is answered immediately.
 | `unavailable` | `session`, `reason`, `since_ms` |
 | `clock` | `id`, `monotonic_ms`, `uptime_ms` (optional extra) |
 | `error` | `id` (optional), `code`, `message` |
-| `stopped` | `id`, `session` |
+| `stopped` | `id`, `session` (null or absent when `stop` arrived before any `start` was accepted) |
 
 A `start` that cannot be honoured is answered with an `error` frame, or with a
 `capabilities` frame (same `id`) whose `state` is not `available`; no
@@ -271,6 +271,12 @@ when stdin closes.
   the session began).
 - **Flooding.** More than `max(20, 4000 / poll_ms)` stream frames per second is a
   protocol violation.
+- **Busy.** A request refused with `error` / `busy` (the helper's queue was
+  full) changed nothing. The service resends `start`, `clock` and query
+  requests up to three more times, each with a fresh `id` and after one
+  backoff interval (a stop or failure ends the wait at once), and then reports
+  a `helperError` with code `busy`, which a first `start` returns to its caller
+  to retry and a restart retries within its budget.
 - **Queries.** `capabilities` and `setup` against a running session reuse its
   helper, and a timed-out query does not fail the session (the late reply is
   ignored). Without a session each query uses its own short-lived helper;
