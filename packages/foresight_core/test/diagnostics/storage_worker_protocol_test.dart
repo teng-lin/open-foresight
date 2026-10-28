@@ -14,6 +14,8 @@ import 'package:foresight_test_support/poll.dart';
 import 'package:test/test.dart';
 import 'package:path/path.dart' as p;
 
+import '../support/admission_lock_evidence.dart';
+
 const build =
     '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 final session = DiagnosticIdentity.parse('0123456789abcdef0123456789abcdef')!;
@@ -54,6 +56,8 @@ Future<DiagnosticWorkerReply> _withFilesystemContention(
         await eventually(
           lock.tryExclusiveLeaseChecked,
           timeout: budget - elapsed.elapsed,
+          label: 'admission contention released (attempt $attempt)',
+          describe: () => admissionLockEvidence(profile),
         );
       } finally {
         lock.close();
@@ -62,7 +66,10 @@ Future<DiagnosticWorkerReply> _withFilesystemContention(
       root.close();
     }
   }
-  throw TestFailure('Filesystem operation exhausted its five attempts');
+  throw TestFailure(
+    'Filesystem operation exhausted its five attempts; '
+    '${admissionLockEvidence(profile)}',
+  );
 }
 
 Future<DiagnosticWorkerReply> _admitFilesystem(
@@ -589,6 +596,49 @@ void main() {
     return path;
   }
 
+  test(
+    'admission-lock evidence separates held, free, refused and absent',
+    () async {
+      final path = workerProfile();
+      final profile = BackupDirectory(path);
+      final root = profile.child('logs');
+      profile.close();
+      addTearDown(root.close);
+      final lock = root.open('admission.lock', create: true);
+      var open = true;
+      addTearDown(() {
+        if (open) lock.close();
+      });
+      // Own descriptors are read from /proc on Linux only; elsewhere unknown.
+      final own = ownAdmissionDescriptors(path);
+      expect(own == null, !Platform.isLinux);
+      expect(own, anyOf(isNull, 1));
+      expect(lock.tryExclusiveLeaseChecked(), isTrue);
+      // A separate open description contends with the kernel, deterministically.
+      expect(probeAdmissionLock(path), AdmissionLockProbe.held);
+      expect(
+        admissionLockEvidence(path),
+        contains('kernel EWOULDBLOCK confirmed'),
+      );
+      open = false;
+      lock.close();
+      // A closed descriptor is a non-contention failure, never "held".
+      expect(probeLease(lock), AdmissionLockProbe.refused);
+      expect(ownAdmissionDescriptors(path), anyOf(isNull, 0));
+      // A fork elsewhere may keep the closed description alive until exec.
+      await eventually(
+        () => probeAdmissionLock(path) == AdmissionLockProbe.free,
+        label: 'closed admission description released',
+        describe: () => admissionLockEvidence(path),
+      );
+      expect(
+        probeAdmissionLock('$path/missing'),
+        AdmissionLockProbe.unopenable,
+      );
+      expect(admissionLockEvidence('$path/missing'), contains('unopenable'));
+    },
+  );
+
   test('an image without the bounded reader disables logging only', () {
     final path = workerProfile();
     final worker = DiagnosticStorageWorkerState.authenticated(
@@ -856,7 +906,15 @@ void main() {
         final slot = BackupDirectory('$path/logs/slot-${admitted.slot}');
         final lease = slot.open('lease');
         try {
-          expect(lease.tryExclusiveLease(), isTrue);
+          final acquired = lease.tryExclusiveLease();
+          expect(
+            acquired,
+            isTrue,
+            reason: acquired
+                ? null
+                : 'slot lease not released after RETIRED; a second checked '
+                      'attempt on it observed ${probeLease(lease).name}',
+          );
         } finally {
           lease.close();
           slot.close();
