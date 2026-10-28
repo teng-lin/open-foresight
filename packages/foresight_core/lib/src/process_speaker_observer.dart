@@ -231,31 +231,41 @@ Future<_ReapResult> _reapProcess(
   return (reaped: reaped, status: status, termSent: term, killSent: kill);
 }
 
-/// A launch that finished after it was abandoned: drain, stop and reap it.
-Future<bool> _reapOrphan(
-  Future<Process> launch,
-  SpeakerObserverConfig config,
-  void Function(SpeakerObserverDiagnostic) diagnostic,
-) async {
-  final Process process;
-  try {
-    process = await launch;
-  } on Object {
-    return true;
+/// A launch that was abandoned (timeout or cancellation) and may still
+/// produce a child. The launch half ([launched]) can hang forever, so callers
+/// bound their wait for it; once a child exists ([process] is set) its reap
+/// ([reaped]) is always awaited, because that half is bounded by the grace
+/// periods and a child must never outlive the observer's claim to be stopped.
+final class _Orphan {
+  _Orphan(
+    Future<Process> launch,
+    SpeakerObserverConfig config,
+    void Function(SpeakerObserverDiagnostic) diagnostic,
+  ) {
+    launched = launch.then<bool>((child) {
+      process = child;
+      return true;
+    }, onError: (Object _, StackTrace _) => false);
+    reaped = launched.then<bool>((ok) async {
+      final child = process;
+      if (!ok || child == null) return true;
+      unawaited(
+        child.stdout.drain<void>().then<void>(
+          (_) {},
+          onError: (Object _, StackTrace _) {},
+        ),
+      );
+      unawaited(
+        child.stderr.drain<void>().then<void>(
+          (_) {},
+          onError: (Object _, StackTrace _) {},
+        ),
+      );
+      return (await _reapProcess(child, config, diagnostic)).reaped;
+    });
   }
-  unawaited(
-    process.stdout.drain<void>().then<void>(
-      (_) {},
-      onError: (Object _, StackTrace _) {},
-    ),
-  );
-  unawaited(
-    process.stderr.drain<void>().then<void>(
-      (_) {},
-      onError: (Object _, StackTrace _) {},
-    ),
-  );
-  return (await _reapProcess(process, config, diagnostic)).reaped;
+  late final Future<bool> launched, reaped;
+  Process? process;
 }
 
 SpeakerObserverDiagnosticCode _launchDiagnostic(Object error) {
@@ -310,7 +320,7 @@ final class _Connection {
     required Future<void> cancel,
     required void Function(_Connection connection) onCreated,
     required Future<void> Function(_Connection connection) reap,
-    required void Function(Future<bool> reaped) orphan,
+    required void Function(Future<Process> launch) orphan,
   }) async {
     final Future<Process> launch;
     try {
@@ -363,7 +373,7 @@ final class _Connection {
       process = await ready.future;
     } on SpeakerObserverException {
       // The child may still appear; it must not outlive its abandonment.
-      orphan(_reapOrphan(launch, config, diagnostic));
+      orphan(launch);
       rethrow;
     } finally {
       timer.cancel();
@@ -695,10 +705,11 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
   int _sessionStartUs = 0;
   Timer? _stall, _backoff;
   Completer<void>? _backoffWake;
-  Completer<void> _stopSignal = Completer<void>();
+  final Set<Completer<void>> _cancelables = {};
+  int _oneShots = 0;
   Future<void>? _startOp, _restartOp, _stopOp, _disposeOp;
   Future<void> _oneShotTail = Future.value();
-  final Set<Future<void>> _orphans = {};
+  final Set<_Orphan> _orphans = {};
   final Stopwatch _liveFor = Stopwatch();
   bool _reapFailed = false, _disposing = false;
   String? _lastUnavailableReason;
@@ -706,6 +717,10 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
   SpeakerObserverStats _stats = const SpeakerObserverStats();
 
   SpeakerObserverStats get stats => _stats;
+
+  /// Launches currently cancellable, for tests asserting nothing accumulates.
+  @visibleForTesting
+  int get debugOpenCancelables => _cancelables.length;
 
   /// Active timers, for tests asserting that nothing outlives the observer.
   @visibleForTesting
@@ -766,17 +781,34 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     return result;
   }
 
-  void _adoptOrphan(Future<bool> reaped) {
-    late final Future<void> tracked;
-    tracked = reaped
-        .then<void>((ok) {
-          if (!ok) {
-            _reapFailed = true;
-            _diagnostic(SpeakerObserverDiagnosticCode.reapFailed);
-          }
-        })
-        .whenComplete(() => _orphans.remove(tracked));
-    _orphans.add(tracked);
+  void _adoptOrphan(Future<Process> launch) {
+    final orphan = _Orphan(launch, config, _report);
+    _orphans.add(orphan);
+    unawaited(
+      orphan.reaped
+          .then<void>((ok) {
+            if (!ok) {
+              _reapFailed = true;
+              _diagnostic(SpeakerObserverDiagnosticCode.reapFailed);
+            }
+          })
+          .whenComplete(() => _orphans.remove(orphan)),
+    );
+  }
+
+  /// Wait until no abandoned launch has a live child. A launch still pending
+  /// after [launchBound] owns nothing yet and is left to the background reaper;
+  /// once a child exists its reap is always awaited.
+  Future<void> _settleOrphans(Duration launchBound) async {
+    if (_orphans.isEmpty) return;
+    final orphans = _orphans.toList();
+    await Future.wait([
+      for (final orphan in orphans) orphan.launched,
+    ]).timeout(launchBound, onTimeout: () => const []);
+    await Future.wait([
+      for (final orphan in orphans)
+        if (orphan.process != null) orphan.reaped,
+    ]);
   }
 
   void _requireUsable() {
@@ -786,26 +818,39 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     }
   }
 
+  /// Launch and handshake one helper, unless [generation] was cancelled. Any
+  /// abandoned launch is settled first, so two helpers are never alive at once.
   Future<_Connection> _open(
-    Completer<void> signal, {
+    int generation, {
     void Function(_Connection connection)? created,
-  }) => _Connection.open(
-    config,
-    _launcher,
-    _report,
-    cancel: signal.future,
-    onCreated: (connection) {
-      connection.epoch = _epochCounter++;
-      _epoch = connection.epoch;
-      connection
-        ..onStream = ((frame) => _onStreamFrame(connection, frame))
-        ..onFailure = ((failure) => _onConnectionFailure(connection, failure));
-      _conn = connection;
-      created?.call(connection);
-    },
-    reap: _reap,
-    orphan: _adoptOrphan,
-  );
+  }) async {
+    await _settleOrphans(config.spawnTimeout);
+    _requireCurrent(generation);
+    final cancel = Completer<void>();
+    _cancelables.add(cancel);
+    try {
+      return await _Connection.open(
+        config,
+        _launcher,
+        _report,
+        cancel: cancel.future,
+        onCreated: (connection) {
+          connection.epoch = _epochCounter++;
+          _epoch = connection.epoch;
+          connection
+            ..onStream = ((frame) => _onStreamFrame(connection, frame))
+            ..onFailure = ((failure) =>
+                _onConnectionFailure(connection, failure));
+          _conn = connection;
+          created?.call(connection);
+        },
+        reap: _reap,
+        orphan: _adoptOrphan,
+      );
+    } finally {
+      _cancelables.remove(cancel);
+    }
+  }
 
   // Queries.
 
@@ -828,19 +873,23 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     if (_phase != _Phase.idle) {
       throw const SpeakerObserverException(SpeakerObserverFailure.busy);
     }
+    final generation = _generation;
     final previous = _oneShotTail;
     final done = Completer<void>();
     _oneShotTail = done.future;
+    _oneShots++;
     try {
       await previous;
       _requireUsable();
-      if (_phase != _Phase.idle || _stopOp != null) {
+      // A stop (or start) since this query was queued cancels it.
+      _requireCurrent(generation);
+      if (_phase != _Phase.idle) {
         throw const SpeakerObserverException(SpeakerObserverFailure.busy);
       }
       _Connection? mine;
       try {
         final connection = await _open(
-          _stopSignal,
+          generation,
           created: (created) => mine = created,
         );
         _shot = connection;
@@ -863,6 +912,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
         }
       }
     } finally {
+      _oneShots--;
       done.complete();
     }
   }
@@ -939,22 +989,18 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     _lastUnavailableSince = null;
     _sessionStartUs = _clockUs();
     final generation = ++_generation;
-    final operation = _runStart(session, generation, _stopSignal);
+    final operation = _runStart(session, generation);
     _startOp = operation;
     await operation;
   }
 
   /// The whole start sequence, including cleanup after a failure or a stop that
   /// raced it, so that awaiting this future means no helper is left behind.
-  Future<void> _runStart(
-    String session,
-    int generation,
-    Completer<void> signal,
-  ) async {
+  Future<void> _runStart(String session, int generation) async {
     try {
       await _oneShotTail;
       _requireCurrent(generation);
-      final connection = await _launchAndStart(session, generation, signal);
+      final connection = await _launchAndStart(session, generation);
       if (generation != _generation) {
         await _reap(connection);
         _forget(connection);
@@ -1003,12 +1049,8 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
 
   /// Spawn, handshake, measure the clock and start observing. On any failure the
   /// child is terminated and reaped before the error propagates.
-  Future<_Connection> _launchAndStart(
-    String session,
-    int generation,
-    Completer<void> signal,
-  ) async {
-    final connection = await _open(signal);
+  Future<_Connection> _launchAndStart(String session, int generation) async {
+    final connection = await _open(generation);
     try {
       _requireCurrent(generation);
       connection.clock = await _measureClock(connection);
@@ -1153,7 +1195,9 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
       default:
         return;
     }
-    _armStall(connection);
+    // Frames still arrive while a stop is under way; they must not re-arm a
+    // timer that stop has just disarmed.
+    if (_phase == _Phase.running) _armStall(connection);
   }
 
   /// A time on the capture clock that the helper could not have observed: well
@@ -1219,18 +1263,17 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
       _diagnostic(SpeakerObserverDiagnosticCode.restartRefilled, _restarts);
       _restarts = 0;
     }
-    _restartOp = _restart(connection, failure, _generation, _stopSignal)
-        .then<void>(
-          (_) {},
-          onError: (Object _, StackTrace _) {
-            _diagnostic(SpeakerObserverDiagnosticCode.internalError);
-            _phase = _Phase.failed;
-            _emitState(
-              ObserverStatus.failed,
-              failure: SpeakerObserverFailure.internalError,
-            );
-          },
+    _restartOp = _restart(connection, failure, _generation).then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {
+        _diagnostic(SpeakerObserverDiagnosticCode.internalError);
+        _phase = _Phase.failed;
+        _emitState(
+          ObserverStatus.failed,
+          failure: SpeakerObserverFailure.internalError,
         );
+      },
+    );
   }
 
   /// Helper answers that more attempts cannot change: setup, permission and
@@ -1261,7 +1304,6 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     _Connection failed,
     SpeakerObserverException cause,
     int generation,
-    Completer<void> signal,
   ) async {
     _conn = null;
     await _reap(failed);
@@ -1297,7 +1339,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
       );
       if (!await _sleep(delay, generation)) return;
       try {
-        final connection = await _launchAndStart(_session!, generation, signal);
+        final connection = await _launchAndStart(_session!, generation);
         if (generation != _generation) {
           await _reap(connection);
           _forget(connection);
@@ -1348,6 +1390,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     if (_phase == _Phase.idle &&
         _startOp == null &&
         _shot == null &&
+        _oneShots == 0 &&
         _orphans.isEmpty &&
         _conn == null) {
       if (_reapFailed) {
@@ -1362,8 +1405,9 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     _backoff?.cancel();
     final wake = _backoffWake;
     if (wake != null && !wake.isCompleted) wake.complete();
-    final signal = _stopSignal;
-    if (!signal.isCompleted) signal.complete();
+    for (final cancel in _cancelables.toList()) {
+      if (!cancel.isCompleted) cancel.complete();
+    }
     // Cancel work that has not produced a running session yet.
     final pending = _conn;
     if (pending != null && !pending.live) {
@@ -1380,15 +1424,10 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     if (restart != null) await restart;
     _restartOp = null;
     await _oneShotTail;
-    if (_orphans.isNotEmpty) {
-      // A launch that never completes owns nothing yet. Give a slow one one
-      // kill grace to produce its child; if it appears later it is still
-      // drained and reaped in the background, and the next stop() or
-      // dispose() waits for that again.
-      await Future.wait(
-        _orphans.toList(),
-      ).timeout(config.killGrace, onTimeout: () => const []);
-    }
+    // A launch still pending after one kill grace owns nothing yet and is left
+    // to the background reaper (the next stop or dispose waits for it again);
+    // a child that exists is always reaped before stop returns.
+    await _settleOrphans(config.killGrace);
     final connection = _conn;
     _conn = null;
     SpeakerObserverFailure? unclean;
@@ -1419,7 +1458,6 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
         unclean ??= SpeakerObserverFailure.helperExited;
       }
     }
-    _stopSignal = Completer<void>();
     _emitState(ObserverStatus.stopped, failure: unclean);
     _resetToIdle();
     if (_reapFailed) {

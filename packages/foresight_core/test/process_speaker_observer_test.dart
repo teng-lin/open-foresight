@@ -29,6 +29,7 @@ SpeakerObserverConfig fastConfig({
   Duration request = const Duration(milliseconds: 300),
   Duration backoffMax = const Duration(milliseconds: 80),
   Duration grace = const Duration(milliseconds: 100),
+  Duration? exitGrace,
   int? maxFramesPerSecond,
   Duration readSkew = const Duration(seconds: 5),
 }) => SpeakerObserverConfig(
@@ -40,7 +41,7 @@ SpeakerObserverConfig fastConfig({
   handshakeTimeout: handshake,
   requestTimeout: request,
   stallSlack: stallSlack,
-  exitGrace: grace,
+  exitGrace: exitGrace ?? grace,
   termGrace: grace,
   killGrace: grace,
   maxRestarts: maxRestarts,
@@ -89,6 +90,10 @@ final class Harness {
   final List<int> overlaps = [];
   Object? launchError;
   Completer<Process>? hangingLaunch;
+
+  /// Each launch takes the next delay (none left: immediate) to produce its
+  /// child, as a slow exec would.
+  final List<Duration> launchDelays = [];
   bool expectReapFailure = false;
 
   /// The behavior used for the Nth helper launched; later ones reuse the last.
@@ -101,15 +106,22 @@ final class Harness {
     if (error != null) return Future.error(error);
     final hanging = hangingLaunch;
     if (hanging != null) return hanging.future;
-    for (var i = 0; i < helpers.length; i++) {
-      if (!helpers[i].exited) overlaps.add(i);
+    FakeHelper create() {
+      for (var i = 0; i < helpers.length; i++) {
+        if (!helpers[i].exited) overlaps.add(i);
+      }
+      final helper = FakeHelper(
+        behaviorFor(helpers.length),
+        pidValue: 1000 + helpers.length,
+      );
+      helpers.add(helper);
+      return helper;
     }
-    final helper = FakeHelper(
-      behaviorFor(helpers.length),
-      pidValue: 1000 + helpers.length,
-    );
-    helpers.add(helper);
-    return Future.value(helper);
+
+    if (launchDelays.isNotEmpty) {
+      return Future<Process>.delayed(launchDelays.removeAt(0), create);
+    }
+    return Future.value(create());
   }
 
   List<ObserverStateEvent> get states =>
@@ -740,6 +752,116 @@ void main() {
               )
               .value,
           180,
+        );
+      },
+    );
+  });
+
+  group('ownership of abandoned launches', () {
+    test(
+      'stop returns only after a late child that needs TERM is reaped',
+      () async {
+        // A child that ignores stdin EOF takes exitGrace (400 ms) to reap, longer
+        // than the kill grace (100 ms) that bounds waiting for a launch.
+        h = Harness(
+          config: fastConfig(
+            exitGrace: const Duration(milliseconds: 400),
+            spawn: const Duration(seconds: 20),
+          ),
+        );
+        h.launchDelays.add(const Duration(milliseconds: 20));
+        h.behaviors.single.exitOnStdinClose = false;
+        final start = errorOf(h.observer.start('s1'));
+        await eventually(() => h.arguments.isNotEmpty);
+        await h.observer.stop();
+        expect(h.helpers, hasLength(1));
+        expect(
+          h.helpers.single.exited,
+          true,
+          reason: 'stop returned over a live child',
+        );
+        expect(await start, failureOf(SpeakerObserverFailure.cancelled));
+        h.behaviors.single.exitOnStdinClose = true;
+        await h.observer.start('s2');
+        expect(h.overlaps, isEmpty);
+      },
+    );
+
+    test(
+      'a launch that outlived its timeout is reaped before the next launch',
+      () async {
+        h = Harness(
+          config: fastConfig(exitGrace: const Duration(milliseconds: 300)),
+        );
+        // The first launch takes 500 ms against a 300 ms spawn timeout.
+        h.launchDelays.addAll([
+          const Duration(milliseconds: 500),
+          Duration.zero,
+        ]);
+        h.behaviors.single.exitOnStdinClose = false;
+        await expectLater(
+          h.observer.start('s1'),
+          throwsA(failureOf(SpeakerObserverFailure.launchFailed)),
+        );
+        h.behaviors.single.exitOnStdinClose = true;
+        await h.observer.start('s2');
+        expect(h.helpers, hasLength(2));
+        expect(h.helpers.first.exited, true);
+        expect(h.overlaps, isEmpty);
+      },
+    );
+
+    test('dispose waits for a query that is still launching', () async {
+      h = Harness(config: fastConfig(spawn: const Duration(seconds: 20)));
+      h.launchDelays.add(const Duration(milliseconds: 80));
+      final query = errorOf(h.observer.inspect());
+      await eventually(() => h.arguments.isNotEmpty);
+      await h.observer.dispose();
+      expect(h.helpers, hasLength(1));
+      expect(h.helpers.single.exited, true);
+      expect(await query, failureOf(SpeakerObserverFailure.cancelled));
+    });
+
+    test('a query queued behind another is cancelled by stop', () async {
+      h = Harness(config: patientConfig());
+      h.behaviors.single.answerCapabilities = false;
+      final first = errorOf(h.observer.inspect());
+      final second = errorOf(h.observer.setup());
+      await eventually(() => h.helpers.isNotEmpty);
+      await h.observer.stop();
+      expect(await first, failureOf(SpeakerObserverFailure.cancelled));
+      expect(await second, failureOf(SpeakerObserverFailure.cancelled));
+      expect(h.helpers, hasLength(1));
+    });
+
+    test('idle queries leave nothing registered for cancellation', () async {
+      h = Harness();
+      for (var i = 0; i < 20; i++) {
+        await h.observer.inspect();
+      }
+      expect(h.observer.debugOpenCancelables, 0);
+    });
+
+    test(
+      'frames that arrive during a stop do not arm the stall timer',
+      () async {
+        h = Harness(
+          config: fastConfig(
+            stallSlack: const Duration(milliseconds: 100),
+            exitGrace: const Duration(milliseconds: 700),
+          ),
+        );
+        h.behaviors.single
+          ..answerStop = false
+          ..exitOnStdinClose = false;
+        await h.observer.start('s1');
+        final stop = h.observer.stop();
+        h.helpers.single.send('observation', observationFields('s1'));
+        await stop;
+        expect(h.observer.stats.stalls, 0);
+        expect(
+          h.diagnosticCodes,
+          isNot(contains(SpeakerObserverDiagnosticCode.stalled)),
         );
       },
     );

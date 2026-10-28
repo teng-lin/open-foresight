@@ -122,7 +122,10 @@ thread (between reads); `clock` is answered immediately.
 
 A `start` that cannot be honoured is answered with an `error` frame, or with a
 `capabilities` frame (same `id`) whose `state` is not `available`; no
-observation follows either. The service does not retry the latter.
+observation follows either. An `available` state in that reply is a protocol
+error. A first start reports the failure to its caller without retrying; what
+the service does when a restart is answered this way is under Service
+supervision.
 
 While started, the helper emits exactly one `observation` or `unavailable`
 frame per poll. An `unavailable` condition repeats with an unchanged `since_ms`
@@ -228,9 +231,13 @@ when stdin closes.
 ### Service supervision
 
 - **One helper at a time.** The service never launches a helper while an earlier
-  one is unreaped, and `stop` cancels any start, restart or query in flight and
-  waits until every child it owns has exited. A launch that completes after it
-  was abandoned is drained and reaped in the background. A child that cannot be
+  one is unreaped. `stop` cancels any start, restart or query in flight and
+  waits until every child that exists has exited. A launch that was abandoned
+  (timeout or cancellation) is waited for at most one kill grace by `stop` and
+  one spawn timeout by the next launch; a child that appears is always drained
+  and reaped before either returns. A launch still pending after that owns no
+  child yet: it is reaped in the background if it ever produces one, and the
+  next launch, `stop` or `dispose` waits for that again. A child that cannot be
   reaped (it survives SIGKILL) puts the service in a refuse-further-use state.
 - **Shutdown.** `stop` asks the helper to stop, waits `exitGrace` (at least the
   read deadline), then sends SIGTERM and SIGKILL, each with a bounded wait. A
@@ -259,7 +266,9 @@ when stdin closes.
 - **Plausibility.** A read is a protocol violation, and the helper is replaced,
   when its mapped end lies more than the read skew (default 5 s) in the
   service's future, its start more than the skew before the session began, or
-  it took longer than the read deadline plus the skew.
+  it took longer than the read deadline plus the skew. An `unavailable` frame's
+  `since_ms` is checked the same way (mapped time not in the future, not before
+  the session began).
 - **Flooding.** More than `max(20, 4000 / poll_ms)` stream frames per second is a
   protocol violation.
 - **Queries.** `capabilities` and `setup` against a running session reuse its
