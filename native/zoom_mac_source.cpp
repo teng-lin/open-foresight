@@ -76,7 +76,8 @@ void ZoomMacSource::read(SnapshotOutcome &outcome,
   registry_.begin_read();
   CollectResult collected =
       collect_application(reader_, registry_, cancelled, limits_, now_);
-  registry_.end_read();
+  registry_.end_read(!collected.snapshot.truncated && !collected.cancelled &&
+                     !collected.trust_lost && !collected.windows_failed);
   reader_.end();
   if (collected.trust_lost) {
     gate(outcome, "permission_denied", "accessibility_not_trusted");

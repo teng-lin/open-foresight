@@ -68,7 +68,10 @@ public:
   void begin_read() {
     ++read_;
   }
-  void end_read();
+  // Prunes unseen entries once the table is half full, but only after a read
+  // that completed: an incomplete read did not see everyone, and forgetting
+  // them would hand out new ids when they return.
+  void end_read(bool read_completed = true);
   size_t size() const {
     return entries_.size();
   }

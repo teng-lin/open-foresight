@@ -458,6 +458,14 @@ void check_registry_pruning_and_capacity() {
     auto full = source.snapshot(never);
     CHECK(!full.identity_incomplete && source.registry().size() == 7,
           "window and six tiles identified");
+    // An incomplete read did not see everyone: it must not forget anyone.
+    reader.nodes[1] = element("AXWindow", {}, {2, 3});
+    reader.nodes[3].description.status = AttrStatus::Failed;
+    auto partial = source.snapshot(never);
+    CHECK(partial.snapshot.truncated, "the read was incomplete");
+    CHECK(source.registry().size() == 7 && reader.released == 0,
+          "an incomplete read prunes nothing");
+    reader.nodes[3].description = text("P3, Computer audio unmuted");
     // Only two tiles remain; the table is above half capacity, so unseen
     // entries are pruned and released.
     reader.nodes[1] = element("AXWindow", {}, {2, 3});

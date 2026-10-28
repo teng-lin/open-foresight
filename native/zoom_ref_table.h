@@ -39,52 +39,76 @@ public:
     ++generation_;
     std::map<std::string, int> totals;
     for (const auto &participant : participants)
-      if (participant.object_id == 0)
-        ++totals[participant.key];
+      ++totals[participant.key];
     std::map<std::string, int> ordinals;
     Result result;
-    pruned_ = false;
-    erased_ = false;
-    for (const auto &participant : participants) {
-      std::string ref;
+    result.refs.assign(participants.size(), std::string());
+    struct Pending {
+      size_t index;
+      std::pair<uint64_t, std::string> object_key;
+      std::pair<std::string, int> name_key;
+      int count;
+    };
+    std::vector<Pending> pending;
+    // Pass 1: everyone already known keeps their reference and is marked as
+    // present, so nothing below can evict a person who is still here.
+    for (size_t i = 0; i < participants.size(); ++i) {
+      const auto &participant = participants[i];
+      int total = totals[participant.key];
+      // Equal names cannot be told apart if their tiles trade places (with
+      // element identity) or come and go (without it): never certain.
+      if (total > 1)
+        result.uncertain = true;
       if (participant.object_id != 0) {
         auto key = std::make_pair(participant.object_id, participant.key);
         auto it = by_object_.find(key);
         if (it != by_object_.end()) {
           it->second.touched = generation_;
-          ref = it->second.ref;
-        } else if (room()) {
-          ref = next();
-          by_object_[key] = {ref, generation_, 0};
+          result.refs[i] = it->second.ref;
         } else {
-          ref = next(); // untracked: remembered by nobody
-          result.uncertain = true;
+          pending.push_back({i, key, {}, 0});
         }
       } else {
-        int total = totals[participant.key];
-        int ordinal = ordinals[participant.key]++;
-        auto key = std::make_pair(participant.key, ordinal);
+        auto key = std::make_pair(participant.key, ordinals[participant.key]++);
         auto it = by_name_.find(key);
+        // The set of people sharing this name changed: do not hand an old
+        // reference to whoever now holds the slot.
         if (it != by_name_.end() && it->second.count == total) {
           it->second.touched = generation_;
-          ref = it->second.ref;
-        } else if (it != by_name_.end() || room()) {
-          // The set of people sharing this name changed: do not hand an old
-          // reference to whoever now holds the slot.
-          ref = next();
-          by_name_[key] = {ref, generation_, total};
+          result.refs[i] = it->second.ref;
         } else {
-          ref = next();
-          result.uncertain = true;
+          pending.push_back({i, {}, key, total});
         }
-        if (total > 1)
-          result.uncertain = true;
       }
-      result.refs.push_back(std::move(ref));
     }
-    // Forgotten references of people who left mean later returns get new ones.
-    if (erased_)
-      result.uncertain = true;
+    // Pass 2: make room by forgetting people who are not in this observation,
+    // then allocate for the newcomers.
+    if (entries() + pending.size() > capacity_) {
+      size_t before = entries();
+      for (auto it = by_object_.begin(); it != by_object_.end();)
+        it = it->second.touched == generation_ ? std::next(it)
+                                               : by_object_.erase(it);
+      for (auto it = by_name_.begin(); it != by_name_.end();)
+        it = it->second.touched == generation_ ? std::next(it)
+                                               : by_name_.erase(it);
+      if (entries() < before)
+        result.uncertain =
+            true; // those people get new references if they return
+    }
+    for (const auto &item : pending) {
+      std::string ref = next();
+      bool object = participants[item.index].object_id != 0;
+      bool replaces = !object && by_name_.count(item.name_key) != 0;
+      if (replaces || entries() < capacity_) {
+        if (object)
+          by_object_[item.object_key] = {ref, generation_, 0};
+        else
+          by_name_[item.name_key] = {ref, generation_, item.count};
+      } else {
+        result.uncertain = true; // untracked: nobody remembers this reference
+      }
+      result.refs[item.index] = std::move(ref);
+    }
     return result;
   }
 
@@ -99,24 +123,6 @@ private:
     int count = 0;
   };
 
-  bool room() {
-    if (entries() < capacity_)
-      return true;
-    if (!pruned_) {
-      pruned_ = true;
-      // Forget entries the current observation has not mentioned.
-      size_t before = entries();
-      for (auto it = by_object_.begin(); it != by_object_.end();)
-        it = it->second.touched == generation_ ? std::next(it)
-                                               : by_object_.erase(it);
-      for (auto it = by_name_.begin(); it != by_name_.end();)
-        it = it->second.touched == generation_ ? std::next(it)
-                                               : by_name_.erase(it);
-      erased_ = entries() < before;
-    }
-    return entries() < capacity_;
-  }
-
   std::string next() {
     return "p" + std::to_string(++counter_);
   }
@@ -125,8 +131,6 @@ private:
   std::string window_;
   uint64_t counter_ = 0;
   uint64_t generation_ = 0;
-  bool pruned_ = false;
-  bool erased_ = false;
   std::map<std::pair<uint64_t, std::string>, Entry> by_object_;
   std::map<std::pair<std::string, int>, Entry> by_name_;
 };

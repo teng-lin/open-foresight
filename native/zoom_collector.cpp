@@ -21,8 +21,8 @@ uint64_t ElementRegistry::identify(ElementToken element) {
   return counter_;
 }
 
-void ElementRegistry::end_read() {
-  if (entries_.size() < capacity_ / 2)
+void ElementRegistry::end_read(bool read_completed) {
+  if (!read_completed || entries_.size() < capacity_ / 2)
     return;
   std::vector<Entry> kept;
   for (auto &entry : entries_) {
