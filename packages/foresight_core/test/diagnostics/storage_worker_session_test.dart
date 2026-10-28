@@ -162,6 +162,17 @@ final class _Owner implements DiagnosticWorkerOwner {
   }
 }
 
+/// What a waiting test observed of the injected worker owner, so a deadline
+/// failure says whether the owner was never created or created without records.
+/// Request types are the numeric `DiagnosticWorkerFrame` values it received.
+String _ownerEvidence(_Owner? owner, {Object? nativeReason}) {
+  final health = nativeReason == null ? '' : '; native health=$nativeReason';
+  if (owner == null) return 'worker owner not created$health';
+  return 'worker owner created; requests=${owner.calls}; '
+      'sink.records=${owner.sink.records.length}; active=${owner.active}; '
+      'first append entered=${owner.entered.isCompleted}$health';
+}
+
 Future<void> _lateNativeCounters(
   (DiagnosticProducerBootstrap, (String, SendPort)) invocation,
 ) async {
@@ -314,6 +325,66 @@ void main() {
       expect(closed.writerExited, isTrue);
     },
   );
+  test(
+    'summary wait evidence separates a missing owner from empty records',
+    () async {
+      const awaited =
+          'worker owner created and holding the first native summary record';
+      expect(_ownerEvidence(null), 'worker owner not created');
+      // The factory runs lazily, at the first record; a quiet session has none.
+      final profile = createTestTempDirectorySync('owner-evidence-');
+      DiagnosticStorageLaunchContext? launched;
+      _Owner? owner;
+      final session = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: profile.path,
+        workerFactory: (context) {
+          launched = context;
+          return owner = _Owner(context);
+        },
+      );
+      addTearDown(session.close);
+      await expectLater(
+        eventually(
+          () => owner != null && owner!.sink.records.isNotEmpty,
+          timeout: const Duration(milliseconds: 50),
+          label: awaited,
+          describe: () => _ownerEvidence(owner),
+        ),
+        throwsA(
+          isA<TestFailure>().having(
+            (e) => e.message,
+            'message',
+            contains('observed at deadline: worker owner not created'),
+          ),
+        ),
+      );
+      session.producer.noteDropped(DiagnosticDropReason.correlationCapacity);
+      await eventually(() => owner != null, label: 'owner creation');
+      // A created owner that has not been given a record is a different state.
+      final idle = _Owner(launched!);
+      await expectLater(
+        eventually(
+          () => idle.sink.records.isNotEmpty,
+          timeout: const Duration(milliseconds: 50),
+          label: awaited,
+          describe: () => _ownerEvidence(idle, nativeReason: 'unsettled'),
+        ),
+        throwsA(
+          isA<TestFailure>().having(
+            (e) => e.message,
+            'message',
+            allOf(
+              contains('worker owner created; requests=[]'),
+              contains('sink.records=0'),
+              contains('native health=unsettled'),
+              isNot(contains('not created')),
+            ),
+          ),
+        ),
+      );
+    },
+  );
   for (final delayedSetup in [false, true]) {
     test(
       'busy native close cannot overtake a held late summary acknowledgement (delayed setup=$delayedSetup)',
@@ -392,7 +463,13 @@ void main() {
           )(1),
           1,
         );
-        await eventually(() => owner != null && owner!.sink.records.isNotEmpty);
+        await eventually(
+          () => owner != null && owner!.sink.records.isNotEmpty,
+          label:
+              'worker owner created and holding the first native summary record',
+          describe: () =>
+              _ownerEvidence(owner, nativeReason: session.health.nativeReason),
+        );
         await owner!.entered.future;
         owner!.holdLaterAppend = true;
         final actor = await session.spawnProducer(
@@ -412,10 +489,20 @@ void main() {
         closing.ignore();
         await eventually(
           () => session.health.nativeReason == NativeDiagnosticHealth.unsettled,
+          label: 'native health unsettled while close is gated',
+          describe: () =>
+              '${_ownerEvidence(owner, nativeReason: session.health.nativeReason)}; '
+              'close completed=$completed',
         );
         actorRelease();
         await owner!.laterAppendEntered.future.timeout(
           const Duration(milliseconds: 350),
+          onTimeout: () => throw TestFailure(
+            'Late summary APPEND did not reach the owner within 350ms of the '
+            'actor release; '
+            '${_ownerEvidence(owner, nativeReason: session.health.nativeReason)}; '
+            'close completed=$completed',
+          ),
         );
         expect(owner!.active, 1);
         gate(0);
