@@ -2,6 +2,7 @@
 
 import copy
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -56,7 +57,6 @@ def test_the_real_gates_and_workflows_agree():
     # tools/linux_acceptance.sh, under a selection variable. That is reported, never counted as a pass.
     assert report["wiring_unverified"] == ["integration-virtual-audio"]
     assert all("tools/linux_acceptance.sh" in label for label in report["gates"]["integration-virtual-audio"]["may_call"])
-    assert not any("acceptance-cpu" in label or "acceptance-deb" in label for label in report["gates"]["integration-virtual-audio"]["may_call"])
     assert any("acceptance-cpu" in label for label in report["gates"]["integration-models"]["may_call"])
     assert parity.main([]) == 0
 
@@ -204,7 +204,8 @@ def test_a_stage_chosen_by_a_shell_variable_is_ambiguous_not_exact(tmp_path):
     gate = report["gates"]["native-stage"]
     # A variable may choose any stage, so it is evidence of wiring, not a pass: the gate is unverified.
     assert gate["called_by"] == [] and gate["may_call"] == [".github/workflows/ci.yml:build"] and gate["wiring_unverified"] is True
-    assert report["problems"] == [] and report["wiring_unverified"] == ["native-stage"]
+    assert report["wiring_unverified"] == ["native-stage"]
+    assert [problem.split(":")[0] for problem in report["problems"]] == ["gate native-stage"]  # unverified wiring must be acknowledged
     exact = calling(tmp_path / "again", 'bash tools/build.sh --stage "$STAGE"', "bash tools/build.sh --stage native", extra=NATIVE)
     assert exact["gates"]["native-stage"]["called_by"] == [".github/workflows/ci.yml:build"] and exact["gates"]["native-stage"]["may_call"] == []
     assert exact["gates"]["native-stage"]["wiring_unverified"] is False
@@ -366,13 +367,13 @@ if [[ "$task_suite" == deb ]]; then
   bash tools/build.sh --stage package
   exit 0
 fi
-[[ "$task_suite" == cpu || "$task_suite" == audio ]] || { echo bad >&2; exit 2; }
-if [[ "$task_suite" == cpu && "${CPU_SELECTED:-true}" == false ]]; then
-  exit 0
-fi
-if [[ "$task_suite" == cpu ]]; then
-  docker run image python3 tools/build.sh --stage native
-elif [[ "$task_suite" == audio ]]; then
+if false; then bash tools/build.sh --stage hidden; fi
+case "$task_suite" in
+  cpu) docker run image python3 tools/build.sh --stage native; exit 0 ;;
+esac
+run_core() { exit 3; bash tools/build.sh --stage function; }
+for item in a; do exit 4; done
+if [[ "$task_suite" == audio ]]; then
   docker run image python3 tools/build.sh --stage core
 else
   bash tools/build.sh --stage desktop
@@ -383,59 +384,129 @@ fi
 def dispatched(tmp_path, argument):
     root = tree(tmp_path, {"ci.yml": workflow(f"bash tools/d.sh {argument}")}, scripts=("tools/build.sh", "tools/check_dart_bindings.py"))
     (root / "tools/d.sh").write_text(DISPATCHER)
-    gates = {name: {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", name]} for name in ("package", "native", "core", "desktop")}
-    report = parity.check(root, {"gates": gates})
-    return {name: gate["may_call"] for name, gate in report["gates"].items()}, report
+    stages = ("package", "native", "core", "desktop", "hidden", "function")
+    gates = {name: {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", name], "wiring_unverified": "dispatcher"} for name in stages}
+    return parity.check(root, {"gates": gates})
 
 
-@pytest.mark.parametrize(
-    ("argument", "expected"),
-    [
-        ("deb", {"package"}),  # the taken branch exits before anything else
-        ("cpu", {"native"}),  # an unknown environment test does not hide the branch, and the other branches are dropped
-        ("audio", {"core"}),
-        ("other", {"desktop"}),
-        ('"$SUITE"', {"package", "native", "core", "desktop"}),  # a variable argument selects nothing
-    ],
-)
-def test_a_dispatcher_script_is_read_with_the_callers_literal_argument(tmp_path, argument, expected):
-    may, report = dispatched(tmp_path, argument)
-    assert {name for name, labels in may.items() if labels} == expected
+@pytest.mark.parametrize("argument", ["deb", "cpu", "audio", "other", '"$SUITE"'])
+def test_script_mediated_calls_are_over_approximated_never_evaluated(tmp_path, argument):
+    report = dispatched(tmp_path, argument)
+    # Every command in the called script counts whatever the argument, branch, exit, case arm, loop or function:
+    # the answer cannot depend on a condition the guard would have to interpret.
+    assert {name for name, gate in report["gates"].items() if gate["may_call"]} == {"package", "native", "core", "desktop", "hidden", "function"}
     assert all(gate["called_by"] == [] for gate in report["gates"].values())
-    assert set(report["wiring_unverified"]) == expected
+    assert all(label.endswith("via tools/d.sh") for gate in report["gates"].values() for label in gate["may_call"])
+    assert report["problems"] == []  # every gate here acknowledged its unverified wiring
 
 
-def test_reachable_text_follows_branches_exits_and_unknown_tests():
-    text = parity.reachable_text(DISPATCHER, ["deb"])
-    assert "package" in text and "native" not in text and "exit 0" in text
-    assert "native" in parity.reachable_text(DISPATCHER, ["cpu"]) and "core" not in parity.reachable_text(DISPATCHER, ["cpu"])
-    single = 'if [ "$1" = a ]; then\n  echo one\nelif [ "$1" != b ]; then\n  echo two\nelse\n  echo three\nfi\n'
-    assert parity.reachable_text(single, ["a"]).split() == ["echo", "one"]
-    assert parity.reachable_text(single, ["c"]).split() == ["echo", "two"]
-    assert parity.reachable_text(single, ["b"]).split() == ["echo", "three"]
-    assert parity.reachable_text(single, ["$X"]).split() == ["echo", "one", "echo", "two", "echo", "three"]
-    unknown_first = 'if [[ "${E:-x}" == y ]]; then\n  echo env\nelif [[ "$1" == a ]]; then\n  echo arg\nelse\n  echo rest\nfi\n'
-    assert "env" in parity.reachable_text(unknown_first, ["a"]) and "rest" in parity.reachable_text(unknown_first, ["a"])
-    oneline = 'if [[ "$1" == a ]]; then echo here\nfi\nif [[ "$1" == b ]]; then echo hidden\nfi\nexit 0\necho after\n'
-    assert parity.reachable_text(oneline, ["a"]).split() == ["echo", "here", "exit", "0"]
-    assert parity.reachable_text("if cmd; then\n  echo x\nfi\n", []).split() == ["echo", "x"]
+def test_a_one_line_false_if_or_an_exit_in_a_case_arm_cannot_hide_later_commands(tmp_path):
+    script = "if false; then echo skipped; fi\ncase $1 in a) exit 0 ;; esac\nf() { exit 1; }\nfor i in 1; do exit 2; done\nbash tools/build.sh --stage native\n"
+    root = tree(tmp_path, {"ci.yml": workflow("bash tools/d.sh a")})
+    (root / "tools/d.sh").write_text(script)
+    gates = {"native-stage": {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", "native"], "wiring_unverified": "via d.sh"}}
+    report = parity.check(root, {"gates": gates})
+    assert report["gates"]["native-stage"]["may_call"] == [".github/workflows/ci.yml:build via tools/d.sh"]
+    assert report["wiring_unverified"] == ["native-stage"] and report["problems"] == []
 
 
-def test_evaluate_is_three_valued():
-    bindings = {"s": "cpu"}
-    assert parity.evaluate('[[ "$s" == cpu ]]', bindings) is True
-    assert parity.evaluate('[[ "$s" != cpu ]]', bindings) is False
-    assert parity.evaluate('[[ "$s" == cpu && "${E:-1}" == false ]]', bindings) is None
-    assert parity.evaluate('[[ "$s" == audio && "${E:-1}" == false ]]', bindings) is False
-    assert parity.evaluate('[[ "$s" == cpu || "${E:-1}" == false ]]', bindings) is True
-    assert parity.evaluate('[[ "$s" == audio ]] || [[ "$s" == cpu ]]', bindings) is True
-    assert parity.evaluate('[[ "$s" == audio ]] && [[ "$s" == cpu ]]', bindings) is False
-    assert parity.evaluate('[[ "$s" == audio ]] || [[ "${E}" == x ]] && [[ "$s" == cpu ]]', bindings) is None
-    assert parity.evaluate("command -v tool", bindings) is None and parity.evaluate("", bindings) is None
-    assert parity.evaluate('[[ "$other" == cpu ]]', bindings) is None
-    # A command in the condition can succeed or fail whatever the tests say.
-    assert parity.evaluate('[[ "$s" == cpu ]] && command -v tool', bindings) is None
-    assert parity.evaluate('[[ "$s" == audio ]] || command -v tool', bindings) is None
+def test_the_shell_interpreter_is_gone():
+    for name in ("evaluate", "reachable_text", "_TEST", "_ATOM", "_ASSIGN_POSITIONAL"):
+        assert not hasattr(parity, name), name
+
+
+def test_a_text_is_tokenized_once_even_with_an_unclosed_quote(monkeypatch):
+    seen = []
+    real = parity._tokens
+    monkeypatch.setattr(parity, "_tokens", lambda text: seen.append(len(text)) or real(text))
+    hostile = "echo 'never closed\n" + "bash tools/build.sh --stage native\n" * 3000
+    segments = parity.command_segments(hostile)
+    assert len(seen) == 1  # one failed lex, then one linear fallback; not one lex per line
+    assert sum(1 for segment in segments if "tools/build.sh" in segment) == 3000
+    seen.clear()
+    parity.command_segments("bash tools/build.sh --stage native\n" * 3000)
+    assert len(seen) == 1
+
+
+def test_comments_with_apostrophes_do_not_open_quotes_and_hash_inside_words_is_kept():
+    text = "# don't panic\nbash tools/build.sh --stage native # it's fine\necho a#b $# ${#x}\necho 'x # y'\n"
+    segments = parity.command_segments(text)
+    assert ["bash", "tools/build.sh", "--stage", "native"] in segments
+    assert ["echo", "a#b", "$#", "${#x}"] in segments and ["echo", "x # y"] in segments
+    assert parity.strip_comments("a # b\nc") == "a \nc" and parity.strip_comments("'#' \"#\" \\# x") == "'#' \"#\" \\# x"
+
+
+def test_newlines_separate_commands_but_quoted_newlines_do_not():
+    assert parity.command_segments("a b\nc d;e\n\nf && g") == [["a", "b"], ["c", "d"], ["e"], ["f"], ["g"]]
+    assert parity.command_segments('echo "a\nb" c\nd') == [["echo", "a\nb", "c"], ["d"]]
+
+
+def test_a_fan_out_of_scripts_is_read_once_each_not_once_per_path(tmp_path):
+    root = tree(tmp_path, {"ci.yml": workflow("bash tools/s0.sh")})
+    for index in range(40):
+        (root / f"tools/s{index}.sh").write_text(f"bash tools/s{index + 1}.sh\nbash tools/s{index + 1}.sh\n")
+    (root / "tools/s40.sh").write_text("bash tools/build.sh --stage native\n")
+    calls = parity.collect_calls([parity.Run("ci.yml", "build", "step", "bash tools/s0.sh")], root)
+    assert len(calls) == 1 + 40 * 2 + 1  # 2 calls per script, 40 scripts, the entry and the final build call; not 2**40
+
+
+def test_a_script_larger_than_the_caps_fails_closed(tmp_path, monkeypatch):
+    root = tree(tmp_path, {"ci.yml": workflow("bash tools/big.sh")})
+    (root / "tools/big.sh").write_text("echo x\n" * 50)
+    monkeypatch.setattr(parity, "MAX_SCRIPT_LINES", 10)
+    gates = {"native-stage": {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", "native"], "local_only": "x"}}
+    assert any("more than the 10 line analysis cap" in problem for problem in parity.check(root, {"gates": gates})["problems"])
+    monkeypatch.setattr(parity, "MAX_SCRIPT_LINES", 5000)
+    monkeypatch.setattr(parity, "MAX_SCRIPT_BYTES", 20)
+    assert any("20 byte analysis cap" in problem for problem in parity.check(root, {"gates": gates})["problems"])
+    monkeypatch.setattr(parity, "MAX_SCRIPT_BYTES", 262144)
+    monkeypatch.setattr(parity, "MAX_CALLS_PER_STEP", 3)
+    (root / "tools/big.sh").write_text("bash tools/a.sh\nbash tools/b.sh\nbash tools/c.sh\nbash tools/d.sh\n")
+    assert any("more than 3 calls" in problem for problem in parity.check(root, {"gates": gates})["problems"])
+    monkeypatch.setattr(parity, "MAX_CALLS_PER_STEP", 5000)
+    monkeypatch.setattr(parity, "MAX_SCRIPTS_PER_STEP", 1)
+    (root / "tools/big.sh").write_text("bash tools/a.sh\nbash tools/b.sh\n")
+    for name in ("a", "b"):
+        (root / f"tools/{name}.sh").write_text("")
+    assert any("more than 1 scripts" in problem for problem in parity.check(root, {"gates": gates})["problems"])
+
+
+def test_an_oversized_workflow_file_is_a_problem(tmp_path, monkeypatch):
+    monkeypatch.setattr(parity, "MAX_WORKFLOW_BYTES", 50)
+    root = tree(tmp_path, {"ci.yml": workflow("bash tools/build.sh --stage native")})
+    assert any("50 byte analysis cap" in problem for problem in parity.check(root, inventory(**NATIVE))["problems"])
+
+
+def test_an_unreadable_script_is_a_problem_not_silence(tmp_path):
+    root = tree(tmp_path, {"ci.yml": workflow("bash tools/b.sh")})
+    (root / "tools/b.sh").write_text("bash tools/build.sh --stage native\n")
+    (root / "tools/b.sh").chmod(0)
+    try:
+        problems = parity.check(root, inventory(**NATIVE))["problems"]
+    finally:
+        (root / "tools/b.sh").chmod(0o644)
+    if os.geteuid() != 0:
+        assert any("tools/b.sh cannot be read" in problem for problem in problems)
+
+
+def test_wiring_unverified_must_be_acknowledged_and_must_not_go_stale(tmp_path):
+    undeclared = tree(tmp_path / "a", {"ci.yml": workflow('bash tools/build.sh --stage "$S"')})
+    problems = parity.check(undeclared, inventory(**NATIVE))["problems"]
+    assert problems == ["gate native-stage: only a script or a variable may call it (.github/workflows/ci.yml:build); call it directly or declare wiring_unverified with a reason"]
+    declared = {"gates": {"native-stage": {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", "native"], "wiring_unverified": "reviewed"}}}
+    assert parity.check(undeclared, declared)["problems"] == []
+    direct = tree(tmp_path / "b", {"ci.yml": workflow("bash tools/build.sh --stage native")})
+    assert parity.check(direct, declared)["problems"] == ["gate native-stage: declared wiring_unverified but it now has direct evidence or none; remove the stale declaration"]
+    for reason in ("", "  ", 7):
+        blank = {"gates": {"native-stage": {**declared["gates"]["native-stage"], "wiring_unverified": reason}}}
+        assert "gate native-stage: wiring_unverified needs a reason" in parity.check(undeclared, blank)["problems"]
+
+
+def test_the_real_tree_acknowledges_exactly_the_unverified_gates_it_has():
+    report = parity.check(ROOT)
+    assert report["problems"] == []
+    assert report["wiring_unverified"] == ["integration-virtual-audio"]
+    assert [name for name, gate in report["gates"].items() if gate["declared_unverified"]] == ["integration-virtual-audio"]
 
 
 def test_a_build_only_call_does_not_satisfy_a_stage_but_a_gate_that_asks_for_it_is_satisfied(tmp_path):

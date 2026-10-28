@@ -522,6 +522,8 @@ GATE = ["{python}", "-m", "tools.check_local_validation"]
         (["/var/tmp/x/python", "-m", "tools.check_local_validation"], False),
         (["/private/tmp/x/python3.13", "-m", "tools.check_local_validation"], False),
         (["/dev/shm/python", "-m", "tools.check_local_validation"], False),
+        (["/var/folders/zz/abc/T/python3", "-m", "tools.check_local_validation"], False),
+        (["/private/var/folders/zz/abc/T/venv/bin/python", "-m", "tools.check_local_validation"], False),
         (["/usr/bin/bash", "-m", "tools.check_local_validation"], False),
         (["/usr/bin/python3x", "-m", "tools.check_local_validation"], False),
         (["/usr/bin/../../tmp/python", "-m", "tools.check_local_validation"], False),
@@ -692,3 +694,17 @@ def test_only_the_three_known_phases_are_shown_and_a_schema_one_packet_cannot_wi
 def test_git_is_asked_without_optional_locks_and_the_docstring_says_what_runs():
     assert "--no-optional-locks" in Path(replay.__file__).read_text()
     assert "git status" in replay.__doc__ and "--version" in replay.__doc__ and "flutter" in replay.__doc__
+
+
+def test_the_packets_own_recorded_temp_roots_are_untrusted_interpreter_locations():
+    hostile = packet()
+    hostile["environment"] = {"TMPDIR": "/Users/ada/scratch", "FORESIGHT_TEST_TEMP_ROOT": "/mnt/ci-temp/"}
+    hostile["checks"][1].update(id="shared-guards", entrypoint=["/Users/ada/scratch/venv/bin/python", "-m", "tools.check_local_validation"])
+    [failed] = replay.analyze(hostile, HERE)["failing_checks"]
+    assert failed["command"] is None and failed["command_status"].startswith("unrecorded")
+    hostile["checks"][1]["entrypoint"] = ["/mnt/ci-temp/bin/python", "-m", "tools.check_local_validation"]
+    assert replay.analyze(hostile, HERE)["failing_checks"][0]["command"] is None
+    hostile["checks"][1]["entrypoint"] = ["/Users/ada/repo/.venv/bin/python", "-m", "tools.check_local_validation"]
+    assert replay.analyze(hostile, HERE)["failing_checks"][0]["command"] is not None
+    assert replay.matches_gate(["/r/t/python", "-m", "tools.check_local_validation"], GATE, ["/r/t/"]) is False
+    assert replay.matches_gate(["/r/t/python", "-m", "tools.check_local_validation"], GATE, ["/", ""]) is True  # a root of "/" excludes nothing

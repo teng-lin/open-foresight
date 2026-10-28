@@ -158,7 +158,9 @@ environment:
   Redaction has a deliberately narrow scope. Gap prose, a check's recorded
   `reason` and the `cache`/`artifacts` paths are redacted: absolute paths (bare,
   after a colon, quoted, or under an account directory containing spaces) become
-  `<path>`, and cache/artifact paths under the account home start with `~`. A
+  `<path>` (an account or volume path under `/Users`, `/home` or `/Volumes` is
+  replaced up to the next sentence boundary, so a name with spaces leaves no
+  fragment, at the price of swallowing a few following words), and cache/artifact paths under the account home start with `~`. A
   packet is **not anonymized**: it still carries the account name and home, the
   working directory, checkout root, interpreter path and retained log paths,
   because a replay needs them. Treat it as a local diagnostic, not as something to
@@ -181,7 +183,8 @@ command is offered only for `tools.validate_change`, the one entrypoint that
 records packets, and a failed check's entrypoint only when it matches that gate's
 definition in the boundary inventory (`{python}` must be an interpreter named
 python or python3.N with no spaces or shell metacharacters, outside the temporary
-directories; `{platform}` linux or macos; other placeholders printable paths of
+directories (including `/var/folders` and the packet's own recorded `TMPDIR` and
+test temp root); `{platform}` linux or macos; other placeholders printable paths of
 bounded length without whitespace, shell metacharacters, `..` or a leading
 `/tmp`); otherwise the report says "unrecorded". The packet must be a regular file under 8 MiB with correctly typed
 fields; a FIFO, an oversized, deeply nested or wrongly typed packet is refused.
@@ -219,27 +222,35 @@ call builds and runs no tests, so it satisfies no gate that does not ask for it.
 Evidence comes in two strengths. `called_by` lists the steps that call the gate's
 script directly with its own literal `--stage`/`--suite`. `may_call` lists weaker
 evidence: a call made by a repository shell script a step runs (shown as
-`via <script>`; the script is read with the caller's literal arguments, so the
-branch `linux_acceptance.sh audio` takes is followed and an `exit` it is certain
-to reach ends the read, but a condition on the environment stays unknown and every
-branch it may take is kept) and a call whose stage or suite comes from a shell
-variable. A gate with only `may_call` evidence is reported as **wiring
-unverified**: it is listed in the default output and in `--json` as `wiring_unverified`
-(gates that also have a direct caller print their `may_call` entries as "May also
-run (not verified)"),
-and it is never counted as a pass. On the current tree that is
-`integration-virtual-audio`: only `bash tools/linux_acceptance.sh audio` (the
-`acceptance-audio` job and the weekly audit) runs it, inside a container and only
-when the audio selection variable allows it.
+`via <script>`) and a call whose stage or suite comes from a shell variable.
+**Script-mediated calls are over-approximated, not evaluated**: every command in
+a called script counts, whatever `if`, `case`, loop, function or `exit` it sits
+in, so a script that dispatches on its first argument credits every branch to
+every step that calls it (on the current tree `acceptance-deb` and
+`acceptance-cpu` are credited with `integration-virtual-audio` again). A script
+is read once per step however often it is reached, and heredoc bodies are
+skipped. A gate with only `may_call` evidence is **wiring unverified**: it is
+listed in the default output and in `--json`, it is never counted as a pass, and
+it must be acknowledged with a `wiring_unverified` reason in the inventory. A new
+unverified gate therefore fails the guard, and an acknowledged gate that gains a
+direct caller is a stale declaration. On the current tree that is
+`integration-virtual-audio` alone (a test pins the set): only
+`bash tools/linux_acceptance.sh audio` (the `acceptance-audio` job and the weekly
+audit) really runs it, inside a container and only when the audio selection
+variable allows it; the guard cannot confirm which branch runs. Gates that also
+have a direct caller print their `may_call` entries as "May also run (not
+verified)". Hard limits (256 KiB and 5000 lines per script, 200 scripts and 5000
+calls per step, 1 MiB per workflow) are problems when hit, never silent
+truncation, and each text is tokenized once.
 
 The check also rejects a workflow that calls a repository script that no longer
 exists and fails on any workflow shape it does not understand. It reads only
 `.yml` and `.yaml` files, and refuses YAML anchors, aliases and duplicate keys (a
 pull request controls these files; an alias expansion could exhaust the guard,
 and a repeated `steps:` key would let the last one silently win). Static limits
-remain: an `if false; then ...; fi` or code after `exit 0` inside a step, shell
-functions that are never invoked, and the `--platform` argument (not compared) are
-read as if they ran or matched. It is script-level: it does not check that a
+remain: an `if false; then ...; fi` or code after `exit 0` inside a step or
+script, shell functions that are never invoked, and the `--platform` argument (not
+compared) are read as if they ran or matched. It is script-level: it does not check that a
 workflow passes the same other arguments, and inline `dart test`, `flutter test`,
 `ctest` or `pytest` invocations are listed in its `--json` output for information
 only.

@@ -429,8 +429,9 @@ def cache_and_artifacts(
 
 _ABSOLUTE_PATH = re.compile(r"(?<![\w.\-/])/(?!/)[^\s'\"),;:]+")
 _QUOTED_PATH = re.compile(r"(['\"`])/[^'\"`\n]*\1")
-# An account directory may contain spaces ("John Smith"): take everything up to the next separator after it.
-_ACCOUNT_PATH = re.compile(r"(?<![\w.\-/])/(?:Users|home)/[^/\n'\"`]+/[^\s'\"),;:]*")
+# An account or volume path may contain spaces ("John Smith") or end at the account
+# directory itself, so the whole run up to the next sentence boundary is replaced.
+_ACCOUNT_PATH = re.compile(r"(?<![\w.\-/])/(?:Users|home|Volumes)/[^\n'\"`)]*?(?=[,;:](?:\s|$)|\.(?:\s|$)|[)'\"`\n]|$)")
 
 
 def redact(text: str) -> str:

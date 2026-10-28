@@ -353,8 +353,9 @@ def verify(root: Path = ROOT) -> dict[str, Any]:
             for subsumed in gate.get("subsumes", ()):
                 if subsumed not in gates:
                     fail(f"gate {name}: unknown subsumed gate {subsumed}")
-            if "local_only" in gate and not (isinstance(gate["local_only"], str) and gate["local_only"].strip()):
-                fail(f"gate {name}: local_only needs a reason")
+            for acknowledgement in ("local_only", "wiring_unverified"):
+                if acknowledgement in gate and not (isinstance(gate[acknowledgement], str) and gate[acknowledgement].strip()):
+                    fail(f"gate {name}: {acknowledgement} needs a reason")
             if gate["doc"].split("#", 1)[0] not in files:
                 fail(f"gate {name}: doc {gate['doc']} does not exist")
         elif not gate.get("requirement", "").strip():

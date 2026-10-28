@@ -20,14 +20,18 @@ ask for it.
 
 Only a step's own call, with a literal discriminator, puts a workflow step in a
 gate's `called_by`. Two weaker kinds of evidence are `may_call`: a call a
-repository shell script makes (the script is read with the caller's literal
-arguments, so `if [[ "$suite" == deb ]]` branches and a taken `exit` are
-followed, but any condition on the environment stays unknown), and a call whose
-`--stage`/`--suite` value comes from a shell variable. A gate whose only
-evidence is `may_call` is reported as wiring-unverified, listed in the output
-and never counted as a pass. Static limits remain: `if false; then ...; fi` in a
-step, shell functions that are never invoked, and code after `exit 0` in a
-region the analysis cannot prove taken are still read as commands.
+repository shell script makes, and a call whose `--stage`/`--suite` value comes
+from a shell variable. Script-mediated calls are over-approximated, not
+evaluated: every command in a called script counts, whatever branch, loop or
+function it sits in, and each script is read once per step. A gate whose only
+evidence is `may_call` is wiring-unverified: it is listed in the output and must
+be acknowledged with a `wiring_unverified` reason in the inventory, so a new
+unverified gate fails the guard and an acknowledged one that gains a direct
+caller is a stale declaration. Hard limits (script size and lines, scripts and
+calls per step, workflow size) are problems when hit, never silent truncation.
+Static limits remain: `if false; then ...; fi` or code after `exit 0` inside a
+step or script, shell functions never invoked, and the `--platform` argument
+(not compared) are read as if they ran or matched.
 
 Inline test-runner invocations in workflows (`dart test`, `flutter test`, `ctest`,
 `pytest`) are reported for information. They are not failures.
@@ -37,14 +41,14 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping, Sequence
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import re
 import shlex
 import sys
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -164,6 +168,9 @@ def workflow_runs(root: Path = ROOT) -> tuple[list[Run], list[str]]:
         return [], ["no workflow files were found; the parity check cannot pass vacuously"]
     for path in files:
         name = path.relative_to(root).as_posix()
+        if path.stat().st_size > MAX_WORKFLOW_BYTES:
+            parsed.problems.append(f"{name}: larger than the {MAX_WORKFLOW_BYTES} byte analysis cap")
+            continue
         try:
             document = yaml.load(path.read_text(), Loader=_Loader)  # noqa: S506 - the loader derives from SafeLoader
         except _Rejected as error:
@@ -225,13 +232,6 @@ def _reachable(parsed: Parsed) -> set[str]:
     return reachable
 
 
-def _tokens(line: str) -> list[str]:
-    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    lexer.commenters = "#"
-    return list(lexer)
-
-
 def strip_heredocs(text: str) -> str:
     """The text without here-document bodies, except those fed to a shell (which runs them)."""
     kept: list[str] = []
@@ -255,33 +255,83 @@ def strip_heredocs(text: str) -> str:
     return "\n".join(kept)
 
 
-def command_segments(text: str) -> list[list[str]]:
-    """Commands of a shell text, comments stripped and quotes honored.
+_PUNCTUATION = ";()<>|&\n"
 
-    Line continuations are joined, a quote that spans lines keeps reading, and a
-    line shlex cannot read at all is split on whitespace as a last resort.
+
+def _tokens(text: str) -> list[str]:
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=_PUNCTUATION)
+    lexer.whitespace_split = True
+    lexer.whitespace = " \t\r"
+    lexer.commenters = ""  # comments are removed first, by strip_comments
+    return list(lexer)
+
+
+def _loose_tokens(text: str) -> list[str]:
+    """Tokens of text shlex cannot read (an unclosed quote): words and operators, no quoting rules."""
+    return [token for line in text.splitlines() for token in (*re.findall(r"[^\s;&|()]+|[;&|()]", line), "\n")]
+
+
+def strip_comments(text: str) -> str:
+    """The text without shell comments, in one pass that honors quotes and escapes.
+
+    A comment starts at a `#` at the start of a word and runs to the end of the
+    line, so an apostrophe inside a comment cannot open a quote.
     """
+    out: list[str] = []
+    quote: str | None = None
+    word_start = True
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if quote is not None:
+            out.append(char)
+            if char == "\\" and quote == '"' and index + 1 < length:
+                out.append(text[index + 1])
+                index += 1
+            elif char == quote:
+                quote = None
+        elif char == "\\" and index + 1 < length:
+            out.append(char + text[index + 1])
+            index += 1
+            word_start = False
+        elif char in "'\"":
+            quote = char
+            out.append(char)
+            word_start = False
+        elif char == "#" and word_start:
+            while index + 1 < length and text[index + 1] != "\n":
+                index += 1
+        else:
+            out.append(char)
+            word_start = char in " \t\r\n;&|()"
+        index += 1
+    return "".join(out)
+
+
+def command_segments(text: str) -> list[list[str]]:
+    """Commands of a shell text, comments stripped and quotes honored; the text is lexed once.
+
+    Line continuations are joined. Text shlex cannot read (an unclosed quote) is
+    split on whitespace and operators instead, so a hostile file costs one extra
+    linear pass and never a re-lex per line.
+    """
+    cleaned = strip_comments(strip_heredocs(text).replace("\\\n", " "))
+    try:
+        tokens = _tokens(cleaned)
+    except ValueError:
+        tokens = _loose_tokens(cleaned)
     segments: list[list[str]] = []
-    pending = ""
-    for line in strip_heredocs(text).replace("\\\n", " ").splitlines():
-        pending = f"{pending}\n{line}" if pending else line
-        try:
-            tokens = _tokens(pending)
-        except ValueError:
-            continue  # an open quote: the command continues on the next line
-        pending = ""
-        current: list[str] = []
-        for token in tokens:
-            if token in _OPERATORS:
-                if current:
-                    segments.append(current)
-                current = []
-            else:
-                current.append(token)
-        if current:
-            segments.append(current)
-    if pending:
-        segments.append(pending.split())
+    current: list[str] = []
+    for token in tokens:
+        if token in _OPERATORS or ("\n" in token and set(token) <= set(_PUNCTUATION)):
+            if current:
+                segments.append(current)
+            current = []
+        else:
+            current.append(token)
+    if current:
+        segments.append(current)
     return segments
 
 
@@ -351,129 +401,70 @@ def calls_in(text: str) -> list[tuple[str, tuple[str, ...]]]:
     return found
 
 
-_ASSIGN_POSITIONAL = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=\"?\$(?:\{(\d)(?:[:?-][^}]*)?\}|(\d))\"?$")
-_TEST = re.compile(r"\[\[\s*(.*?)\s*\]\]|\[\s+(.*?)\s+\]")
-_ATOM = re.compile(r"^\s*\"?\$\{?(\w+|\d)\}?\"?\s*(==|!=|=)\s*\"?([A-Za-z0-9_.-]+)\"?\s*$")
+# Hard limits on what one workflow step may make the guard read. A cap that is
+# hit is a problem, never a silent truncation: the guard fails closed.
+MAX_SCRIPT_BYTES = 256 * 1024
+MAX_SCRIPT_LINES = 5000
+MAX_SCRIPTS_PER_STEP = 200
+MAX_CALLS_PER_STEP = 5000
+MAX_WORKFLOW_BYTES = 1024 * 1024
 
 
-def _atom(text: str, bindings: Mapping[str, str]) -> bool | None:
-    found = _ATOM.match(text)
-    if not found or found.group(1) not in bindings:
-        return None
-    equal = bindings[found.group(1)] == found.group(3)
-    return equal if found.group(2) in ("==", "=") else not equal
+def _read_script(path: Path) -> tuple[str | None, str | None]:
+    """(text, problem): a repository script, or why it was not read."""
+    try:
+        with path.open("rb") as stream:
+            data = stream.read(MAX_SCRIPT_BYTES + 1)
+    except OSError as error:
+        return None, f"cannot be read ({type(error).__name__})"
+    if len(data) > MAX_SCRIPT_BYTES:
+        return None, f"is larger than the {MAX_SCRIPT_BYTES} byte analysis cap"
+    text = data.decode(errors="replace")
+    if text.count("\n") > MAX_SCRIPT_LINES:
+        return None, f"has more than the {MAX_SCRIPT_LINES} line analysis cap"
+    return text, None
 
 
-def _and(values: Sequence[bool | None]) -> bool | None:
-    if False in values:
-        return False
-    return None if None in values else True
+def collect(runs: Sequence[Run], root: Path = ROOT) -> tuple[list[Call], list[str]]:
+    """Calls made by workflow steps, and by the repository shell scripts those steps call.
 
-
-def _or(values: Sequence[bool | None]) -> bool | None:
-    if True in values:
-        return True
-    return None if None in values else False
-
-
-def evaluate(condition: str, bindings: Mapping[str, str]) -> bool | None:
-    """Three-valued truth of a shell condition made of `[[ a == b ]]` tests; None when unknown."""
-    leftover = _TEST.sub("", condition)
-    if re.sub(r"\|\||&&|[\s;]", "", leftover):
-        return None  # something other than tests (a command): unknown
-    parts: list[bool | None] = []
-    for found in _TEST.finditer(condition):
-        group = found.group(1) if found.group(1) is not None else found.group(2)
-        parts.append(_or([_and([_atom(atom, bindings) for atom in clause.split("&&")]) for clause in group.split("||")]))
-    # Connectors between groups: `||` and `&&` outside the brackets.
-    connectors = re.findall(r"\|\||&&", leftover)
-    if not parts:
-        return None
-    result = parts[0]
-    pending_or: list[bool | None] = []
-    run = [result]
-    for connector, value in zip(connectors, parts[1:], strict=False):
-        if connector == "&&":
-            run.append(value)
-        else:
-            pending_or.append(_and(run))
-            run = [value]
-    pending_or.append(_and(run))
-    return _or(pending_or)
-
-
-def reachable_text(script: str, arguments: Sequence[str]) -> str:
-    """The lines of [script] that can run when it is called with [arguments].
-
-    Only literal arguments bind `$1`..: a variable assigned from one is followed
-    through `if`/`elif`/`else`, a branch whose test is known false is dropped, and
-    a top-level `exit` in a region known to run ends the scan. Everything else
-    (a test on the environment, a loop, a function) is read as a command that may
-    run, so the result over-approximates.
+    Script-mediated calls are over-approximated, not evaluated: every command in
+    a called script counts, whatever branch, loop or function it is in, and each
+    script is read once per step however often it is reached. Returns the calls
+    and the problems for any cap that was hit.
     """
-    bindings = {str(index + 1): token for index, token in enumerate(arguments) if "$" not in token}
-    kept: list[str] = []
-    frames: list[dict[str, Any]] = []  # per open `if`: state of the current branch, whether one is already taken
-    lines = strip_heredocs(script).replace("\\\n", " ").splitlines()
-    for raw in lines:
-        line = raw.strip()
-        assign = _ASSIGN_POSITIONAL.match(line)
-        if assign:
-            position = assign.group(2) or assign.group(3)
-            if position in bindings:
-                bindings[assign.group(1)] = bindings[position]
-        word = line.split(None, 1)[0] if line else ""
-        if word in ("if", "elif"):
-            condition = line[len(word):].split("; then", 1)[0].strip()
-            value = evaluate(condition, bindings)
-            if word == "if":
-                frames.append({"state": value, "taken": value is True, "unsure": value is None})
-            elif frames:
-                frame = frames[-1]
-                if frame["taken"] or value is False:
-                    frame["state"] = False
-                elif value is True:
-                    frame["state"] = None if frame["unsure"] else True
-                    frame["taken"] = not frame["unsure"]
-                else:
-                    frame["state"], frame["unsure"] = None, True
-            tail = line.split("; then", 1)[1].strip() if "; then" in line else ""
-            if tail and all(frame["state"] is not False for frame in frames):
-                kept.append(tail)
-            continue
-        if word == "else" and frames:
-            frame = frames[-1]
-            frame["state"] = False if frame["taken"] else (None if frame["unsure"] else True)
-            continue
-        if word == "fi":
-            if frames:
-                frames.pop()
-            continue
-        if word == "then":
-            continue
-        if any(frame["state"] is False for frame in frames):
-            continue
-        kept.append(line)
-        if word == "exit" and all(frame["state"] is True for frame in frames):
-            break
-    return "\n".join(kept)
-
-
-def collect_calls(runs: Sequence[Run], root: Path = ROOT, depth: int = 4) -> list[Call]:
-    """Calls made by workflow steps, and by repository shell scripts those steps call."""
     calls: list[Call] = []
-
-    def expand(where: str, step: str, text: str, via: str | None, seen: frozenset[str], remaining: int) -> None:
-        for script, args in calls_in(text):
-            calls.append(Call(where, step, script, args, via))
-            path = root / script
-            if script.endswith(".sh") and remaining and script not in seen and path.is_file():
-                body = reachable_text(path.read_text(errors="replace"), args)
-                expand(where, step, body, script, seen | {script}, remaining - 1)
-
+    problems: list[str] = []
     for run in runs:
-        expand(run.job, run.step, run.text, None, frozenset(), depth)
-    return calls
+        found = 0
+        scripts: set[str] = set()
+        queue: deque[tuple[str, str | None]] = deque([(run.text, None)])
+        while queue:
+            text, via = queue.popleft()
+            for script, args in calls_in(text):
+                if found >= MAX_CALLS_PER_STEP:
+                    problems.append(f"{run.job}: step {run.step!r} makes more than {MAX_CALLS_PER_STEP} calls; the analysis stopped (wiring unverified)")
+                    queue.clear()
+                    break
+                found += 1
+                calls.append(Call(run.job, run.step, script, args, via))
+                if not script.endswith(".sh") or script in scripts or not (root / script).is_file():
+                    continue
+                if len(scripts) >= MAX_SCRIPTS_PER_STEP:
+                    problems.append(f"{run.job}: step {run.step!r} reaches more than {MAX_SCRIPTS_PER_STEP} scripts; the analysis stopped (wiring unverified)")
+                    queue.clear()
+                    break
+                scripts.add(script)
+                body, problem = _read_script(root / script)
+                if problem:
+                    problems.append(f"{run.job}: step {run.step!r}: {script} {problem} (wiring unverified)")
+                else:
+                    queue.append((cast(str, body), script))
+    return calls, problems
+
+
+def collect_calls(runs: Sequence[Run], root: Path = ROOT) -> list[Call]:
+    return collect(runs, root)[0]
 
 
 def inline_runners(runs: Sequence[Run]) -> list[dict[str, str]]:
@@ -522,7 +513,8 @@ def satisfies(call: Call, script: str, argv: Sequence[str]) -> str | None:
 def check(root: Path = ROOT, inventory: Mapping[str, Any] | None = None) -> dict[str, Any]:
     inventory = boundary_inventory.load(root) if inventory is None else inventory
     runs, problems = workflow_runs(root)
-    calls = collect_calls(runs, root)
+    calls, capped = collect(runs, root)
+    problems.extend(capped)
     for call in calls:
         if not (root / call.script).is_file():
             problems.append(f"{call.where}: step {call.step!r} calls {call.script}, which does not exist")
@@ -542,10 +534,17 @@ def check(root: Path = ROOT, inventory: Mapping[str, Any] | None = None) -> dict
         may_call = sorted(label for label, direct in evidence.items() if not direct)
         local_only = gate.get("local_only")
         unverified = local_only is None and not called_by and bool(may_call)
+        declared = gate.get("wiring_unverified")
         gates[name] = {
             "scripts": scripts, "called_by": called_by, "may_call": may_call,
-            "wiring_unverified": unverified, "local_only": local_only,
+            "wiring_unverified": unverified, "local_only": local_only, "declared_unverified": declared,
         }
+        if declared is not None and (not isinstance(declared, str) or not declared.strip()):
+            problems.append(f"gate {name}: wiring_unverified needs a reason")
+        elif declared is not None and not unverified:
+            problems.append(f"gate {name}: declared wiring_unverified but it now has direct evidence or none; remove the stale declaration")
+        elif unverified and declared is None:
+            problems.append(f"gate {name}: only a script or a variable may call it ({may_call[0]}); call it directly or declare wiring_unverified with a reason")
         if local_only is not None and (not isinstance(local_only, str) or not local_only.strip()):
             problems.append(f"gate {name}: local_only needs a reason")
         elif local_only is not None and called_by:

@@ -589,9 +589,29 @@ def test_redaction_handles_quoted_paths_with_spaces_and_account_directories():
     assert evidence.redact("cannot open '/Users/John Smith/My Project/x.log' now") == "cannot open '<path>' now"
     assert evidence.redact('cannot open "/var/tmp/a b/log"') == 'cannot open "<path>"'
     assert evidence.redact("failed in /Users/John Smith/src/app/build.log, retry") == "failed in <path>, retry"
-    assert evidence.redact("see /home/ada/.cache/x and /opt/tool/bin") == "see <path> and <path>"
+    assert evidence.redact("see /opt/tool/bin and /var/log/x") == "see <path> and <path>"
     assert evidence.redact("no path here, a/b, 1/2, https://x.org/p") == "no path here, a/b, 1/2, https://x.org/p"
     assert "Smith" not in evidence.redact("/Users/John Smith/x")
+
+
+@pytest.mark.parametrize(
+    ("text", "shown"),
+    [
+        ("cannot enter /Users/John Smith", "cannot enter <path>"),  # ends at the account directory itself
+        ("cannot enter /Users/John Smith.", "cannot enter <path>."),
+        ("cannot enter /Users/John Smith: permission denied", "cannot enter <path>: permission denied"),
+        ("cannot enter /Users/John Smith, giving up", "cannot enter <path>, giving up"),
+        ("(see /Users/John Smith/x) done", "(see <path>) done"),
+        ("copy /Volumes/My Backup Disk/Foresight/x.zip failed", "copy <path>"),  # runs to the end: no sentence boundary
+        ("copy /Volumes/My Backup Disk/Foresight/x.zip. Next", "copy <path>. Next"),
+        ("copy '/Volumes/My Backup Disk/x' failed", "copy '<path>' failed"),
+        ("copy /home/ada.", "copy <path>."),
+        ("first line /home/ada/x\nsecond line", "first line <path>\nsecond line"),
+        ("a /Users/ada/x and /home/bob/y", "a <path>"),  # the whole run, not fragments of two paths
+    ],
+)
+def test_account_and_volume_paths_are_redacted_up_to_the_next_sentence_boundary(text, shown):
+    assert evidence.redact(text) == shown
 
 
 def test_a_checks_recorded_reason_is_redacted_but_its_status_and_log_are_kept():
@@ -606,7 +626,7 @@ def test_a_checks_recorded_reason_is_redacted_but_its_status_and_log_are_kept():
 # ------------------------------------------------ review round 4
 
 def test_redaction_reaches_paths_after_a_colon_but_leaves_urls_alone():
-    assert evidence.redact("FileNotFoundError:/Users/ada/repo/x.sh missing") == "FileNotFoundError:<path> missing"
+    assert evidence.redact("FileNotFoundError:/Users/ada/repo/x.sh: missing") == "FileNotFoundError:<path>: missing"
     assert evidence.redact("error: /opt/tool/bin failed") == "error: <path> failed"
     assert evidence.redact("OSError:/opt/tool/bin failed") == "OSError:<path> failed"
     assert evidence.redact("see https://example.org/a/b and http://x/y") == "see https://example.org/a/b and http://x/y"

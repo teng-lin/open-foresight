@@ -148,22 +148,27 @@ _PLACEHOLDERS = {
     "platform": r"linux|macos",
 }
 _DEFAULT_PLACEHOLDER = r"[^\s|;&<>$`'\"]{1,512}"
-_TEMP_DIRECTORIES = ("/tmp/", "/var/tmp/", "/private/tmp/", "/private/var/tmp/", "/dev/shm/")  # noqa: S108 - a denylist; nothing is created here
+# A denylist of world-writable locations; nothing is created in them.
+_TEMP_DIRECTORIES = tuple(
+    prefix + "/" for prefix in ("/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp", "/var/folders", "/private/var/folders", "/dev/shm")  # noqa: S108
+)
 
 
-def _placeholder_ok(token: str, names: Sequence[str]) -> bool:
+def _placeholder_ok(token: str, names: Sequence[str], temp_roots: Sequence[str]) -> bool:
     if not token.isprintable() or re.search(r"(?:^|/)\.\.(?:/|$)", token) or len(token) > 1024:
         return False
     if "python" in names:
-        return not token.startswith(_TEMP_DIRECTORIES)
+        roots = (*_TEMP_DIRECTORIES, *(root.rstrip("/") + "/" for root in temp_roots if root.strip("/")))
+        return not token.startswith(roots)
     return not token.startswith("/tmp/")  # noqa: S108
 
 
-def matches_gate(argv: Any, template: Sequence[str] | None) -> bool:
+def matches_gate(argv: Any, template: Sequence[str] | None, temp_roots: Sequence[str] = ()) -> bool:
     """Whether a recorded argv is the gate's template with its `{placeholders}` filled in plausibly.
 
     `{python}` must be an interpreter named python or python3.N, without spaces or
-    shell metacharacters, outside the temporary directories; `{platform}` linux or
+    shell metacharacters, outside the temporary directories (the fixed ones, `/var/folders`, and the
+    packet's own recorded `TMPDIR` and test temp root); `{platform}` linux or
     macos; every other placeholder a printable path of bounded length without
     whitespace, shell metacharacters or `..`, and not under /tmp. The match
     decides whether a command is shown, never whether it is safe to run.
@@ -178,7 +183,7 @@ def matches_gate(argv: Any, template: Sequence[str] | None) -> bool:
         expression = re.escape(pieces[0])
         for name, piece in zip(names, pieces[1:], strict=True):
             expression += f"(?:{_PLACEHOLDERS.get(name, _DEFAULT_PLACEHOLDER)})" + re.escape(piece)
-        if not re.fullmatch(expression, token) or (names and not _placeholder_ok(token, names)):
+        if not re.fullmatch(expression, token) or (names and not _placeholder_ok(token, names, temp_roots)):
             return False
     return True
 
@@ -244,12 +249,14 @@ def reproduction_command(packet: Mapping[str, Any], root: Path = validation_evid
 def failing_checks(packet: Mapping[str, Any], gates: Mapping[str, Sequence[str]] | None = None) -> list[dict[str, Any]]:
     """Checks that did not pass; an entrypoint is shown only if it matches the gate's definition."""
     gates = load_gates() if gates is None else gates
+    environment = packet["environment"]
+    temp_roots = [environment[name] for name in ("TMPDIR", "FORESIGHT_TEST_TEMP_ROOT") if isinstance(environment.get(name), str)]
     result = []
     for check in packet["checks"]:
         if check["status"] in ("passed", "subsumed", "planned"):
             continue
         entrypoint = check.get("entrypoint")
-        offered = bool(entrypoint) and matches_gate(entrypoint, gates.get(check["id"]))
+        offered = bool(entrypoint) and matches_gate(entrypoint, gates.get(check["id"]), temp_roots)
         result.append(
             {
                 "id": check["id"],
