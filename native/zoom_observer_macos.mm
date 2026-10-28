@@ -6,6 +6,7 @@
 // This file holds only the operating-system bindings. The gates, traversal
 // rules and protocol live in zoom_mac_source.cpp, zoom_collector.cpp and
 // zoom_observer_core.cpp, which are tested with fakes.
+#include "zoom_ax_convert.h"
 #include "zoom_mac_source.h"
 
 #import <AppKit/AppKit.h>
@@ -37,21 +38,6 @@ uint64_t scale_to_ms(uint64_t ticks) {
                                info.denom / 1000000);
 }
 
-AttrStatus map_error(AXError error) {
-  switch (error) {
-  case kAXErrorSuccess:
-    return AttrStatus::Ok;
-  case kAXErrorNoValue:
-  case kAXErrorAttributeUnsupported:
-  case kAXErrorNotImplemented:
-    return AttrStatus::Absent;
-  case kAXErrorAPIDisabled:
-    return AttrStatus::Disabled;
-  default:
-    return AttrStatus::Failed;
-  }
-}
-
 class MacEnvironment final : public Environment {
 public:
   bool os_supported() override {
@@ -79,10 +65,12 @@ public:
   }
 
   bool accessibility_trusted(bool prompt) override {
-    NSDictionary *options = @{
-      (__bridge NSString *)kAXTrustedCheckOptionPrompt : prompt ? @YES : @NO
-    };
-    return AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    @autoreleasepool {
+      NSDictionary *options = @{
+        (__bridge NSString *)kAXTrustedCheckOptionPrompt : prompt ? @YES : @NO
+      };
+      return AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    }
   }
 
   uint64_t monotonic_ms() override {
@@ -148,11 +136,44 @@ public:
       app_ = nullptr;
       return false;
     }
-    keepalive_ = [NSMutableArray array];
+    keepalive_ = [[NSMutableArray alloc] init];
     return true;
   }
 
+  // The helper's loop is plain C++ with no autorelease pool, so each call that
+  // touches Objective-C objects drains its own.
   AttrStatus windows(std::vector<ElementToken> &out) override {
+    @autoreleasepool {
+      return windows_in_pool(out);
+    }
+  }
+
+  NodeRead read(ElementToken element) override {
+    @autoreleasepool {
+      return read_in_pool(element);
+    }
+  }
+
+  void end() override {
+    keepalive_ = nil;
+    if (app_)
+      CFRelease(app_);
+    app_ = nullptr;
+  }
+
+  ElementToken retain(ElementToken element) override {
+    CFRetain((CFTypeRef)element);
+    return element;
+  }
+  void release(ElementToken element) override {
+    CFRelease((CFTypeRef)element);
+  }
+  bool same(ElementToken a, ElementToken b) override {
+    return CFEqual((CFTypeRef)a, (CFTypeRef)b);
+  }
+
+private:
+  AttrStatus windows_in_pool(std::vector<ElementToken> &out) {
     CFTypeRef raw = nullptr;
     AXError error =
         AXUIElementCopyAttributeValue(app_, kAXWindowsAttribute, &raw);
@@ -175,7 +196,7 @@ public:
     return AttrStatus::Ok;
   }
 
-  NodeRead read(ElementToken element) override {
+  NodeRead read_in_pool(ElementToken element) {
     NodeRead node;
     static NSArray *attributes = @[
       (__bridge NSString *)kAXRoleAttribute,
@@ -188,7 +209,7 @@ public:
     AXError error = AXUIElementCopyMultipleAttributeValues(
         (AXUIElementRef)element, (__bridge CFArrayRef)attributes, 0, &raw);
     if (error != kAXErrorSuccess || raw == nullptr) {
-      node.call = map_error(error);
+      node.call = attr_status_from_ax_error(error);
       if (node.call == AttrStatus::Absent)
         node.call = AttrStatus::Failed; // the whole node vanished or failed
       return node;
@@ -198,13 +219,14 @@ public:
       node.call = AttrStatus::Failed;
       return node;
     }
-    node.role = text(values[0]);
-    node.description = text(values[1]);
-    node.value = text(values[2]);
-    node.identifier = text(values[3]);
+    node.role = text_attr_from_object((__bridge const void *)values[0]);
+    node.description = text_attr_from_object((__bridge const void *)values[1]);
+    node.value = text_attr_from_object((__bridge const void *)values[2]);
+    node.identifier = text_attr_from_object((__bridge const void *)values[3]);
     id children = values[4];
-    if (AXError child_error = attribute_error(children)) {
-      node.children_status = map_error(child_error);
+    if (int child_error =
+            ax_error_in_object((__bridge const void *)children)) {
+      node.children_status = attr_status_from_ax_error(child_error);
       return node;
     }
     if (![children isKindOfClass:NSArray.class])
@@ -221,62 +243,8 @@ public:
     return node;
   }
 
-  void end() override {
-    keepalive_ = nil;
-    if (app_)
-      CFRelease(app_);
-    app_ = nullptr;
-  }
-
-  ElementToken retain(ElementToken element) override {
-    CFRetain((CFTypeRef)element);
-    return element;
-  }
-  void release(ElementToken element) override {
-    CFRelease((CFTypeRef)element);
-  }
-  bool same(ElementToken a, ElementToken b) override {
-    return CFEqual((CFTypeRef)a, (CFTypeRef)b);
-  }
-
-private:
   static ElementToken token(id element) {
     return reinterpret_cast<ElementToken>((__bridge void *)element);
-  }
-
-  // Copy-multiple returns an AXValue of type AXError for a failed attribute.
-  static AXError attribute_error(id value) {
-    if (value == nil ||
-        CFGetTypeID((__bridge CFTypeRef)value) != AXValueGetTypeID())
-      return kAXErrorSuccess;
-    AXValueRef wrapped = (__bridge AXValueRef)value;
-    if (AXValueGetType(wrapped) != kAXValueTypeAXError)
-      return kAXErrorSuccess;
-    AXError error = kAXErrorSuccess;
-    AXValueGetValue(wrapped, kAXValueTypeAXError, &error);
-    return error;
-  }
-
-  static TextAttr text(id value) {
-    TextAttr result;
-    if (AXError error = attribute_error(value)) {
-      result.status = map_error(error);
-      return result;
-    }
-    if (![value isKindOfClass:NSString.class])
-      return result; // no string value: observed absence
-    NSString *string = (NSString *)value;
-    result.status = AttrStatus::Ok;
-    const char *bytes = string.UTF8String;
-    NSUInteger length =
-        [string lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
-    // Unpaired surrogates have no UTF-8; an embedded NUL would cut the string.
-    if (bytes == nullptr || std::strlen(bytes) != length) {
-      result.lossy = true;
-      return result;
-    }
-    result.text = bytes;
-    return result;
   }
 
   AXUIElementRef app_ = nullptr;

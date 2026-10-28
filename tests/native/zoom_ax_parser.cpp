@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <malloc/malloc.h>
 #include <set>
 #include <string>
 
@@ -362,6 +363,37 @@ void check_bounds_and_malformed() {
   }
 }
 
+size_t heap_in_use() {
+  malloc_statistics_t statistics{};
+  malloc_zone_statistics(nullptr, &statistics);
+  return statistics.size_in_use;
+}
+
+// The helper's loop is plain C++ with no autorelease pool, so the parser must
+// drain its own: otherwise every folded string and UTF8String buffer from a
+// 500 ms poll would live until exit (about 10 KB per parse of 25 tiles).
+void check_parse_does_not_grow_the_heap() {
+  std::vector<AxNode> tiles;
+  for (int i = 0; i < 25; ++i)
+    tiles.push_back(
+        node("AXTabGroup", "Zo\xc3\xab \xe5\xbc\xa0\xe4\xb8\x89 " +
+                               std::to_string(i) +
+                               ", Computer audio unmuted, Active speaker"));
+  AxSnapshot snapshot = single_window(std::move(tiles));
+  for (int i = 0; i < 300; ++i) { // settle caches and allocator pools
+    foresight::zoom::parse_snapshot(snapshot);
+    foresight::zoom::comparison_key("Zo\xc3\xab Example");
+  }
+  size_t before = heap_in_use();
+  for (int i = 0; i < 20000; ++i) {
+    foresight::zoom::parse_snapshot(snapshot);
+    foresight::zoom::comparison_key("Zo\xc3\xab Example");
+  }
+  size_t growth = heap_in_use() - before;
+  CHECK(growth < 4 * 1024 * 1024,
+        "20000 parses grew the heap by " + std::to_string(growth) + " bytes");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -379,6 +411,7 @@ int main(int argc, char **argv) {
   check_phrase_uniqueness();
   check_utilities();
   check_bounds_and_malformed();
+  check_parse_does_not_grow_the_heap();
   std::printf("zoom_ax_parser: %d checks, %d failures (%zu scenarios, %zu "
               "locales)\n",
               checks, failures, scenarios.size(), locales.size());

@@ -5,6 +5,7 @@
 #import <Foundation/Foundation.h>
 
 #include <algorithm>
+#include <map>
 #include <optional>
 #include <string_view>
 
@@ -306,13 +307,23 @@ bool invisible_only(NSString *text) {
 
 // A tile is `<name>, <audio status>[, <active marker>][, other details]`.
 //
-// The status anchors on its LAST occurrence: Zoom writes it after the name, so
-// a name that itself contains a status phrase (of this or another locale) must
-// not truncate the real name. The research rule took the earliest phrase.
+// The status anchors on its LAST occurrence: Zoom writes it after the name. If
+// the text before it still contains any status or marker phrase, the name is
+// ambiguous and the tile is dropped (see below). The research rule took the
+// earliest phrase.
 //
 // A description with an active marker but no audio status is not accepted as a
 // tile: that structure is unvalidated and a participant named "Eve, Active
 // speaker" would otherwise become a speaker. It marks the read incomplete.
+// True when `text` contains any locale's audio status or active-speaker phrase.
+bool contains_status_text(NSString *text) {
+  for (const auto &locale : decoded_locales())
+    for (NSString *phrase : {locale.unmuted, locale.muted, locale.active})
+      if ([text rangeOfString:phrase options:kFold].location != NSNotFound)
+        return true;
+  return false;
+}
+
 std::optional<Tile> parse_tile(const AxNode &node, bool &dropped) {
   NSString *description = to_ns(node.description);
   if (!description) {
@@ -349,6 +360,17 @@ std::optional<Tile> parse_tile(const AxNode &node, bool &dropped) {
         break;
       }
     }
+    return std::nullopt;
+  }
+  // A name that itself holds status or marker text cannot be told from Zoom's
+  // own words (`Mallory, Computer audio unmuted, Active speaker, <real
+  // status>`). The tile is ambiguous: drop it, mark the read incomplete, and
+  // never use it as locale evidence. A description made only of
+  // attacker-controlled text with no real status is structurally identical to a
+  // genuine tile and cannot be detected here.
+  if (contains_status_text(
+          [description substringToIndex:best.range.location])) {
+    dropped = true;
     return std::nullopt;
   }
   Tile tile;
@@ -578,18 +600,20 @@ bool locale_supported(const std::string &localization) {
 }
 
 std::string comparison_key(const std::string &name) {
-  NSString *text = to_ns(name);
-  if (!text)
-    return name;
-  text = [text stringByFoldingWithOptions:NSCaseInsensitiveSearch locale:nil]
-             .precomposedStringWithCanonicalMapping;
-  NSMutableArray<NSString *> *words = [NSMutableArray array];
-  for (NSString *word in
-       [text componentsSeparatedByCharactersInSet:
-                 NSCharacterSet.whitespaceAndNewlineCharacterSet])
-    if (word.length > 0)
-      [words addObject:word];
-  return to_utf8([words componentsJoinedByString:@" "]);
+  @autoreleasepool {
+    NSString *text = to_ns(name);
+    if (!text)
+      return name;
+    text = [text stringByFoldingWithOptions:NSCaseInsensitiveSearch locale:nil]
+               .precomposedStringWithCanonicalMapping;
+    NSMutableArray<NSString *> *words = [NSMutableArray array];
+    for (NSString *word in
+         [text componentsSeparatedByCharactersInSet:
+                   NSCharacterSet.whitespaceAndNewlineCharacterSet])
+      if (word.length > 0)
+        [words addObject:word];
+    return to_utf8([words componentsJoinedByString:@" "]);
+  }
 }
 
 bool zoom_version_supported(const std::string &bundle_version) {
@@ -610,7 +634,8 @@ bool zoom_version_supported(const std::string &bundle_version) {
   return parts[0] == "7" && parts[1] == "2";
 }
 
-ParseResult parse_snapshot(const AxSnapshot &snapshot) {
+namespace {
+ParseResult parse_snapshot_impl(const AxSnapshot &snapshot) {
   std::vector<const AxNode *> windows;
   if (snapshot.root.role == "AXWindow") {
     windows.push_back(&snapshot.root);
@@ -656,9 +681,9 @@ ParseResult parse_snapshot(const AxSnapshot &snapshot) {
   std::optional<Compact> compact;
   if (tile_windows == 1) {
     tiles = std::move(window_tiles[chosen]);
-  } else if (!snapshot.truncated && !tile_context.truncated) {
-    // Compact inference is a fallback for snapshots that are known complete
-    // and have no ordinary tiles.
+  } else if (!snapshot.truncated && !tile_context.truncated && !dropped) {
+    // Compact inference is a fallback for snapshots that are known complete,
+    // have no ordinary tile, and dropped no tile-like node.
     size_t compact_windows = 0;
     for (size_t i = 0; i < windows.size(); ++i) {
       if (auto found = parse_compact(*windows[i])) {
@@ -685,6 +710,26 @@ ParseResult parse_snapshot(const AxSnapshot &snapshot) {
   result.window_index = static_cast<int>(chosen);
   result.window_object_id = windows[chosen]->object_id;
 
+  // One meeting has one locale. If tiles disagree, a clear majority wins and
+  // the outliers (a hostile name, a stray label) are dropped as an incomplete
+  // read; without a majority the conflict stands.
+  {
+    std::map<const DecodedLocale *, size_t> counts;
+    for (const auto &tile : tiles)
+      ++counts[tile.locale];
+    if (counts.size() > 1) {
+      for (const auto &[candidate, count] : counts)
+        if (count > tiles.size() - count) {
+          std::vector<Tile> kept;
+          for (auto &tile : tiles)
+            if (tile.locale == candidate)
+              kept.push_back(std::move(tile));
+          tiles = std::move(kept);
+          dropped = true;
+          break;
+        }
+    }
+  }
   for (size_t i = 0; i < tiles.size(); ++i) {
     note_locale(tiles[i].locale);
     // The same element twice is a traversal anomaly, not two participants.
@@ -750,6 +795,16 @@ ParseResult parse_snapshot(const AxSnapshot &snapshot) {
   result.complete = !snapshot.truncated && !tile_context.truncated &&
                     !dropped && !compact_conflict;
   return result;
+}
+
+} // namespace
+
+// The caller may have no autorelease pool (the helper's loop is plain C++);
+// without one, every folded string and UTF8String buffer would live until exit.
+ParseResult parse_snapshot(const AxSnapshot &snapshot) {
+  @autoreleasepool {
+    return parse_snapshot_impl(snapshot);
+  }
 }
 
 } // namespace foresight::zoom

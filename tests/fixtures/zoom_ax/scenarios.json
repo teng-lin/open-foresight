@@ -2258,7 +2258,7 @@
    }
   },
   {
-   "name": "final audio status anchors the name",
+   "name": "a name holding a status phrase is ambiguous",
    "truncated": false,
    "snapshot": {
     "role": "AXApplication",
@@ -2276,18 +2276,8 @@
     ]
    },
    "expected": {
-    "available": true,
-    "complete": true,
-    "locale": "en",
-    "window_index": 0,
-    "participants": [
-     {
-      "name": "Ada, Computer audio muted",
-      "self": false,
-      "audio": "unmuted"
-     }
-    ],
-    "speakers": []
+    "available": false,
+    "reason": "incomplete_read"
    }
   },
   {
@@ -2363,7 +2353,7 @@
    }
   },
   {
-   "name": "name containing another locale status phrase",
+   "name": "name holding another locale status phrase is ambiguous",
    "truncated": false,
    "snapshot": {
     "role": "AXApplication",
@@ -2381,21 +2371,12 @@
     ]
    },
    "expected": {
-    "available": true,
-    "complete": true,
-    "locale": "en",
-    "window_index": 0,
-    "participants": [
-     {
-      "name": "Zoë, 电脑音频开启",
-      "self": false
-     }
-    ],
-    "speakers": []
+    "available": false,
+    "reason": "incomplete_read"
    }
   },
   {
-   "name": "name containing its own status phrase",
+   "name": "name holding its own status phrase is ambiguous",
    "truncated": false,
    "snapshot": {
     "role": "AXApplication",
@@ -2413,27 +2394,12 @@
     ]
    },
    "expected": {
-    "available": true,
-    "complete": true,
-    "locale": "en",
-    "window_index": 0,
-    "participants": [
-     {
-      "name": "Computer audio muted",
-      "self": false
-     }
-    ],
-    "speakers": [
-     {
-      "name": "Computer audio muted",
-      "method": "participant_status",
-      "index": 0
-     }
-    ]
+    "available": false,
+    "reason": "incomplete_read"
    }
   },
   {
-   "name": "name ending in the active marker text is not active",
+   "name": "name holding the active marker text is ambiguous",
    "truncated": false,
    "snapshot": {
     "role": "AXApplication",
@@ -2451,17 +2417,8 @@
     ]
    },
    "expected": {
-    "available": true,
-    "complete": true,
-    "locale": "en",
-    "window_index": 0,
-    "participants": [
-     {
-      "name": "Mallory, Active speaker",
-      "self": false
-     }
-    ],
-    "speakers": []
+    "available": false,
+    "reason": "incomplete_read"
    }
   },
   {
@@ -2940,6 +2897,198 @@
     "window_index": 0,
     "participants": [],
     "speakers": []
+   }
+  },
+  {
+   "name": "hostile speaker name beside real tiles is dropped",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "Mallory, Computer audio unmuted, Active speaker, Computer audio muted"
+       },
+       {
+        "role": "AXTabGroup",
+        "description": "Alice Example, Computer audio unmuted"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": false,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "Alice Example",
+      "self": false
+     }
+    ],
+    "speakers": []
+   }
+  },
+  {
+   "name": "cross-locale phrase in a name cannot blank the observer",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "Zé, Áudio do computador ativado, Computer audio unmuted"
+       },
+       {
+        "role": "AXTabGroup",
+        "description": "Alice Example, Computer audio unmuted"
+       },
+       {
+        "role": "AXTabGroup",
+        "description": "Bob Example, Computer audio unmuted"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": false,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "Alice Example",
+      "self": false
+     },
+     {
+      "name": "Bob Example",
+      "self": false
+     }
+    ],
+    "speakers": []
+   }
+  },
+  {
+   "name": "a lone outlier locale is dropped by majority",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "Alice Example, Computer audio unmuted"
+       },
+       {
+        "role": "AXTabGroup",
+        "description": "Bob Example, Computer audio unmuted"
+       },
+       {
+        "role": "AXTabGroup",
+        "description": "张三，电脑音频开启"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": false,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "Alice Example",
+      "self": false
+     },
+     {
+      "name": "Bob Example",
+      "self": false
+     }
+    ],
+    "speakers": []
+   }
+  },
+  {
+   "name": "a locale tie stays a conflict",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "Alice Example, Computer audio unmuted"
+       },
+       {
+        "role": "AXTabGroup",
+        "description": "张三，电脑音频开启"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": false,
+    "reason": "locale_conflict"
+   }
+  },
+  {
+   "name": "compact is not inferred after a dropped marker-only tile",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "Mallory, Active speaker"
+       }
+      ]
+     },
+     {
+      "role": "AXWindow",
+      "object_id": 900,
+      "children": [
+       {
+        "role": "AXButton",
+        "description": "Hide thumbnail video"
+       },
+       {
+        "role": "AXButton",
+        "description": "Show active speaker video"
+       },
+       {
+        "role": "AXStaticText",
+        "value": "Talking: Alice Example"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": false,
+    "reason": "incomplete_read"
    }
   }
  ]
