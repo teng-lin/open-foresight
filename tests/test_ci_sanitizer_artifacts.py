@@ -6,6 +6,7 @@ from pathlib import Path
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -689,6 +690,44 @@ def test_ubuntu_snapshot_excludes_rolling_and_third_party_feeds(tmp_path):
         'Dir::Etc::sourcelist "/etc/apt/foresight-sanitizer.sources";\n'
         'Dir::Etc::sourceparts "-";\n'
     )
+
+
+def test_thread_restores_exact_preserved_zlib_before_unchanged_sdk_guard():
+    profiles = json.loads(
+        (sdk.ROOT / "tools/sanitizer_toolchain_profiles.json").read_text()
+    )
+    packages = dict(
+        row.split(" ", 1)
+        for row in profiles["profiles"]["thread"]["environment"]["packages"]
+    )
+    workflow = yaml.safe_load((sdk.ROOT / sdk.WORKFLOW).read_text())
+    steps = workflow["jobs"][sdk.JOBS["thread"]]["steps"]
+    restore = next(
+        step
+        for step in steps
+        if step.get("name") == "Restore the preserved TSan zlib ABI on newer runners"
+    )
+    assert shlex.split(restore["run"].replace("\\\n", "")) == [
+        "sudo",
+        "apt-get",
+        "install",
+        "-y",
+        "--allow-downgrades",
+        f"zlib1g={packages['zlib1g']}",
+        f"zlib1g-dev={packages['zlib1g-dev']}",
+    ]
+    install = next(step for step in steps if step.get("name") == sdk.INSTALL["thread"])
+    verify = next(
+        step
+        for step in steps
+        if step.get("name")
+        == "Verify the pinned thread toolchain still matches the preserved SDK"
+    )
+    assert verify["run"] == (
+        ".venv/bin/python tools/ci_sanitizer_artifacts.py verify-environment "
+        "--kind thread --prefix build/thread-sdk"
+    )
+    assert steps.index(install) < steps.index(restore) < steps.index(verify)
 
 
 @pytest.mark.parametrize(
