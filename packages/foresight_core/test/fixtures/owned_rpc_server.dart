@@ -50,10 +50,13 @@ final class OwnedRpcServer {
     for (final socket in sockets) {
       socket.destroy();
     }
-    await Future.wait([
-      ...serving,
-      for (final connection in connections) connection.terminate(),
-    ]);
-    await server.shutdown();
+    try {
+      await Future.wait([
+        ...serving,
+        for (final connection in connections) connection.terminate(),
+      ]);
+    } finally {
+      await server.shutdown();
+    }
   }
 }
