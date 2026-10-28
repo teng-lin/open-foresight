@@ -488,6 +488,63 @@ void main() {
       },
     );
 
+    group('mixed methods bound each edge by that read\'s own lag', () {
+      const label = SpeakerEvidenceMethod.compactTalkingLabel;
+      final policy = SpeakerAttributionPolicy(indicatorLagUs: {label: sec(3)});
+
+      test(
+        'a later segment\'s lagged reads can start before its first read',
+        () {
+          // Bo by status (lag 0) is speaking at 10.0 on the audio clock. Ada's
+          // label reads (lag 3 s) put her speaking from 8.0, while her first
+          // status read says 10.5: the evidence overlaps, so nobody is named.
+          reads(history, 1, 10, speakers: ['b']);
+          history.addObservation(read(10.5, speakers: ['a']));
+          reads(history, 11, 14, speakers: ['a'], method: label);
+          final inside = decide(history, audio(8.2, 9.6), policy: policy);
+          expectState(inside, SpeakerDecisionState.multiple, 'speaker_change');
+          expect(
+            decide(history, audio(2, 7.5), policy: policy).participantRef,
+            'b',
+          );
+          expect(
+            decide(history, audio(10.6, 10.9), policy: policy).participantRef,
+            'a',
+          );
+        },
+      );
+
+      test(
+        'a previous segment\'s later reads by another method still count',
+        () {
+          // Bo: one early label read, then status reads to 10.0. The status read
+          // shows Bo speaking at 10.0, so Ada\'s label-implied start at 7.5 is
+          // an overlap, not a handover that ended Bo at 7.0.
+          history.addObservation(read(1, speakers: ['b'], method: label));
+          reads(history, 1.5, 10, speakers: ['b']);
+          reads(history, 10.5, 14, speakers: ['a'], method: label);
+          final inside = decide(history, audio(8.0, 9.5), policy: policy);
+          expectState(inside, SpeakerDecisionState.multiple, 'speaker_change');
+          expect(
+            decide(history, audio(2, 7.0), policy: policy).participantRef,
+            'b',
+          );
+        },
+      );
+
+      test('a single realistic lag still names each side of a handover', () {
+        reads(history, 1, 10, speakers: ['b'], method: label);
+        reads(history, 10.5, 20, speakers: ['a'], method: label);
+        final p = SpeakerAttributionPolicy(indicatorLagUs: {label: sec(.8)});
+        expect(decide(history, audio(2, 8), policy: p).participantRef, 'b');
+        expect(decide(history, audio(11, 18), policy: p).participantRef, 'a');
+        expect(
+          decide(history, audio(9, 9.9), policy: p).state,
+          isNot(SpeakerDecisionState.named),
+        );
+      });
+    });
+
     test('lag moves the trailing edge of the last interval earlier', () {
       reads(history, 1, 5, speakers: ['a']);
       final policy = SpeakerAttributionPolicy(

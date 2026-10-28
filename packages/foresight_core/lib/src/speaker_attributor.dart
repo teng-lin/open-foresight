@@ -133,6 +133,11 @@ final class _Segment {
   final Map<String, String> names = {};
   final Set<String> selfRefs = {};
   final Set<SpeakerEvidenceMethod> methods = {};
+
+  /// Per evidence method: when its first read ended and when its last read
+  /// began. Each is adjusted by that method's own lag, so a segment that mixes
+  /// methods is bounded by the reads that actually support each edge.
+  final Map<SpeakerEvidenceMethod, int> firstEndBy = {}, lastStartBy = {};
   final int firstStartUs, firstEndUs;
   int lastStartUs, lastEndUs;
   int reads = 0;
@@ -145,6 +150,8 @@ final class _Segment {
     lastEndUs = read.readEndUs;
     for (final speaker in read.speakers) {
       methods.add(speaker.method);
+      firstEndBy.putIfAbsent(speaker.method, () => read.readEndUs);
+      lastStartBy[speaker.method] = read.readStartUs;
       if (!refs.contains(speaker.ref)) continue;
       final participant = read.participant(speaker.ref)!;
       names[speaker.ref] = participant.name;
@@ -434,17 +441,34 @@ final class SpeakerAttributor {
     return null;
   }
 
-  /// A segment's evidence may mix methods with different indicator lags. When
-  /// its first read happened is bounded by the smallest lag (the latest the
-  /// speech can have begun); when its last read still showed the speaker is
-  /// bounded by the largest (the earliest the speech can have ended).
-  int _lagMin(_Segment segment) => segment.methods.isEmpty
-      ? policy.defaultLagUs
-      : segment.methods.map(policy.lagFor).reduce(math.min);
+  /// Every read says its speaker was speaking one indicator lag before the
+  /// read, and each method has its own lag. A segment may mix methods (a
+  /// layout change switches the evidence path), so its edges come from the
+  /// reads that support them: it is known to have begun by the earliest
+  /// adjusted first read of any method, and the latest adjusted first read
+  /// bounds where it is certainly under way; it is known to have lasted until
+  /// the latest adjusted last read of any method.
+  int _startEarliest(_Segment segment) =>
+      _edge(segment.firstEndUs, segment.firstEndBy, math.min);
 
-  int _lagMax(_Segment segment) => segment.methods.isEmpty
-      ? policy.defaultLagUs
-      : segment.methods.map(policy.lagFor).reduce(math.max);
+  int _startLatest(_Segment segment) =>
+      _edge(segment.firstEndUs, segment.firstEndBy, math.max);
+
+  int _endLatest(_Segment segment) =>
+      _edge(segment.lastStartUs, segment.lastStartBy, math.max);
+
+  int _edge(
+    int fallbackUs,
+    Map<SpeakerEvidenceMethod, int> byMethod,
+    int Function(int, int) pick,
+  ) {
+    // A segment without speakers (observed silence) has no method: it uses the
+    // default lag.
+    if (byMethod.isEmpty) return fallbackUs - policy.defaultLagUs;
+    return byMethod.entries
+        .map((entry) => entry.value - policy.lagFor(entry.key))
+        .reduce(pick);
+  }
 
   /// Time regions of the history on the lag-adjusted audio clock. Boundary
   /// points are made non-decreasing, and a handover whose lagged order
@@ -459,17 +483,14 @@ final class SpeakerAttributor {
     // laterStart[i]: the earliest lag-adjusted first read among segments i..end.
     final laterStart = List<int>.filled(segments.length + 1, _positiveInfinity);
     for (var i = segments.length - 1; i >= 0; i--) {
-      laterStart[i] = math.min(
-        laterStart[i + 1],
-        segments[i].firstEndUs - _lagMin(segments[i]),
-      );
+      laterStart[i] = math.min(laterStart[i + 1], _startEarliest(segments[i]));
     }
     final regions = <_Region>[];
-    var cursor = segments.first.firstEndUs - _lagMin(segments.first);
+    var cursor = _startEarliest(segments.first);
     regions.add(_Region(_RegionType.before, _negativeInfinity, cursor));
     for (var i = 0; i < segments.length; i++) {
       final segment = segments[i];
-      final lastRead = segment.lastStartUs - _lagMax(segment);
+      final lastRead = _endLatest(segment);
       if (i == segments.length - 1) {
         final certainEnd = math.max(lastRead, cursor);
         regions
@@ -487,16 +508,17 @@ final class SpeakerAttributor {
         break;
       }
       final next = segments[i + 1];
-      final nextFirst = next.firstEndUs - _lagMin(next);
-      // A later segment with a larger lag can start earlier on the audio clock
-      // than this one ends, even beyond its immediate successor: certainty
-      // ends at the earliest such start.
+      // Certainty ends where the next segment, or any later one, may already
+      // have begun (its earliest adjusted read); the next segment is only
+      // certain once its latest adjusted first read has passed.
+      final nextEarliest = _startEarliest(next);
+      final nextLatest = _startLatest(next);
       final earliestLater = laterStart[i + 1];
       final certainEnd = math.max(
-        math.min(lastRead, math.min(nextFirst, earliestLater)),
+        math.min(lastRead, math.min(nextEarliest, earliestLater)),
         cursor,
       );
-      final windowEnd = math.max(math.max(lastRead, nextFirst), certainEnd);
+      final windowEnd = math.max(math.max(lastRead, nextLatest), certainEnd);
       regions
         ..add(
           _Region(_RegionType.certain, cursor, certainEnd, segment: segment),
