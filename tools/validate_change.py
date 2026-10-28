@@ -34,7 +34,8 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+import contextlib
 import fnmatch
 import hashlib
 import io
@@ -157,6 +158,7 @@ def build_change_set(
     dirty_paths: Sequence[str] = (),
     excluded_classes: Sequence[str] = (),
     dirty_unknown: str | None = None,
+    excluded_dirty_paths: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Assemble the change set and its content-bound identity from classified paths.
 
@@ -172,9 +174,15 @@ def build_change_set(
         normalized = normalize_path(path)
         content, state = (None, "invalid-path") if normalized is None else _content(root / normalized)
         entries.append({"path": path, "classes": sorted(classes[path]), "sha256": content, "content": state})
+    # Every dirty path is bound into the identity, even one outside the selected classes.
+    dirty_state = []
+    for path in sorted(dirty_paths):
+        normalized = normalize_path(path)
+        content, state = (None, "invalid-path") if normalized is None else _content(root / normalized)
+        dirty_state.append([path, content, state])
     identity = hashlib.sha256(
         json.dumps(
-            {"mode": mode, "revision": revision, "merge_base": merge_base, "entries": entries},
+            {"mode": mode, "revision": revision, "merge_base": merge_base, "entries": entries, "dirty": dirty_state},
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
@@ -191,6 +199,7 @@ def build_change_set(
         "dirty_paths": sorted(dirty_paths),
         "dirty_unknown": dirty_unknown,
         "excluded_classes": sorted(excluded_classes),
+        "excluded_dirty_paths": sorted(excluded_dirty_paths),
         "unreadable_paths": [entry["path"] for entry in entries if entry["content"] == "unreadable"],
         "counts": {name: len(paths_by_class.get(name, ())) for name in CLASSES},
     }
@@ -238,6 +247,7 @@ def collect_git(root: Path, base: str | None, include: Sequence[str] = CLASSES) 
         dirty=bool(dirty_paths),
         dirty_paths=dirty_paths,
         excluded_classes=[name for name in CLASSES if name not in include],
+        excluded_dirty_paths=sorted({path for name, found in everything.items() if name not in include for path in found}),
     )
 
 
@@ -425,7 +435,10 @@ def ci_selection_report(paths: Sequence[str], inventory: Mapping[str, Any], root
         candidate = {"error": f"{type(exception).__name__}: {exception}"}
         proposed = dict.fromkeys(ci_changes.GATES, True)
         error = candidate["error"]
-    effective = {gate: bool(authoritative[gate] or proposed[gate]) for gate in ci_changes.GATES}
+    union = {gate: bool(authoritative[gate] or proposed[gate]) for gate in ci_changes.GATES}
+    # Prerequisites and mandatory in-run consumers (for example linux-document-imports
+    # with linux-build) are selected CI work too; the closure only adds gates.
+    effective = ci_selection.closure(union)
     jobs = set(ci_selection.required_jobs(effective)) | set(candidate.get("required_jobs") or ())
     job_map = inventory["ci_job_map"]
     unmapped = sorted(job for job in jobs if job not in effective and job not in job_map)
@@ -796,6 +809,80 @@ def unexecuted_platforms(plan: Mapping[str, Any], checks: Sequence[Mapping[str, 
     return sorted(set(plan["required_platforms"]) - executed)
 
 
+class SignalInterrupt(KeyboardInterrupt):
+    """A SIGTERM or SIGHUP routed through the same path as Ctrl-C."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(f"signal {signum}")
+        self.signum = signum
+
+
+@contextlib.contextmanager
+def interrupt_signals() -> Iterator[None]:
+    """Turn SIGTERM and SIGHUP into SignalInterrupt for the duration; restore afterwards."""
+    previous: dict[int, Any] = {}
+
+    def handle(signum: int, frame: Any) -> None:
+        raise SignalInterrupt(signum)
+
+    try:
+        for number in (signal.SIGTERM, signal.SIGHUP):
+            previous[number] = signal.signal(number, handle)
+    except ValueError:  # not the main thread: signals cannot be routed
+        pass
+    try:
+        yield
+    finally:
+        for restored, handler in previous.items():
+            signal.signal(restored, handler)
+
+
+@contextlib.contextmanager
+def deferred_signals() -> Iterator[list[int]]:
+    """Hold SIGINT, SIGTERM and SIGHUP while results are published; yield those received."""
+    received: list[int] = []
+    previous: dict[int, Any] = {}
+
+    def record(signum: int, frame: Any) -> None:
+        received.append(signum)
+
+    try:
+        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            previous[number] = signal.signal(number, record)
+    except ValueError:
+        pass
+    try:
+        yield received
+    finally:
+        for restored, handler in previous.items():
+            signal.signal(restored, handler)
+
+
+def _exited(process: subprocess.Popen[bytes], timeout: float) -> bool:
+    """Whether the leader has exited, without reaping it.
+
+    An unreaped leader keeps its process-group id reserved, so a later killpg
+    cannot hit an unrelated group that reused the number.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        if hasattr(os, "waitid"):
+            try:
+                if os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT | os.WNOHANG) is not None:
+                    return True
+            except ChildProcessError:
+                return True  # already reaped by someone else
+        elif process.poll() is not None:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
+
+
+class _Unkillable(Exception):
+    """The entrypoint survived SIGKILL."""
+
+
 def run_streaming(
     argv: Sequence[str],
     *,
@@ -810,8 +897,10 @@ def run_streaming(
     The deadline bounds the entrypoint itself, not its output pipe: a descendant that
     escaped the process group and still holds the pipe cannot extend the run. It is
     reported as `leaked_descendants`, separately from `timed_out`, which is set only
-    when the entrypoint was still running at the deadline. The process group is
-    killed on every path, including interruption.
+    when the entrypoint was still running at the deadline. The leader is reaped last,
+    so the group is signalled only while its id is still reserved, and the group is
+    killed on every path, including interruption. An entrypoint that survives
+    SIGKILL is a failed outcome, not an exception.
     """
     stream = stream or sys.stdout
     started = time.monotonic()
@@ -832,6 +921,7 @@ def run_streaming(
             outcome.update(error=f"cannot start the entrypoint: {type(error).__name__}: {error}", seconds=0.0)
             return outcome
         problems: list[str] = []
+        closing = threading.Event()
 
         def pump() -> None:
             reader = cast(io.BufferedReader, process.stdout)
@@ -843,13 +933,13 @@ def run_streaming(
                     return
                 if not block:
                     return
-                if not problems:
+                if not problems and not closing.is_set():
                     try:
                         log.write(block)
                         log.flush()
-                    except OSError as error:
+                    except (OSError, ValueError) as error:  # ValueError: the log was closed under a leaked reader
                         problems.append(f"log write failed: {type(error).__name__}: {error}")
-                if terminal:
+                if terminal and not closing.is_set():
                     try:
                         stream.write(block.decode(errors="replace"))
                         stream.flush()
@@ -858,30 +948,34 @@ def run_streaming(
 
         thread = threading.Thread(target=pump, daemon=True)
         thread.start()
+        reaped = False
         try:
-            try:
-                outcome["returncode"] = process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
+            if not _exited(process, timeout):
                 outcome["timed_out"] = True
                 _signal_group(process, signal.SIGTERM)
-                try:
-                    outcome["returncode"] = process.wait(timeout=KILL_GRACE_SECONDS)
-                except subprocess.TimeoutExpired:
+                if not _exited(process, KILL_GRACE_SECONDS):
                     _signal_group(process, signal.SIGKILL)
-                    outcome["returncode"] = process.wait(timeout=KILL_GRACE_SECONDS)
+                    if not _exited(process, KILL_GRACE_SECONDS):
+                        raise _Unkillable
             thread.join(timeout=READER_GRACE_SECONDS)
             if thread.is_alive():
                 _signal_group(process, signal.SIGKILL)
                 thread.join(timeout=READER_GRACE_SECONDS)
                 outcome["leaked_descendants"] = thread.is_alive()
+            _signal_group(process, signal.SIGKILL)  # survivors in the group, while the id is reserved
+            outcome["returncode"] = process.wait(timeout=KILL_GRACE_SECONDS)
+            reaped = True
+        except _Unkillable:
+            outcome["error"] = "the entrypoint did not exit after SIGKILL"
         finally:
-            _signal_group(process, signal.SIGKILL)
-            if process.poll() is None:
+            closing.set()
+            if not reaped:
+                _signal_group(process, signal.SIGKILL)
                 try:
-                    process.wait(timeout=KILL_GRACE_SECONDS)
+                    outcome["returncode"] = process.wait(timeout=KILL_GRACE_SECONDS)
                 except subprocess.TimeoutExpired:
                     pass
-    if problems:
+    if problems and not outcome["error"]:
         outcome["error"] = problems[0]
     outcome["seconds"] = round(time.monotonic() - started, 3)
     return outcome
@@ -941,8 +1035,9 @@ def execute(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Call each selected, runnable entrypoint; record every other check honestly.
 
-    An interruption or an I/O failure is recorded as a failed check and the rest of
-    the runnable checks as not run; it never loses the results so far.
+    An interruption (Ctrl-C, SIGTERM or SIGHUP) while a check is being prepared, run
+    or its JUnit read, or an I/O failure, is recorded as a failed check and the rest
+    of the runnable checks as not run, keeping the results so far.
     """
     runner = runner or run_streaming
     env, temp_policy = child_environment(environ, output)
@@ -984,42 +1079,48 @@ def execute(
             if blocked:
                 result.update(status="not-run", reason=f"prerequisite {blocked[0]} did not pass in this run")
             else:
-                for item in result["reuse"]:
-                    # The plan-time observation can be stale by now; record what is there at execution.
-                    item["at_execution"] = {
-                        key: observe_reuse({"path": item["path"], "digest_files": item.get("digest_files", [])})[key]
-                        for key in ("present", "sha256", "digest_skipped")
-                    }
                 started = time.time()
+                log_path = logs / f"{check['id']}.log"
                 try:
-                    outcome = runner(
-                        check["entrypoint"]["argv"],
-                        cwd=Path(check["entrypoint"]["cwd"]),
-                        env=env,
-                        log_path=logs / f"{check['id']}.log",
-                        timeout=check["timeout_seconds"],
-                        **({"stream": stream} if stream is not None else {}),
+                    for item in result["reuse"]:
+                        # The plan-time observation can be stale by now; record what is there at execution.
+                        item["at_execution"] = {
+                            key: observe_reuse({"path": item["path"], "digest_files": item.get("digest_files", [])})[key]
+                            for key in ("present", "sha256", "digest_skipped")
+                        }
+                    try:
+                        outcome = runner(
+                            check["entrypoint"]["argv"],
+                            cwd=Path(check["entrypoint"]["cwd"]),
+                            env=env,
+                            log_path=log_path,
+                            timeout=check["timeout_seconds"],
+                            **({"stream": stream} if stream is not None else {}),
+                        )
+                    except OSError as error:
+                        outcome = {"returncode": None, "timed_out": False, "leaked_descendants": False, "error": f"could not run the entrypoint: {type(error).__name__}: {error}", "seconds": 0.0, "log": None}
+                    status, reason = _outcome_status(outcome)
+                    result.update(
+                        status=status,
+                        reason=reason,
+                        returncode=outcome["returncode"],
+                        timed_out=bool(outcome.get("timed_out")),
+                        leaked_descendants=bool(outcome.get("leaked_descendants")),
+                        seconds=outcome["seconds"],
+                        log=outcome["log"],
+                        junit=[validation_evidence.junit_counts(Path(item), started) for item in check.get("junit", ())],
                     )
-                except KeyboardInterrupt:
+                    if status == "passed" and (problems := validation_evidence.junit_problems(result["junit"])):
+                        # Declared JUnit evidence must exist, be fresh and show executed passing tests.
+                        result.update(status="failed", reason="JUnit evidence does not support a pass: " + "; ".join(problems))
+                except KeyboardInterrupt as signalled:
+                    # Ctrl-C, SIGTERM or SIGHUP during reuse observation, the entrypoint or JUnit parsing.
                     interrupted = True
-                    outcome = {"returncode": None, "timed_out": False, "leaked_descendants": False, "error": "interrupted", "seconds": round(time.time() - started, 3), "log": str(logs / f"{check['id']}.log")}
-                    result["interrupted"] = True
-                except OSError as error:
-                    outcome = {"returncode": None, "timed_out": False, "leaked_descendants": False, "error": f"could not run the entrypoint: {type(error).__name__}: {error}", "seconds": 0.0, "log": None}
-                status, reason = _outcome_status(outcome)
-                result.update(
-                    status=status,
-                    reason=reason,
-                    returncode=outcome["returncode"],
-                    timed_out=bool(outcome.get("timed_out")),
-                    leaked_descendants=bool(outcome.get("leaked_descendants")),
-                    seconds=outcome["seconds"],
-                    log=outcome["log"],
-                    junit=[validation_evidence.junit_counts(Path(item), started) for item in check.get("junit", ())],
-                )
-                if status == "passed" and (problems := validation_evidence.junit_problems(result["junit"])):
-                    # Declared JUnit evidence must exist, be fresh and show executed passing tests.
-                    result.update(status="failed", reason="JUnit evidence does not support a pass: " + "; ".join(problems))
+                    result.update(
+                        status="failed", reason="interrupted", interrupted=True,
+                        interrupt_signal=getattr(signalled, "signum", int(signal.SIGINT)),
+                        log=str(log_path) if log_path.exists() else None, seconds=round(time.time() - started, 3),
+                    )
         outcomes[check["id"]] = result["status"]
         results[check["id"]] = result
     for result in results.values():
@@ -1128,6 +1229,23 @@ def read_files(source: str) -> list[str]:
 
 
 def main(argv: Sequence[str] | None = None, root: Path = ROOT, environ: Mapping[str, str] | None = None) -> int:
+    """Run the planner. SIGTERM and SIGHUP are routed like Ctrl-C for the whole call.
+
+    An interruption while checks run is recorded (kill the entrypoint's group, write
+    the evidence, exit 128 plus the signal number). Once results exist they are
+    published with signals held. An interruption during argument handling, planning
+    or the digesting of reused outputs for the plan happens before any check ran: it
+    exits the same way but writes no evidence, because there is nothing to record.
+    """
+    with interrupt_signals():
+        try:
+            return _main(argv, root, environ)
+        except KeyboardInterrupt as signalled:
+            print("validate_change: interrupted before any result existed; no evidence was written", file=sys.stderr)
+            return 128 + getattr(signalled, "signum", int(signal.SIGINT))
+
+
+def _main(argv: Sequence[str] | None, root: Path, environ: Mapping[str, str] | None) -> int:
     environ = os.environ if environ is None else environ
     raw_arguments = list(sys.argv[1:] if argv is None else argv)
     arguments = parse_arguments(raw_arguments)
@@ -1178,6 +1296,10 @@ def main(argv: Sequence[str] | None = None, root: Path = ROOT, environ: Mapping[
     if plan["empty_change_set"] and not arguments.baseline_only:
         incomplete.append("empty change set: nothing was selected beyond the baseline" + (" and the requested boundaries" if arguments.boundary else "") + "; pass --baseline-only to validate only that")
     change = plan["change_set"]
+    if change["excluded_dirty_paths"]:
+        incomplete.append(
+            "dirty paths in excluded classes were not selected: " + ", ".join(change["excluded_dirty_paths"][:LIST_LIMIT])
+        )
     if change["unreadable_paths"]:
         incomplete.append("change-set content was unreadable for: " + ", ".join(change["unreadable_paths"][:LIST_LIMIT]))
 
@@ -1193,56 +1315,57 @@ def main(argv: Sequence[str] | None = None, root: Path = ROOT, environ: Mapping[
         checks = results
     else:
         checks = [dict(check, junit=[]) for check in plan["checks"]]
-    interrupted = any(check.get("interrupted") for check in checks)
-    unexecuted = [] if mode == "plan" else unexecuted_platforms(plan, checks, context.platform)
-    summary = validation_evidence.build_summary(
-        mode=mode,
-        source={key: change[key] for key in ("mode", "revision", "base", "merge_base", "identity_sha256", "dirty", "dirty_paths", "dirty_unknown", "excluded_classes", "unreadable_paths", "counts")}
-        | {"revision_declared": change.get("revision_declared"), "path_count": len(change["paths"])},
-        invocation={
-            "entrypoint": "tools.validate_change",
-            "argv": raw_arguments,
-            "cwd": str(Path.cwd()),
-            "executable": sys.executable,
-            "root": str(root),
-            "started_epoch": round(started_utc, 3),
-            "inventory_verified": inventory_verified,
-            "baseline_only": arguments.baseline_only,
-        },
-        selection={
-            "conservative": plan["conservative"],
-            "conservative_reasons": plan["conservative_reasons"],
-            "ci": plan["ci_selection"]["effective"],
-            "ci_required_jobs": plan["ci_selection"]["required_jobs"],
-            "sanitizers": plan["ci_selection"]["sanitizers"],
-            "boundaries": [boundary["id"] for boundary in plan["boundaries"]],
-            "required_platforms": plan["required_platforms"],
-        },
-        checks=[_evidence_check(check) for check in checks],
-        unexecuted_platforms=unexecuted,
-        reproduction=reproduction_lines(plan, raw_arguments),
-        environ=environ,
-        tools=validation_evidence.observe_tools() if mode == "run" else None,
-        incomplete_reasons=incomplete,
-    )
-    summary["temp_root_policy"] = temp_policy
-    # Results first: a failure to publish evidence must not lose a completed run's output.
-    if arguments.json:
-        print(json.dumps({"plan": plan, "evidence": summary}, indent=2, sort_keys=True))
-    else:
-        print(render(plan, results=results or None, summary=summary if mode == "run" else None))
-    written = True
-    if output is not None:
-        try:
-            (output / "plan.json").write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
-            validation_evidence.write_summary(summary, output / "evidence.json")
-            if not arguments.json:
-                print(f"Evidence: {output / 'evidence.json'}")
-        except (OSError, ValueError) as error:
-            written = False
-            print(f"validate_change: the evidence could not be written: {type(error).__name__}: {error}", file=sys.stderr)
-    if interrupted:
-        return 130
+    with deferred_signals() as received:
+        unexecuted = [] if mode == "plan" else unexecuted_platforms(plan, checks, context.platform)
+        summary = validation_evidence.build_summary(
+            mode=mode,
+            source={key: change[key] for key in ("mode", "revision", "base", "merge_base", "identity_sha256", "dirty", "dirty_paths", "dirty_unknown", "excluded_classes", "excluded_dirty_paths", "unreadable_paths", "counts")}
+            | {"revision_declared": change.get("revision_declared"), "path_count": len(change["paths"])},
+            invocation={
+                "entrypoint": "tools.validate_change",
+                "argv": raw_arguments,
+                "cwd": str(Path.cwd()),
+                "executable": sys.executable,
+                "root": str(root),
+                "started_epoch": round(started_utc, 3),
+                "inventory_verified": inventory_verified,
+                "baseline_only": arguments.baseline_only,
+            },
+            selection={
+                "conservative": plan["conservative"],
+                "conservative_reasons": plan["conservative_reasons"],
+                "ci": plan["ci_selection"]["effective"],
+                "ci_required_jobs": plan["ci_selection"]["required_jobs"],
+                "sanitizers": plan["ci_selection"]["sanitizers"],
+                "boundaries": [boundary["id"] for boundary in plan["boundaries"]],
+                "required_platforms": plan["required_platforms"],
+            },
+            checks=[_evidence_check(check) for check in checks],
+            unexecuted_platforms=unexecuted,
+            reproduction=reproduction_lines(plan, raw_arguments),
+            environ=environ,
+            tools=validation_evidence.observe_tools() if mode == "run" else None,
+            incomplete_reasons=incomplete,
+        )
+        summary["temp_root_policy"] = temp_policy
+        # Results first: a failure to publish evidence must not lose a completed run's output.
+        if arguments.json:
+            print(json.dumps({"plan": plan, "evidence": summary}, indent=2, sort_keys=True))
+        else:
+            print(render(plan, results=results or None, summary=summary if mode == "run" else None))
+        written = True
+        if output is not None:
+            try:
+                (output / "plan.json").write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
+                validation_evidence.write_summary(summary, output / "evidence.json")
+                if not arguments.json:
+                    print(f"Evidence: {output / 'evidence.json'}")
+            except (OSError, ValueError) as error:
+                written = False
+                print(f"validate_change: the evidence could not be written: {type(error).__name__}: {error}", file=sys.stderr)
+    signals = [number for check in checks if (number := check.get("interrupt_signal"))] + received
+    if signals:
+        return 128 + signals[0]
     if mode == "plan":
         return 0 if written else 2
     if summary["status"] == "failed":

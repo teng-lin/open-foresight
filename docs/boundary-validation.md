@@ -48,7 +48,7 @@ merge base), so a dirty tree is never confused with its `HEAD`.
 
 1. The CI selectors are reused: `ci_changes.select_gates` (authoritative required
    CI) and `ci_selection.select` (observe-only candidate). Their union is
-   reported, each selected CI gate is mapped to its local equivalent in the
+   reported after `ci_selection.closure` adds prerequisites and mandatory in-run consumers, each selected CI gate is mapped to its local equivalent in the
    inventory's `ci_gate_map`, and a selector failure broadens rather than aborts.
    The other required jobs from `ci_selection.required_jobs` (the CPU, audio and
    DEB acceptance jobs and the Arch/native job) map through `ci_job_map` to a
@@ -128,13 +128,22 @@ failures or errors. An empty change set (no `--base` on a clean tree, or
 `--baseline-only`; `--files-from` rejects empty input. `--skip-inventory-check`,
 unreadable change content and a non-compliant temp root also prevent a full
 claim (the last is refused with exit 2). `dirty` is always computed from the
-staged, unstaged and untracked classes even when `--include` narrows the paths,
-and is `null` for an explicit file list, which never inspects the tree. A source
+staged, unstaged and untracked classes even when `--include` narrows the paths;
+the change identity binds every dirty path, and a dirty path in an excluded class
+is an incomplete reason. It is `null` for an explicit file list, which never
+inspects the tree. A source
 export inside another Git checkout is refused; pass `--files`.
 
 Exit status is 0 only for a full pass (or a plan), 1 for a failure, 2 for invalid
 input, an inconsistent inventory or unwritable evidence, 3 for a partial run and
-130 after an interruption (the evidence is still written). `--allow-partial`
+128 plus the signal number after an interruption (130 for Ctrl-C, 143 for SIGTERM,
+129 for SIGHUP). SIGTERM and SIGHUP are routed like Ctrl-C: the entrypoint's
+process group is killed, the results so far and the evidence are written, and
+the signal handlers are restored. That holds while checks run, including their
+reuse observation and JUnit parsing, and while results are published (signals are
+held until the evidence is written). An interruption during argument handling or
+planning happens before any check ran, so it exits the same way but writes no
+evidence. `--allow-partial`
 turns 3 into 0 without changing the recorded status. A missing prerequisite or
 unexecuted platform cannot produce a full-validation claim.
 

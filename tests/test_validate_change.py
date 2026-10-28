@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import threading
@@ -888,7 +889,19 @@ def test_documentation_does_not_select_sanitizers_and_a_broken_selector_does(mon
 # -------------------------------------------------- review fixes: empty changes
 
 
+def clean_empty_checkout(monkeypatch):
+    """A clean checkout with nothing changed, independent of this working tree's state."""
+    monkeypatch.setattr(
+        vc, "collect_git",
+        lambda root, base, include: vc.build_change_set(
+            root, mode="git", paths_by_class={}, revision="abc123", base=base, merge_base=None,
+            dirty=False, dirty_paths=[], excluded_classes=[name for name in vc.CLASSES if name not in include],
+        ),
+    )
+
+
 def test_an_empty_change_set_is_partial_unless_the_baseline_is_explicit(private_output, accepting_junit, monkeypatch, tmp_path, capsys):
+    clean_empty_checkout(monkeypatch)
     monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
     code = vc.main(["--include", "committed", "--output", str(private_output)], root=ROOT, environ={})
     summary = json.loads((private_output / "evidence.json").read_text())
@@ -904,6 +917,7 @@ def test_an_empty_change_set_is_partial_unless_the_baseline_is_explicit(private_
 
 
 def test_boundary_request_alone_is_partial_with_a_nothing_selected_reason(private_output, accepting_junit, monkeypatch):
+    clean_empty_checkout(monkeypatch)
     monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
     code = vc.main(["--boundary", "service-helper", "--include", "committed", "--allow-partial", "--output", str(private_output)], root=ROOT, environ={})
     summary = json.loads((private_output / "evidence.json").read_text())
@@ -1366,3 +1380,311 @@ def test_export_run_mode_and_inventory_guard_never_call_git(tmp_path, monkeypatc
     assert summary["status"] == "full-validation-passed" and summary["source"]["mode"] == "explicit"
     assert summary["source"]["revision"] == "fixture-rev" and summary["source"]["dirty"] is None
     assert summary["tools"]["git"] is None
+
+
+# --------------------------------------------- third review: include and identity
+
+
+def dirty_branch_repo(tmp_path, monkeypatch):
+    """A branch that commits a documentation change while native/h.h is dirty."""
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    repo = tmp_path / "dirty-repo"
+    repo.mkdir()
+
+    def git(*arguments):
+        subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *arguments],
+            check=True, capture_output=True, timeout=60,
+        )
+
+    git("init", "-q", "-b", "main")
+    (repo / "native").mkdir()
+    (repo / "native/h.h").write_text("int a;\n")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    git("checkout", "-qb", "feature")
+    (repo / "docs").mkdir()
+    (repo / "docs/note.md").write_text("note\n")
+    git("add", ".")
+    git("commit", "-qm", "docs")
+    return repo
+
+
+def test_include_cannot_hide_a_dirty_path_from_the_identity_or_the_verdict(tmp_path, monkeypatch, private_output, accepting_junit):
+    repo = dirty_branch_repo(tmp_path, monkeypatch)
+    clean = vc.collect_git(repo, "main", include=["committed"])
+    (repo / "native/h.h").write_text("int a; int b;\n")  # unstaged, outside the selected class
+    dirty = vc.collect_git(repo, "main", include=["committed"])
+    assert clean["paths"] == dirty["paths"] == ["docs/note.md"]
+    assert clean["identity_sha256"] != dirty["identity_sha256"]
+    assert dirty["dirty"] is True and dirty["excluded_dirty_paths"] == ["native/h.h"] and clean["excluded_dirty_paths"] == []
+    (repo / "native/h.h").write_text("int a; int c;\n")
+    assert vc.collect_git(repo, "main", include=["committed"])["identity_sha256"] != dirty["identity_sha256"]
+    # The full selection sees the file, so nothing is hidden.
+    assert vc.collect_git(repo, "main")["excluded_dirty_paths"] == []
+
+    real = vc.collect_git
+    monkeypatch.setattr(vc, "collect_git", lambda root, base, include: real(repo, base, include))
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
+    code = vc.main(["--base", "main", "--include", "committed", "--output", str(private_output)], root=ROOT, environ={})
+    summary = json.loads((private_output / "evidence.json").read_text())
+    assert code == 3 and summary["status"] == "partial"
+    assert any("dirty paths in excluded classes" in reason and "native/h.h" in reason for reason in summary["not_full_validation_reasons"])
+    assert summary["source"]["excluded_dirty_paths"] == ["native/h.h"]
+
+
+# ---------------------------------------------------- third review: CI closure
+
+
+def test_a_gate_added_only_by_the_ci_closure_selects_its_local_equivalent(monkeypatch):
+    only_packaging = dict.fromkeys(vc.ci_changes.GATES, False) | {"packaging": True}
+    monkeypatch.setattr(vc.ci_changes, "select_gates", lambda paths: dict.fromkeys(vc.ci_changes.GATES, False))
+    monkeypatch.setattr(vc.ci_selection, "select", lambda paths, **k: {"selection": only_packaging, "sanitizers": False, "required_jobs": []})
+    plan = plan_for(["docs/testing.md"], host="linux")
+    ci = plan["ci_selection"]
+    assert ci["authoritative"]["linux-document-imports"] is False
+    assert ci["effective"]["linux-document-imports"] is True and ci["effective"]["linux-build"] is True
+    checks = {check["id"]: check for check in plan["checks"]}
+    assert "document-sandbox" in checks and "platform-contracts" in checks
+    assert any(entry["rule"] == "ci:linux-document-imports" for entry in checks["document-sandbox"]["why"])
+
+
+def test_the_dmg_contract_edit_reaches_the_document_sandbox_through_required_jobs():
+    plan = plan_for(["tests/test_dmg_contract.py"], host="linux")
+    assert plan["ci_selection"]["effective"]["linux-document-imports"] is True
+    assert "document-sandbox" in selected(plan)[1]
+
+
+# ----------------------------------------------------------- third review: signals
+
+
+def test_sigterm_and_sighup_are_routed_like_ctrl_c_and_handlers_are_restored():
+    before = {number: signal.getsignal(number) for number in (signal.SIGTERM, signal.SIGHUP)}
+    with vc.interrupt_signals():
+        for number in (signal.SIGTERM, signal.SIGHUP):
+            with pytest.raises(vc.SignalInterrupt) as raised:
+                os.kill(os.getpid(), number)
+                time.sleep(1)
+            assert raised.value.signum == number
+    assert {number: signal.getsignal(number) for number in before} == before
+
+
+def test_deferred_signals_hold_every_interrupt_until_publication_finishes():
+    before = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    with vc.deferred_signals() as received:
+        for number in (signal.SIGINT, signal.SIGTERM):
+            os.kill(os.getpid(), number)
+        time.sleep(0.2)
+        assert received == [signal.SIGINT, signal.SIGTERM]
+    assert {number: signal.getsignal(number) for number in before} == before
+
+
+def test_signal_routing_is_skipped_outside_the_main_thread():
+    problems = []
+
+    def attempt():
+        try:
+            with vc.interrupt_signals(), vc.deferred_signals():
+                pass
+        except Exception as error:  # noqa: BLE001
+            problems.append(error)
+
+    thread = threading.Thread(target=attempt)
+    thread.start()
+    thread.join(timeout=30)
+    assert problems == []
+
+
+@pytest.mark.parametrize(("number", "code"), [(signal.SIGTERM, 143), (signal.SIGHUP, 129), (signal.SIGINT, 130)])
+def test_a_signalled_run_records_the_interruption_and_exits_with_128_plus_the_signal(private_output, accepting_junit, monkeypatch, number, code):
+    def interrupted(argv, **keywords):
+        raise vc.SignalInterrupt(number) if number != signal.SIGINT else KeyboardInterrupt
+
+    monkeypatch.setattr(vc, "run_streaming", interrupted)
+    assert vc.main(["--files", "docs/testing.md", "--output", str(private_output)], root=ROOT, environ={}) == code
+    summary = json.loads((private_output / "evidence.json").read_text())
+    assert summary["status"] == "failed" and summary["checks"][0]["interrupted"] is True
+
+
+def test_a_signal_while_publishing_does_not_lose_the_evidence(private_output, accepting_junit, monkeypatch):
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
+    real = vc.validation_evidence.write_summary
+
+    def signalled(summary, destination):
+        os.kill(os.getpid(), signal.SIGTERM)
+        time.sleep(0.2)
+        return real(summary, destination)
+
+    monkeypatch.setattr(vc.validation_evidence, "write_summary", signalled)
+    code = vc.main(["--files", "docs/testing.md", "--output", str(private_output)], root=ROOT, environ={})
+    assert code == 143 and json.loads((private_output / "evidence.json").read_text())["status"] == "full-validation-passed"
+
+
+def test_a_signal_during_reuse_observation_is_recorded_and_the_rest_is_not_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(vc.shutil, "which", lambda name: f"/usr/bin/{name}")
+    plan = plan_for(["native/foresight_native.h"], environ={"FORESIGHT_BUILD_DIR": str(tmp_path / "b")}, host="linux", include_long=True)
+    plan["checks"] = [c for c in plan["checks"] if c["id"] in ("native-stage", "core-stage")]
+    output = tmp_path / "o"
+    output.mkdir(mode=0o700)
+    monkeypatch.setattr(vc.validation_evidence, "SHORT_TEMP_LIMIT", 500)
+    monkeypatch.setattr(vc, "observe_reuse", lambda record: (_ for _ in ()).throw(vc.SignalInterrupt(signal.SIGTERM)))
+    results, _ = vc.execute(plan, output, {}, include_long=True, runner=fake_runner({}))
+    assert [r["status"] for r in results] == ["failed", "not-run"]
+    assert results[0]["interrupt_signal"] == signal.SIGTERM and results[1]["reason"] == "the run was interrupted"
+
+
+def test_a_signal_during_planning_exits_without_evidence(monkeypatch, capsys):
+    def signalled(*a, **k):
+        os.kill(os.getpid(), signal.SIGHUP)
+        time.sleep(1)
+
+    monkeypatch.setattr(vc, "build_plan", signalled)
+    assert vc.main(["--files", "docs/testing.md", "--plan", "--skip-inventory-check"], root=ROOT, environ={}) == 129
+    assert "no evidence was written" in capsys.readouterr().err
+
+
+WRAPPER = (
+    "import sys\n"
+    "from pathlib import Path\n"
+    "from tools import check_local_validation as c, validate_change as v, validation_evidence as e\n"
+    "c.TEMP_PARENT = Path(sys.argv[1]).resolve()\n"
+    "e.SHORT_TEMP_LIMIT = 500\n"
+    "raise SystemExit(v.main(sys.argv[2:], root=Path.cwd()))\n"
+)
+HANG = (
+    "import os, sys, time\n"
+    "open(os.environ['HANG_PID_FILE'], 'w').write(str(os.getpid()))\n"
+    "print('entrypoint started', flush=True)\n"
+    "time.sleep(600)\n"
+)
+
+
+@pytest.mark.parametrize("number", [signal.SIGTERM, signal.SIGHUP])
+def test_end_to_end_a_signalled_planner_leaves_no_entrypoint_and_writes_evidence(tmp_path, number):
+    export = export_tree(tmp_path / "tree")
+    inventory_path = export / "tools/boundary_inventory.json"
+    data = json.loads(inventory_path.read_text())
+    data["gates"]["shared-guards"].update(argv=["{python}", "tools/hang_fixture.py"], requires=[])
+    inventory_path.write_text(json.dumps(data))
+    (export / "tools/hang_fixture.py").write_text(HANG)
+    pid_file = tmp_path / "entrypoint.pid"
+    process = subprocess.Popen(
+        [sys.executable, "-c", WRAPPER, str(tmp_path), "--files", "docs/testing.md", "--skip-inventory-check", "--output", str(tmp_path / "evidence")],
+        cwd=export, env={"PATH": os.environ["PATH"], "HANG_PID_FILE": str(pid_file)}, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    try:
+        deadline = time.monotonic() + 60
+        while not pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert pid_file.exists(), "the entrypoint never started"
+        time.sleep(0.3)
+        entrypoint = int(pid_file.read_text())
+        assert alive(entrypoint)
+        process.send_signal(number)
+        output, _ = process.communicate(timeout=60)
+    finally:
+        if process.poll() is None:
+            process.kill()
+    assert process.returncode == 128 + number
+    deadline = time.monotonic() + 10
+    while alive(entrypoint) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not alive(entrypoint), output
+    summary = json.loads((tmp_path / "evidence/evidence.json").read_text())
+    assert summary["status"] == "failed" and summary["checks"][0]["interrupted"] is True
+    assert summary["checks"][0]["reason"] == "interrupted"
+
+
+# ------------------------------------------------ third review: runner internals
+
+
+def test_a_sigkill_that_does_not_take_effect_is_a_failed_outcome_not_a_traceback(tmp_path, monkeypatch):
+    started = []
+    real_popen = vc.subprocess.Popen
+
+    def recording(*a, **k):
+        process = real_popen(*a, **k)
+        started.append(process)
+        return process
+
+    monkeypatch.setattr(vc.subprocess, "Popen", recording)
+    monkeypatch.setattr(vc, "_signal_group", lambda process, number: None)
+    monkeypatch.setattr(vc, "KILL_GRACE_SECONDS", 0.2)
+    try:
+        result = vc.run_streaming([sys.executable, "-c", "import time; time.sleep(60)"], cwd=tmp_path, env=os.environ, log_path=tmp_path / "log", timeout=1, stream=io.StringIO())
+        assert result["timed_out"] is True and result["returncode"] is None
+        assert result["error"] == "the entrypoint did not exit after SIGKILL"
+        assert vc._outcome_status(result) == ("failed", "the entrypoint did not exit after SIGKILL")
+    finally:
+        for process in started:
+            process.kill()
+            process.wait(timeout=30)
+
+
+def test_the_group_is_signalled_only_while_its_leader_is_unreaped(tmp_path, monkeypatch):
+    seen = []
+    real = vc._signal_group
+
+    def spy(process, number):
+        seen.append(process.returncode)  # None while the leader is a pinned, unreaped zombie
+        real(process, number)
+
+    monkeypatch.setattr(vc, "_signal_group", spy)
+    script = "import subprocess, sys; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], stdout=subprocess.DEVNULL)"
+    result = vc.run_streaming([sys.executable, "-c", script], cwd=tmp_path, env=os.environ, log_path=tmp_path / "log", timeout=30, stream=io.StringIO())
+    assert result["returncode"] == 0 and seen and set(seen) == {None}
+
+
+def test_a_leaked_reader_never_writes_to_a_closed_log(tmp_path, monkeypatch):
+    errors = []
+    monkeypatch.setattr(threading, "excepthook", lambda arguments: errors.append(arguments.exc_value))
+    monkeypatch.setattr(vc, "READER_GRACE_SECONDS", 0.3)
+    marker = tmp_path / "pid"
+    script = (
+        "import subprocess, sys;"
+        "c = subprocess.Popen([sys.executable, '-c', 'import time\\nfor i in range(80):\\n    print(i, flush=True)\\n    time.sleep(0.05)'], start_new_session=True);"
+        f"open({str(marker)!r}, 'w').write(str(c.pid))"
+    )
+    result = vc.run_streaming([sys.executable, "-c", script], cwd=tmp_path, env=os.environ, log_path=tmp_path / "log", timeout=30, stream=io.StringIO())
+    child = int(marker.read_text())
+    try:
+        assert result["leaked_descendants"] is True
+        time.sleep(1.5)  # the leaked reader keeps receiving output after the log closed
+        assert errors == []
+    finally:
+        os.kill(child, signal.SIGKILL)
+
+
+# ------------------------------------------------------ third review: skip markers
+
+
+def test_python_skip_detection_covers_class_module_and_setup_level_skips():
+    from tools import boundary_inventory as bi
+
+    source = """
+import sys, unittest, pytest
+@unittest.skipUnless(sys.platform == 'darwin', 'mac only')
+class Decorated(unittest.TestCase):
+    def test_a(self): pass
+class Setup(unittest.TestCase):
+    def setUp(self):
+        self.skipTest('no device')
+    def test_b(self): pass
+class SetupClass(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        raise unittest.SkipTest('no device')
+    def test_c(self): pass
+class Marked:
+    pytestmark = pytest.mark.skipif(True, reason='r')
+    def test_d(self): pass
+class Plain:
+    def test_e(self): pass
+def test_f(): pass
+"""
+    assert bi._python_tests(source) == {"test_a": True, "test_b": True, "test_c": True, "test_d": True, "test_e": False, "test_f": False}
+    module = "import pytest\npytestmark = pytest.mark.skip(reason='r')\ndef test_g(): pass\n"
+    assert bi._python_tests(module) == {"test_g": True}
+    assert bi._python_tests("import pytest\npytest.skip('x', allow_module_level=True)\ndef test_h(): pass\n") == {"test_h": True}
+    assert bi._python_tests("import pytest\ndef test_i(): pass\n") == {"test_i": False}

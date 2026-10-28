@@ -455,3 +455,23 @@ def test_boundary_citations_do_not_overclaim():
     facade = next(e for e in boundaries["desktop-service"]["evidence"] if e["path"] == "tests/service/test_service_process.py")
     assert "does not prove that an uncertain mutation is never replayed" in facade["note"]
     assert any("literal true" in gap for gap in boundaries["desktop-service"]["gaps"])
+
+
+def test_class_and_module_level_skips_in_cited_files_must_declare_a_skip_gate(export, editable):
+    for path in ("tests/integration/test_file_parser.py", "tests/test_macos_bundle.py", "tests/test_dmg_contract.py"):
+        def drop(data, path=path):
+            next(item for boundary in data["boundaries"] for item in boundary["evidence"] if item["path"] == path).pop("skip_gate")
+
+        editable("tools/boundary_inventory.json", drop)
+        failing(export, f"{path}: carries a skip marker, so the entry must declare its skip_gate")
+    declared = {
+        item["path"]: item["skip_gate"]
+        for boundary in inventory.load(ROOT)["boundaries"]
+        for item in boundary["evidence"]
+        if item["path"] in ("tests/integration/test_file_parser.py", "tests/test_macos_bundle.py", "tests/test_dmg_contract.py")
+    }
+    assert declared == {
+        "tests/integration/test_file_parser.py": "native-stage",
+        "tests/test_macos_bundle.py": "platform-contracts",
+        "tests/test_dmg_contract.py": "dmg-contracts",
+    }

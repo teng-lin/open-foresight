@@ -219,21 +219,47 @@ def dart_registered_tests(text: str) -> list[Registered]:
     return scan_dart(text)[0]
 
 
+def _has_skip(node: ast.AST) -> bool:
+    return any(
+        (isinstance(child, ast.Attribute) and child.attr in _SKIP_NAMES)
+        or (isinstance(child, ast.Name) and child.id in _SKIP_NAMES)
+        for child in ast.walk(node)
+    )
+
+
+_SETUP_NAMES = {"setUp", "setUpClass", "setup_method", "setup_class", "setup_module", "setUpModule"}
+
+
 def _python_tests(text: str) -> dict[str, bool]:
-    """Test function name to whether its decorators or body can skip."""
+    """Test function name to whether it can skip.
+
+    A test can skip through its own decorators or body, its class's decorators,
+    class-level markers or setup methods, or module-level markers and calls.
+    Skips raised inside pytest fixtures are not detected.
+    """
     try:
         tree = ast.parse(text)
     except SyntaxError as error:
         raise ValueError(f"Python source does not parse: {error}") from error
     tests: dict[str, bool] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
-            skips = any(
-                (isinstance(child, ast.Attribute) and child.attr in _SKIP_NAMES)
-                or (isinstance(child, ast.Name) and child.id in _SKIP_NAMES)
-                for child in ast.walk(node)
-            )
-            tests[node.name] = tests.get(node.name, False) or skips
+    definitions = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    module_skips = any(_has_skip(node) for node in tree.body if not isinstance(node, definitions) and not isinstance(node, (ast.Import, ast.ImportFrom)))
+
+    def visit(body: Sequence[ast.stmt], inherited: bool) -> None:
+        for node in body:
+            if isinstance(node, ast.ClassDef):
+                members = [item for item in node.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))]
+                level = (
+                    inherited
+                    or any(_has_skip(decorator) for decorator in node.decorator_list)
+                    or any(_has_skip(item) for item in node.body if not isinstance(item, definitions))
+                    or any(_has_skip(item) for item in members if item.name in _SETUP_NAMES)
+                )
+                visit(node.body, level)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+                tests[node.name] = tests.get(node.name, False) or inherited or _has_skip(node)
+
+    visit(tree.body, module_skips)
     return tests
 
 

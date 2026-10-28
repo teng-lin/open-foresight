@@ -1521,11 +1521,13 @@
         },
         {
           "kind": "static-guard",
-          "path": "tests/test_macos_bundle.py"
+          "path": "tests/test_macos_bundle.py",
+          "skip_gate": "platform-contracts"
         },
         {
           "kind": "static-guard",
-          "path": "tests/test_dmg_contract.py"
+          "path": "tests/test_dmg_contract.py",
+          "skip_gate": "dmg-contracts"
         },
         {
           "kind": "static-guard",
@@ -1693,7 +1695,8 @@
           "kind": "production-both-sides",
           "path": "tests/integration/test_file_parser.py",
           "excluded": true,
-          "note": "Requires a native build or macOS SDK."
+          "note": "Requires a native build or macOS SDK.",
+          "skip_gate": "native-stage"
         },
         {
           "kind": "static-guard",
