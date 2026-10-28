@@ -15,11 +15,32 @@ class HelperBehavior {
   String capabilityState = 'available';
   String capabilityReason = '';
   bool answerStop = true;
+
+  /// `ok`, `error` or `wrong_session`.
+  String stopReply = 'ok';
+  int stopExitStatus = 0;
   bool exitOnStdinClose = true;
   bool exitOnTerm = true;
   bool exitOnKill = true;
   bool answerClock = true;
   bool answerCapabilities = true;
+
+  /// Exits without a hello, as a helper killed by dyld or code signing would.
+  bool exitBeforeHello = false;
+  int exitBeforeHelloStatus = 127;
+  bool helloTwice = false;
+  Duration? helloDelay;
+
+  /// Frames sent after `start` is received but before `started` is answered.
+  List<Map<String, Object?>> beforeStarted = const [];
+
+  /// Called when a clock request arrives, before it is answered; lets a test
+  /// move the observer's clock to script a round trip.
+  void Function(FakeHelper helper)? onClockRequest;
+
+  /// `normal`, `throwOnAdd` (writes fail at once) or `breakPipe` (writes are
+  /// accepted, then stdin.done fails as after EPIPE).
+  String stdinMode = 'normal';
 
   /// Frames emitted right after `started`, as maps without `v`/`seq`.
   List<Map<String, Object?>> afterStart = const [];
@@ -60,16 +81,35 @@ class FakeHelper implements Process {
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen(_onLine, onDone: _onStdinDone);
-    stdin = IOSink(_stdinController.sink);
-    if (behavior.sendHello) {
-      scheduleMicrotask(
-        () => send('hello', {
+    // The observer closes stdin; the fake only reports that close.
+    // ignore: close_sinks
+    stdin = _FakeStdin(_stdinController, behavior.stdinMode);
+    if (behavior.exitBeforeHello) {
+      scheduleMicrotask(() => exit(behavior.exitBeforeHelloStatus));
+    } else if (behavior.sendHello) {
+      void hello() {
+        send('hello', {
           'helper': 'fake_helper',
           'helper_version': '1.0.0',
           'parser_version': 'mac-1',
           'platform': behavior.platform,
-        }),
-      );
+        });
+        if (behavior.helloTwice) {
+          send('hello', {
+            'helper': 'fake_helper',
+            'helper_version': '1.0.0',
+            'parser_version': 'mac-1',
+            'platform': behavior.platform,
+          });
+        }
+      }
+
+      final delay = behavior.helloDelay;
+      if (delay == null) {
+        scheduleMicrotask(hello);
+      } else {
+        Timer(delay, hello);
+      }
     }
   }
   final HelperBehavior behavior;
@@ -119,6 +159,13 @@ class FakeHelper implements Process {
     _stdoutController.add(bytes);
   }
 
+  /// A stream error on stdout / stderr, as from a read failure.
+  void stdoutError() => _stdoutController.addError(const SocketException('x'));
+  void stderrError() => _stderrController.addError(const SocketException('x'));
+
+  /// stdin.done fails, as after a write to a vanished reader.
+  void breakPipe() => (stdin as _FakeStdin).breakPipe();
+
   void writeStderr(int bytes) {
     if (_stderrController.isClosed) return;
     _stderrController.add(List.filled(bytes, 0x65));
@@ -164,9 +211,16 @@ class FakeHelper implements Process {
         });
       case 'clock':
         if (!behavior.answerClock) return;
+        behavior.onClockRequest?.call(this);
         send('clock', {'id': id, 'monotonic_ms': behavior.clockMs});
       case 'start':
         session = request['session'] as String;
+        for (final frame in behavior.beforeStarted) {
+          final copy = Map<String, Object?>.of(frame);
+          final type = copy.remove('type')! as String;
+          if (copy['session'] == r'$session') copy['session'] = session;
+          send(type, copy);
+        }
         switch (behavior.startReply) {
           case 'started':
             send('started', {
@@ -198,8 +252,67 @@ class FakeHelper implements Process {
         }
       case 'stop':
         if (!behavior.answerStop) return;
-        send('stopped', {'id': id, 'session': session ?? 's'});
-        exit(0);
+        if (behavior.stopReply == 'error') {
+          send('error', {'id': id, 'code': 'stop_failed', 'message': 'x'});
+        } else if (behavior.stopReply == 'wrong_session') {
+          send('stopped', {'id': id, 'session': 'someone-else'});
+        } else {
+          send('stopped', {'id': id, 'session': session ?? 's'});
+        }
+        exit(behavior.stopExitStatus);
     }
   }
+}
+
+/// A stdin whose failure modes a test can choose.
+class _FakeStdin implements IOSink {
+  _FakeStdin(this._controller, this._mode);
+  final StreamController<List<int>> _controller;
+  final String _mode;
+  final Completer<void> _done = Completer();
+  @override
+  Encoding encoding = utf8;
+
+  void breakPipe() {
+    if (!_done.isCompleted) {
+      _done.completeError(const SocketException('Broken pipe'));
+    }
+  }
+
+  @override
+  void add(List<int> data) {
+    if (_mode == 'throwOnAdd') throw StateError('StreamSink is closed');
+    if (!_controller.isClosed) _controller.add(data);
+  }
+
+  @override
+  void addError(Object error, [StackTrace? stackTrace]) {}
+
+  @override
+  Future<void> addStream(Stream<List<int>> stream) => stream.forEach(add);
+
+  @override
+  Future<void> close() async {
+    if (!_controller.isClosed) await _controller.close();
+    if (!_done.isCompleted) _done.complete();
+  }
+
+  @override
+  Future<void> get done => _done.future;
+
+  @override
+  Future<void> flush() async {}
+
+  @override
+  void write(Object? object) => add(encoding.encode('$object'));
+
+  @override
+  void writeAll(Iterable<Object?> objects, [String separator = '']) =>
+      write(objects.join(separator));
+
+  @override
+  void writeCharCode(int charCode) => write(String.fromCharCode(charCode));
+
+  @override
+  void writeln([Object? object = '']) => write('$object\n');
 }

@@ -3,6 +3,8 @@
 //   hang        ignores stdin close, `stop` and SIGTERM after starting
 //   crash_once  exits abruptly after its first observation, once per state file
 //   garbage     writes a non-protocol line after starting
+//   stderr_flood writes 2 MiB to stderr after starting, then behaves
+//   burst       emits 10 000 observation frames at once (first launch only)
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -71,6 +73,21 @@ Future<void> main(List<String> args) async {
               if (scenario == 'garbage') {
                 stdout.writeln('not a frame');
                 return;
+              }
+              if (scenario == 'stderr_flood') {
+                final chunk = List<int>.filled(65536, 0x65);
+                for (var i = 0; i < 32; i++) {
+                  stderr.add(chunk);
+                }
+              }
+              if (scenario == 'burst') {
+                final marker = File(options['statefile']!);
+                if (!marker.existsSync()) {
+                  marker.writeAsStringSync('burst');
+                  for (var i = 0; i < 10000; i++) {
+                    observe();
+                  }
+                }
               }
               final period = Duration(milliseconds: request['poll_ms'] as int);
               ticker = Timer.periodic(period, (_) => observe());

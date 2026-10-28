@@ -222,15 +222,47 @@ be derived from a steady clock that does not count system sleep.
 ## Limits and lifecycle
 
 Per read: tree depth at most 64, nodes at most 20000, one observation at most
-256 participants. Exceeding a bound sets `complete: false`. The service enforces
-an outer read deadline, terminates and reaps only the helper it started, and
-restarts it with bounded backoff (at most 5 restarts per session). The helper
-must exit when stdin closes.
+256 participants. Exceeding a bound sets `complete: false`. The helper must exit
+when stdin closes.
 
-After a restart the service qualifies every `ref` it delivers as
-`<epoch>:<ref>` (epoch 0 for the first helper process of a session, counting
-up per restart), so a restarted helper's references can never alias the earlier
-helper's. A restarted or failed helper is a blind interval, never a continuation
-of the previous speaker. Observer timestamps are shifted onto the capture clock
-with the offset from the best of three `clock` exchanges; the shift widens each
-read by half the round trip plus one millisecond.
+### Service supervision
+
+- **One helper at a time.** The service never launches a helper while an earlier
+  one is unreaped, and `stop` cancels any start, restart or query in flight and
+  waits until every child it owns has exited. A launch that completes after it
+  was abandoned is drained and reaped in the background. A child that cannot be
+  reaped (it survives SIGKILL) puts the service in a refuse-further-use state.
+- **Shutdown.** `stop` asks the helper to stop, waits `exitGrace` (at least the
+  read deadline), then sends SIGTERM and SIGKILL, each with a bounded wait. A
+  shutdown that needed a signal, exited nonzero, or answered with an error or
+  another session's `stopped` is reported on the `stopped` state event.
+- **Restarts.** A failed or stalled helper is replaced, with exponential
+  backoff, at most 5 restarts per budget. The budget refills once a helper had
+  run for 5 minutes before failing, so isolated crashes hours apart never
+  exhaust it; `maxRestarts: 0` disables restarting. A restart whose `start` is
+  answered `permission_denied`, `needs_setup`, `unsupported_version` or
+  `unsupported_platform` is final (retrying cannot help) and the `failed` state
+  event carries that state. `zoom_not_running`, `no_meeting` and `unavailable`
+  are retried within the budget, since the meeting window may reappear.
+- **Epochs.** Every helper process start increments an epoch counter that lives
+  as long as the observer. The service qualifies every `ref` it delivers as
+  `<epoch>:<ref>`, so one helper's references can never alias another's, even
+  across `stop` and a new `start` with the same session identifier. A
+  restarting, failed or stopped observer is a blind interval, never a
+  continuation of the previous speaker.
+- **Clock.** Observer timestamps are shifted onto the capture clock with the
+  offset from the best of at least one (default three) `clock` exchanges per
+  helper; the shift widens each read by half the round trip plus one
+  millisecond. A probe during which the capture clock went backward is
+  discarded. The offset is measured once per helper process: both clocks are
+  monotonic in the same domain, so it does not drift.
+- **Plausibility.** A read is a protocol violation, and the helper is replaced,
+  when its mapped end lies more than the read skew (default 5 s) in the
+  service's future, its start more than the skew before the session began, or
+  it took longer than the read deadline plus the skew.
+- **Flooding.** More than `max(20, 4000 / poll_ms)` stream frames per second is a
+  protocol violation.
+- **Queries.** `capabilities` and `setup` against a running session reuse its
+  helper, and a timed-out query does not fail the session (the late reply is
+  ignored). Without a session each query uses its own short-lived helper;
+  queries are serialized and a `start` waits for one in flight.

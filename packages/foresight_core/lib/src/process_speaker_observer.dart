@@ -1,13 +1,25 @@
 /// Process-supervised [MeetingSpeakerObserver]. Owns one helper child at a time,
-/// reads it through bounded NDJSON, and terminates and reaps only the child it
-/// started. Nothing here blocks the event loop: every wait is an awaited future
-/// or timer. Diagnostics carry codes and counters only, never helper text,
-/// participant names or transcript text.
+/// reads it through bounded NDJSON, and terminates and reaps only the children
+/// it started. Nothing here blocks the event loop: every wait is an awaited
+/// future or timer. Diagnostics carry codes and counters only, never helper
+/// text, participant names or transcript text.
+///
+/// Ownership rules:
+/// - A helper child is owned from the moment its launch is requested until its
+///   exit status is observed. A launch that completes after it was abandoned
+///   (timeout or [stop]) is drained and reaped as an orphan, and [stop] awaits
+///   that reap.
+/// - A new helper is never launched while an earlier one is unreaped.
+/// - [stop] cancels any start, restart or one-shot query in flight, reaps
+///   everything and reports a reap failure; after one, the observer refuses
+///   further use because a child may still be running.
 library;
 
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+
+import 'package:meta/meta.dart';
 
 import 'meeting_speaker_observer.dart';
 import 'speaker_observation.dart';
@@ -19,18 +31,32 @@ typedef SpeakerHelperLauncher =
 enum SpeakerObserverDiagnosticCode {
   helperStarted,
   helperExited,
+  helperStderr,
   protocolError,
   helperError,
   requestTimeout,
   stalled,
   restartScheduled,
+  restartRefilled,
   restartsExhausted,
   reapFailed,
+  termSent,
+  killSent,
   stderrFlood,
   clockMeasured,
+  clockRejected,
+  launchNotFound,
+  launchNotExecutable,
+  launchTimeout,
+  launchFailed,
+  implausibleRead,
+  frameFlood,
+  staleReply,
+  internalError,
 }
 
-/// A stage and a number (exit status, attempt, delay or error code index).
+/// A stage and a number (exit status, byte count, attempt, delay or error code
+/// index). Never helper-supplied text.
 final class SpeakerObserverDiagnostic {
   const SpeakerObserverDiagnostic(this.code, [this.value = 0]);
   final SpeakerObserverDiagnosticCode code;
@@ -47,13 +73,16 @@ final class SpeakerObserverConfig {
     this.handshakeTimeout = const Duration(seconds: 5),
     this.requestTimeout = const Duration(seconds: 5),
     this.stallSlack = const Duration(seconds: 1),
-    this.exitGrace = const Duration(seconds: 1),
+    this.exitGrace = const Duration(seconds: 3),
     this.termGrace = const Duration(milliseconds: 500),
     this.killGrace = const Duration(seconds: 2),
     this.maxRestarts = 5,
+    this.restartRefillAfter = const Duration(minutes: 5),
     this.backoffInitial = const Duration(milliseconds: 250),
     this.backoffMax = const Duration(seconds: 5),
     this.clockProbes = 3,
+    this.readSkew = const Duration(seconds: 5),
+    this.maxFramesPerSecond,
     this.maxStderrBytes = 64 * 1024,
     this.maxLineBytes = speakerObserverMaxLineBytes,
   });
@@ -69,16 +98,39 @@ final class SpeakerObserverConfig {
   final Duration spawnTimeout, handshakeTimeout, requestTimeout, stallSlack;
 
   /// Waits after closing stdin / `stop`, then after SIGTERM, then after SIGKILL.
+  /// [exitGrace] must cover the read deadline the helper was given, because a
+  /// helper may be mid-read when it is asked to stop.
   final Duration exitGrace, termGrace, killGrace;
+
+  /// Restarts allowed per budget. The budget refills (back to zero used) when a
+  /// helper had been running for [restartRefillAfter] before it failed, so
+  /// isolated crashes hours apart never exhaust it; null disables refilling.
+  /// Zero disables restarting.
   final int maxRestarts;
+  final Duration? restartRefillAfter;
   final Duration backoffInitial, backoffMax;
 
-  /// Clock exchanges used to measure the helper-to-capture clock offset.
+  /// Clock exchanges used to measure the helper-to-capture clock offset; at
+  /// least one, because an unmeasured offset would silently claim exactness.
   final int clockProbes;
+
+  /// How far a helper read may lie in the observer's future, or before the
+  /// session began, before it counts as a protocol violation.
+  final Duration readSkew;
+
+  /// Stream frames (observations and unavailability) accepted per second.
+  /// Null derives `max(20, 4000 / pollMs)`; more is a flooding helper.
+  final int? maxFramesPerSecond;
   final int maxStderrBytes, maxLineBytes;
 
   Duration get stallTimeout =>
       Duration(milliseconds: pollMs + readDeadlineMs) + stallSlack;
+
+  int get frameRateLimit => maxFramesPerSecond ?? math.max(20, 4000 ~/ pollMs);
+
+  /// The read gap beyond which an attribution history should stop treating two
+  /// equal reads as continuous: three polls plus one read deadline.
+  int get maxReadGapUs => (3 * pollMs + readDeadlineMs) * 1000;
 
   void validate() {
     if (executable.isEmpty ||
@@ -87,8 +139,10 @@ final class SpeakerObserverConfig {
         readDeadlineMs < 1 ||
         readDeadlineMs > 600000 ||
         maxRestarts < 0 ||
-        clockProbes < 0 ||
+        clockProbes < 1 ||
         maxStderrBytes < 0 ||
+        (maxFramesPerSecond != null && maxFramesPerSecond! < 1) ||
+        (restartRefillAfter != null && restartRefillAfter! <= Duration.zero) ||
         [
           spawnTimeout,
           handshakeTimeout,
@@ -99,7 +153,9 @@ final class SpeakerObserverConfig {
           backoffInitial,
           backoffMax,
         ].any((d) => d <= Duration.zero) ||
-        stallSlack < Duration.zero) {
+        stallSlack < Duration.zero ||
+        readSkew < Duration.zero ||
+        exitGrace < Duration(milliseconds: readDeadlineMs)) {
       throw ArgumentError('Invalid speaker observer configuration');
     }
   }
@@ -113,16 +169,108 @@ final class SpeakerObserverStats {
     this.stalls = 0,
     this.observations = 0,
     this.unavailableFrames = 0,
+    this.implausibleReads = 0,
   });
   final int helperStarts,
       restarts,
       protocolErrors,
       stalls,
       observations,
-      unavailableFrames;
+      unavailableFrames,
+      implausibleReads;
 }
 
 typedef _ClockFix = ({int offsetUs, int uncertaintyUs});
+
+typedef _ReapResult = ({
+  bool reaped,
+  int? status,
+  bool termSent,
+  bool killSent,
+});
+
+/// Close stdin, then escalate TERM and KILL, each wait bounded. Only [process]
+/// is signalled. Completes once the exit status is observed or all waits ran
+/// out.
+Future<_ReapResult> _reapProcess(
+  Process process,
+  SpeakerObserverConfig config,
+  void Function(SpeakerObserverDiagnostic) diagnostic,
+) async {
+  unawaited(
+    process.stdin.close().then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    ),
+  );
+  int? status;
+  Future<bool> exited(Duration limit) => process.exitCode
+      .then((code) {
+        status = code;
+        return true;
+      })
+      .timeout(limit, onTimeout: () => false);
+  var reaped = await exited(config.exitGrace);
+  var term = false, kill = false;
+  if (!reaped) {
+    term = true;
+    diagnostic(
+      const SpeakerObserverDiagnostic(SpeakerObserverDiagnosticCode.termSent),
+    );
+    process.kill();
+    reaped = await exited(config.termGrace);
+  }
+  if (!reaped) {
+    kill = true;
+    diagnostic(
+      const SpeakerObserverDiagnostic(SpeakerObserverDiagnosticCode.killSent),
+    );
+    process.kill(ProcessSignal.sigkill);
+    reaped = await exited(config.killGrace);
+  }
+  return (reaped: reaped, status: status, termSent: term, killSent: kill);
+}
+
+/// A launch that finished after it was abandoned: drain, stop and reap it.
+Future<bool> _reapOrphan(
+  Future<Process> launch,
+  SpeakerObserverConfig config,
+  void Function(SpeakerObserverDiagnostic) diagnostic,
+) async {
+  final Process process;
+  try {
+    process = await launch;
+  } on Object {
+    return true;
+  }
+  unawaited(
+    process.stdout.drain<void>().then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    ),
+  );
+  unawaited(
+    process.stderr.drain<void>().then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    ),
+  );
+  return (await _reapProcess(process, config, diagnostic)).reaped;
+}
+
+SpeakerObserverDiagnosticCode _launchDiagnostic(Object error) {
+  if (error is ProcessException) {
+    // errno: ENOENT and ENOTDIR mean no such file; EACCES and ENOEXEC mean it
+    // cannot be run.
+    if (error.errorCode == 2 || error.errorCode == 20) {
+      return SpeakerObserverDiagnosticCode.launchNotFound;
+    }
+    if (error.errorCode == 13 || error.errorCode == 8) {
+      return SpeakerObserverDiagnosticCode.launchNotExecutable;
+    }
+  }
+  return SpeakerObserverDiagnosticCode.launchFailed;
+}
 
 /// One helper process: framing, request correlation and reaping.
 final class _Connection {
@@ -132,11 +280,14 @@ final class _Connection {
   final void Function(SpeakerObserverDiagnostic) _diagnostic;
   final ObserverFrameEncoder _encoder = ObserverFrameEncoder();
   final Map<String, Completer<ObserverFrame>> _pending = {};
+  final Set<String> _abandoned = {};
   final Completer<HelloFrame> _hello = Completer();
+  final Stopwatch _window = Stopwatch()..start();
   StreamSubscription<ObserverFrame>? _frames;
   StreamSubscription<List<int>>? _errors;
-  Future<bool>? _terminating;
+  Future<_ReapResult>? _terminating;
   bool _closing = false, _exited = false, _helloSeen = false;
+  int _windowFrames = 0;
   int stderrBytes = 0;
 
   /// Set by the owner.
@@ -148,11 +299,19 @@ final class _Connection {
   int epoch = 0;
   _ClockFix clock = (offsetUs: 0, uncertaintyUs: 0);
 
+  /// Launch, handshake. [cancel] aborts a launch in flight; [onCreated] runs as
+  /// soon as the child exists so the owner can cancel the handshake through
+  /// [fail]; [reap] terminates a connection that failed its handshake and
+  /// [orphan] adopts a launch that finished too late.
   static Future<_Connection> open(
     SpeakerObserverConfig config,
     SpeakerHelperLauncher launcher,
-    void Function(SpeakerObserverDiagnostic) diagnostic,
-  ) async {
+    void Function(SpeakerObserverDiagnostic) diagnostic, {
+    required Future<void> cancel,
+    required void Function(_Connection connection) onCreated,
+    required Future<void> Function(_Connection connection) reap,
+    required void Function(Future<bool> reaped) orphan,
+  }) async {
     final Future<Process> launch;
     try {
       launch = launcher(config.executable, [
@@ -160,20 +319,54 @@ final class _Connection {
         '--protocol',
         '$speakerObserverProtocolVersion',
       ]);
-    } on Object {
+    } on Object catch (error) {
+      diagnostic(SpeakerObserverDiagnostic(_launchDiagnostic(error)));
       throw const SpeakerObserverException(SpeakerObserverFailure.launchFailed);
     }
+    final ready = Completer<Process>();
+    final timer = Timer(config.spawnTimeout, () {
+      if (ready.isCompleted) return;
+      diagnostic(
+        const SpeakerObserverDiagnostic(
+          SpeakerObserverDiagnosticCode.launchTimeout,
+        ),
+      );
+      ready.completeError(
+        const SpeakerObserverException(SpeakerObserverFailure.launchFailed),
+      );
+    });
+    unawaited(
+      cancel.then<void>((_) {
+        if (!ready.isCompleted) {
+          ready.completeError(
+            const SpeakerObserverException(SpeakerObserverFailure.cancelled),
+          );
+        }
+      }),
+    );
+    unawaited(
+      launch.then<void>(
+        (process) {
+          if (!ready.isCompleted) ready.complete(process);
+        },
+        onError: (Object error, StackTrace _) {
+          if (ready.isCompleted) return;
+          diagnostic(SpeakerObserverDiagnostic(_launchDiagnostic(error)));
+          ready.completeError(
+            const SpeakerObserverException(SpeakerObserverFailure.launchFailed),
+          );
+        },
+      ),
+    );
     final Process process;
     try {
-      process = await launch.timeout(config.spawnTimeout);
-    } on Object {
-      // A late launch must not leak an unowned child.
-      unawaited(
-        launch.then<void>((late) {
-          late.kill(ProcessSignal.sigkill);
-        }, onError: (Object _, StackTrace _) {}),
-      );
-      throw const SpeakerObserverException(SpeakerObserverFailure.launchFailed);
+      process = await ready.future;
+    } on SpeakerObserverException {
+      // The child may still appear; it must not outlive its abandonment.
+      orphan(_reapOrphan(launch, config, diagnostic));
+      rethrow;
+    } finally {
+      timer.cancel();
     }
     final connection = _Connection._(process, config, diagnostic);
     connection._attach();
@@ -182,11 +375,12 @@ final class _Connection {
         SpeakerObserverDiagnosticCode.helperStarted,
       ),
     );
+    onCreated(connection);
     try {
       connection.hello = await connection._hello.future.timeout(
         config.handshakeTimeout,
         onTimeout: () {
-          final timeout = const SpeakerObserverException(
+          const timeout = SpeakerObserverException(
             SpeakerObserverFailure.handshakeTimeout,
           );
           connection.fail(timeout);
@@ -194,7 +388,7 @@ final class _Connection {
         },
       );
     } on SpeakerObserverException {
-      await connection.terminate();
+      await reap(connection);
       rethrow;
     }
     return connection;
@@ -208,18 +402,10 @@ final class _Connection {
         ).listen(
           _onFrame,
           onError: (Object error, StackTrace _) {
-            if (error is ObserverProtocolException) {
-              _diagnostic(
-                SpeakerObserverDiagnostic(
-                  SpeakerObserverDiagnosticCode.protocolError,
-                  error.code.index,
-                ),
-              );
-            }
-            fail(
-              const SpeakerObserverException(
-                SpeakerObserverFailure.protocolError,
-              ),
+            protocolFailure(
+              error is ObserverProtocolException
+                  ? error.code
+                  : ObserverProtocolErrorCode.malformed,
             );
           },
           onDone: () {
@@ -287,13 +473,13 @@ final class _Connection {
     if (frame is HelloFrame) {
       if (_helloSeen ||
           (frame.platform != 'macos' && frame.platform != 'linux')) {
-        return _protocolFailure();
+        return protocolFailure();
       }
       _helloSeen = true;
       _hello.complete(frame);
       return;
     }
-    if (!_helloSeen) return _protocolFailure();
+    if (!_helloSeen) return protocolFailure();
     switch (frame) {
       case CapabilitiesFrame(:final id):
       case ClockFrame(:final id):
@@ -319,7 +505,23 @@ final class _Connection {
           _reply(id, frame);
         }
       case ObservationFrame() || UnavailableFrame():
-        if (!started) return _protocolFailure();
+        if (!started) return protocolFailure();
+        // One stream frame per poll is expected; a helper that floods would
+        // otherwise keep the stall timer satisfied forever.
+        if (_window.elapsedMilliseconds >= 1000) {
+          _window
+            ..reset()
+            ..start();
+          _windowFrames = 0;
+        }
+        if (++_windowFrames > _config.frameRateLimit) {
+          _diagnostic(
+            const SpeakerObserverDiagnostic(
+              SpeakerObserverDiagnosticCode.frameFlood,
+            ),
+          );
+          return protocolFailure();
+        }
         onStream?.call(frame);
       case HelloFrame():
         break;
@@ -328,15 +530,32 @@ final class _Connection {
 
   void _reply(String id, ObserverFrame frame) {
     final completer = _pending.remove(id);
-    if (completer == null) return _protocolFailure();
-    completer.complete(frame);
+    if (completer != null) {
+      completer.complete(frame);
+      return;
+    }
+    if (_abandoned.remove(id)) {
+      // The reply to a request that already timed out without failing the
+      // helper (a query on a live session).
+      _diagnostic(
+        const SpeakerObserverDiagnostic(
+          SpeakerObserverDiagnosticCode.staleReply,
+        ),
+      );
+      return;
+    }
+    protocolFailure();
   }
 
-  void _protocolFailure() {
+  /// The helper broke the protocol in some way the codec could not see.
+  void protocolFailure([
+    ObserverProtocolErrorCode code = ObserverProtocolErrorCode.malformed,
+  ]) {
+    if (_closing || failure != null) return;
     _diagnostic(
       SpeakerObserverDiagnostic(
         SpeakerObserverDiagnosticCode.protocolError,
-        ObserverProtocolErrorCode.malformed.index,
+        code.index,
       ),
     );
     fail(const SpeakerObserverException(SpeakerObserverFailure.protocolError));
@@ -351,10 +570,21 @@ final class _Connection {
     }
     _pending.clear();
     if (!_hello.isCompleted) _hello.completeError(exception);
+    // Stop reading whatever else a failed helper has buffered. The pipe is
+    // paused, not cancelled: a helper writing into a closed pipe may die by
+    // itself, which would hide whether it honours signals; it is terminated
+    // and reaped deliberately instead.
+    _frames?.pause();
     onFailure?.call(exception);
   }
 
-  Future<ObserverFrame> request(ObserverRequest request, Duration timeout) {
+  /// With [failOnTimeout] false a timeout leaves the helper running (a probe on
+  /// a live session must not kill it); the late reply is then ignored.
+  Future<ObserverFrame> request(
+    ObserverRequest request,
+    Duration timeout, {
+    bool failOnTimeout = true,
+  }) {
     final existing = failure;
     if (existing != null) return Future.error(existing);
     if (_closing || _exited) {
@@ -362,10 +592,18 @@ final class _Connection {
         const SpeakerObserverException(SpeakerObserverFailure.helperExited),
       );
     }
+    final List<int> bytes;
+    try {
+      bytes = _encoder.encode(request);
+    } on ArgumentError {
+      return Future.error(
+        const SpeakerObserverException(SpeakerObserverFailure.invalidArgument),
+      );
+    }
     final completer = Completer<ObserverFrame>();
     _pending[request.id] = completer;
     try {
-      _process.stdin.add(_encoder.encode(request));
+      _process.stdin.add(bytes);
     } on Object {
       _pending.remove(request.id);
       const lost = SpeakerObserverException(
@@ -386,17 +624,20 @@ final class _Connection {
         const timedOut = SpeakerObserverException(
           SpeakerObserverFailure.requestTimeout,
         );
-        fail(timedOut);
+        if (failOnTimeout) {
+          fail(timedOut);
+        } else {
+          _abandoned.add(request.id);
+          if (_abandoned.length > 16) _abandoned.remove(_abandoned.first);
+        }
         throw timedOut;
       },
     );
   }
 
-  /// Close stdin, then escalate TERM and KILL, each bounded. Only this child is
-  /// signalled. Completes true once the exit status is observed.
-  Future<bool> terminate() => _terminating ??= _terminate();
+  Future<_ReapResult> terminate() => _terminating ??= _terminate();
 
-  Future<bool> _terminate() async {
+  Future<_ReapResult> _terminate() async {
     _closing = true;
     final cancelled =
         failure ??
@@ -406,29 +647,19 @@ final class _Connection {
     }
     _pending.clear();
     if (!_hello.isCompleted) _hello.completeError(cancelled);
-    unawaited(
-      _process.stdin.close().then<void>(
-        (_) {},
-        onError: (Object _, StackTrace _) {},
-      ),
-    );
-    var reaped = await _waitExit(_config.exitGrace);
-    if (!reaped) {
-      _process.kill();
-      reaped = await _waitExit(_config.termGrace);
-    }
-    if (!reaped) {
-      _process.kill(ProcessSignal.sigkill);
-      reaped = await _waitExit(_config.killGrace);
-    }
+    final result = await _reapProcess(_process, _config, _diagnostic);
     unawaited(_frames?.cancel());
     unawaited(_errors?.cancel());
-    return reaped;
+    if (stderrBytes > 0) {
+      _diagnostic(
+        SpeakerObserverDiagnostic(
+          SpeakerObserverDiagnosticCode.helperStderr,
+          stderrBytes,
+        ),
+      );
+    }
+    return result;
   }
-
-  Future<bool> _waitExit(Duration limit) => _process.exitCode
-      .then((_) => true)
-      .timeout(limit, onTimeout: () => false);
 }
 
 final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
@@ -450,25 +681,56 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
       StreamController.broadcast();
 
   _Phase _phase = _Phase.idle;
+
+  /// The connection being started, run or (for a one-shot) queried.
   _Connection? _conn;
+  _Connection? _shot;
   String? _session;
+
+  /// Helper process starts across the observer's whole life: refs are
+  /// qualified with it, so no two helpers' refs can ever alias, even across
+  /// stop and start with the same session identifier.
+  int _epochCounter = 0;
   int _generation = 0, _epoch = 0, _restarts = 0, _requestCounter = 0;
+  int _sessionStartUs = 0;
   Timer? _stall, _backoff;
   Completer<void>? _backoffWake;
-  Future<void>? _startOp, _restartOp, _stopOp;
+  Completer<void> _stopSignal = Completer<void>();
+  Future<void>? _startOp, _restartOp, _stopOp, _disposeOp;
   Future<void> _oneShotTail = Future.value();
-  bool _reapFailed = false, _disposed = false;
+  final Set<Future<void>> _orphans = {};
+  final Stopwatch _liveFor = Stopwatch();
+  bool _reapFailed = false, _disposing = false;
   String? _lastUnavailableReason;
   int? _lastUnavailableSince;
   SpeakerObserverStats _stats = const SpeakerObserverStats();
 
   SpeakerObserverStats get stats => _stats;
 
+  /// Active timers, for tests asserting that nothing outlives the observer.
+  @visibleForTesting
+  int get debugActiveTimers =>
+      (_stall?.isActive == true ? 1 : 0) + (_backoff?.isActive == true ? 1 : 0);
+
   @override
   Stream<SpeakerObserverEvent> get events => _events.stream;
 
+  void _report(SpeakerObserverDiagnostic diagnostic) {
+    switch (diagnostic.code) {
+      case SpeakerObserverDiagnosticCode.protocolError:
+        _count(protocolErrors: 1);
+      case SpeakerObserverDiagnosticCode.helperStarted:
+        _count(helperStarts: 1);
+      case SpeakerObserverDiagnosticCode.implausibleRead:
+        _count(implausibleReads: 1);
+      default:
+        break;
+    }
+    _onDiagnostic?.call(diagnostic);
+  }
+
   void _diagnostic(SpeakerObserverDiagnosticCode code, [int value = 0]) =>
-      _onDiagnostic?.call(SpeakerObserverDiagnostic(code, value));
+      _report(SpeakerObserverDiagnostic(code, value));
 
   void _count({
     int helperStarts = 0,
@@ -477,6 +739,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     int stalls = 0,
     int observations = 0,
     int unavailableFrames = 0,
+    int implausibleReads = 0,
   }) {
     final s = _stats;
     _stats = SpeakerObserverStats(
@@ -486,21 +749,65 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
       stalls: s.stalls + stalls,
       observations: s.observations + observations,
       unavailableFrames: s.unavailableFrames + unavailableFrames,
+      implausibleReads: s.implausibleReads + implausibleReads,
     );
   }
 
-  void Function(SpeakerObserverDiagnostic) get _connectionDiagnostic =>
-      (diagnostic) {
-        if (diagnostic.code == SpeakerObserverDiagnosticCode.protocolError) {
-          _count(protocolErrors: 1);
-        }
-        if (diagnostic.code == SpeakerObserverDiagnosticCode.helperStarted) {
-          _count(helperStarts: 1);
-        }
-        _onDiagnostic?.call(diagnostic);
-      };
-
   String _nextId() => 'r${++_requestCounter}';
+
+  // Reaping.
+
+  Future<_ReapResult> _reap(_Connection connection) async {
+    final result = await connection.terminate();
+    if (!result.reaped) {
+      _reapFailed = true;
+      _diagnostic(SpeakerObserverDiagnosticCode.reapFailed);
+    }
+    return result;
+  }
+
+  void _adoptOrphan(Future<bool> reaped) {
+    late final Future<void> tracked;
+    tracked = reaped
+        .then<void>((ok) {
+          if (!ok) {
+            _reapFailed = true;
+            _diagnostic(SpeakerObserverDiagnosticCode.reapFailed);
+          }
+        })
+        .whenComplete(() => _orphans.remove(tracked));
+    _orphans.add(tracked);
+  }
+
+  void _requireUsable() {
+    if (_disposing) throw StateError('Speaker observer is disposed');
+    if (_reapFailed) {
+      throw const SpeakerObserverException(SpeakerObserverFailure.reapFailed);
+    }
+  }
+
+  Future<_Connection> _open(
+    Completer<void> signal, {
+    void Function(_Connection connection)? created,
+  }) => _Connection.open(
+    config,
+    _launcher,
+    _report,
+    cancel: signal.future,
+    onCreated: (connection) {
+      connection.epoch = _epochCounter++;
+      _epoch = connection.epoch;
+      connection
+        ..onStream = ((frame) => _onStreamFrame(connection, frame))
+        ..onFailure = ((failure) => _onConnectionFailure(connection, failure));
+      _conn = connection;
+      created?.call(connection);
+    },
+    reap: _reap,
+    orphan: _adoptOrphan,
+  );
+
+  // Queries.
 
   @override
   Future<ObserverCapabilities> inspect() =>
@@ -514,31 +821,46 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
   ) async {
     _requireUsable();
     final live = _conn;
-    if (_phase == _Phase.running && live != null) {
-      return _capabilities(live, make(_nextId()));
+    if (_phase == _Phase.running && live != null && live.live) {
+      // Never let a slow probe kill the recording's observer.
+      return _capabilities(live, make(_nextId()), failOnTimeout: false);
     }
     if (_phase != _Phase.idle) {
       throw const SpeakerObserverException(SpeakerObserverFailure.busy);
     }
-    // One short-lived helper per query, serialized.
     final previous = _oneShotTail;
     final done = Completer<void>();
     _oneShotTail = done.future;
     try {
       await previous;
       _requireUsable();
-      if (_phase != _Phase.idle) {
+      if (_phase != _Phase.idle || _stopOp != null) {
         throw const SpeakerObserverException(SpeakerObserverFailure.busy);
       }
-      final connection = await _Connection.open(
-        config,
-        _launcher,
-        _connectionDiagnostic,
-      );
+      _Connection? mine;
       try {
-        return await _capabilities(connection, make(_nextId()));
+        final connection = await _open(
+          _stopSignal,
+          created: (created) => mine = created,
+        );
+        _shot = connection;
+        try {
+          return await _capabilities(connection, make(_nextId()));
+        } finally {
+          await _reap(connection);
+        }
       } finally {
-        await _reap(connection);
+        final own = mine;
+        if (own != null) {
+          if (identical(_shot, own)) _shot = null;
+          if (identical(_conn, own)) _conn = null;
+        }
+        if (_reapFailed) {
+          // ignore: control_flow_in_finally
+          throw const SpeakerObserverException(
+            SpeakerObserverFailure.reapFailed,
+          );
+        }
       }
     } finally {
       done.complete();
@@ -547,10 +869,16 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
 
   Future<ObserverCapabilities> _capabilities(
     _Connection connection,
-    ObserverRequest request,
-  ) async {
+    ObserverRequest request, {
+    bool failOnTimeout = true,
+  }) async {
     final reply = _expect<CapabilitiesFrame>(
-      await connection.request(request, config.requestTimeout),
+      connection,
+      await connection.request(
+        request,
+        config.requestTimeout,
+        failOnTimeout: failOnTimeout,
+      ),
     );
     final hello = connection.hello;
     return ObserverCapabilities(
@@ -565,7 +893,10 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     );
   }
 
-  T _expect<T extends ObserverFrame>(ObserverFrame frame) {
+  T _expect<T extends ObserverFrame>(
+    _Connection connection,
+    ObserverFrame frame,
+  ) {
     if (frame is T) return frame;
     if (frame is ErrorFrame) {
       _diagnostic(SpeakerObserverDiagnosticCode.helperError);
@@ -574,21 +905,8 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
         helperCode: frame.code,
       );
     }
+    connection.protocolFailure();
     throw const SpeakerObserverException(SpeakerObserverFailure.protocolError);
-  }
-
-  Future<void> _reap(_Connection connection) async {
-    if (await connection.terminate()) return;
-    _reapFailed = true;
-    _diagnostic(SpeakerObserverDiagnosticCode.reapFailed);
-    throw const SpeakerObserverException(SpeakerObserverFailure.reapFailed);
-  }
-
-  void _requireUsable() {
-    if (_disposed) throw StateError('Speaker observer is disposed');
-    if (_reapFailed) {
-      throw const SpeakerObserverException(SpeakerObserverFailure.reapFailed);
-    }
   }
 
   // Session lifecycle.
@@ -599,38 +917,64 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     if (_phase != _Phase.idle) {
       throw const SpeakerObserverException(SpeakerObserverFailure.busy);
     }
-    // Validates the identifier exactly as the wire encoder will.
-    ObserverFrameEncoder().encode(
-      StartRequest(
-        id: 'check',
-        session: session,
-        pollMs: config.pollMs,
-        deadlineMs: config.readDeadlineMs,
-      ),
-    );
+    try {
+      // Validates the identifier exactly as the wire encoder will.
+      ObserverFrameEncoder().encode(
+        StartRequest(
+          id: 'check',
+          session: session,
+          pollMs: config.pollMs,
+          deadlineMs: config.readDeadlineMs,
+        ),
+      );
+    } on ArgumentError {
+      throw const SpeakerObserverException(
+        SpeakerObserverFailure.invalidArgument,
+      );
+    }
     _phase = _Phase.starting;
     _session = session;
-    _epoch = 0;
     _restarts = 0;
     _lastUnavailableReason = null;
+    _lastUnavailableSince = null;
+    _sessionStartUs = _clockUs();
     final generation = ++_generation;
-    final operation = _launchAndStart(session, 0);
-    _startOp = operation.then<void>(
-      (_) {},
-      onError: (Object _, StackTrace _) {},
-    );
-    final _Connection connection;
+    final operation = _runStart(session, generation, _stopSignal);
+    _startOp = operation;
+    await operation;
+  }
+
+  /// The whole start sequence, including cleanup after a failure or a stop that
+  /// raced it, so that awaiting this future means no helper is left behind.
+  Future<void> _runStart(
+    String session,
+    int generation,
+    Completer<void> signal,
+  ) async {
     try {
-      connection = await operation;
+      await _oneShotTail;
+      _requireCurrent(generation);
+      final connection = await _launchAndStart(session, generation, signal);
+      if (generation != _generation) {
+        await _reap(connection);
+        _forget(connection);
+        throw const SpeakerObserverException(SpeakerObserverFailure.cancelled);
+      }
+      _goLive(connection);
     } on Object {
       if (generation == _generation) _resetToIdle();
       rethrow;
     }
+  }
+
+  void _requireCurrent(int generation) {
     if (generation != _generation) {
-      await _reap(connection);
       throw const SpeakerObserverException(SpeakerObserverFailure.cancelled);
     }
-    _goLive(connection);
+  }
+
+  void _forget(_Connection connection) {
+    if (identical(_conn, connection)) _conn = null;
   }
 
   void _goLive(_Connection connection) {
@@ -639,6 +983,9 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     _phase = _Phase.running;
     _lastUnavailableReason = null;
     _lastUnavailableSince = null;
+    _liveFor
+      ..reset()
+      ..start();
     _emitState(ObserverStatus.running);
     _armStall(connection);
     // The helper may have failed between its start reply and now.
@@ -656,18 +1003,16 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
 
   /// Spawn, handshake, measure the clock and start observing. On any failure the
   /// child is terminated and reaped before the error propagates.
-  Future<_Connection> _launchAndStart(String session, int epoch) async {
-    final connection = await _Connection.open(
-      config,
-      _launcher,
-      _connectionDiagnostic,
-    );
-    connection
-      ..epoch = epoch
-      ..onStream = ((frame) => _onStreamFrame(connection, frame))
-      ..onFailure = ((failure) => _onConnectionFailure(connection, failure));
+  Future<_Connection> _launchAndStart(
+    String session,
+    int generation,
+    Completer<void> signal,
+  ) async {
+    final connection = await _open(signal);
     try {
+      _requireCurrent(generation);
       connection.clock = await _measureClock(connection);
+      _requireCurrent(generation);
       final reply = await connection.request(
         StartRequest(
           id: _nextId(),
@@ -678,21 +1023,31 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
         config.requestTimeout,
       );
       if (reply is CapabilitiesFrame) {
-        // The helper cannot observe the meeting: not a transient failure.
+        if (reply.state == ObserverAvailability.available) {
+          // "Available" answers a capabilities request, not a start.
+          connection.protocolFailure();
+          throw const SpeakerObserverException(
+            SpeakerObserverFailure.protocolError,
+          );
+        }
+        // The helper cannot observe the meeting.
         throw SpeakerObserverException(
           SpeakerObserverFailure.unavailable,
           availability: reply.state,
         );
       }
-      final started = _expect<StartedFrame>(reply);
+      final started = _expect<StartedFrame>(connection, reply);
       if (started.session != session) {
+        connection.protocolFailure();
         throw const SpeakerObserverException(
           SpeakerObserverFailure.protocolError,
         );
       }
+      _requireCurrent(generation);
       return connection;
     } on Object {
       await _reap(connection);
+      _forget(connection);
       rethrow;
     }
   }
@@ -703,13 +1058,19 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     for (var i = 0; i < config.clockProbes; i++) {
       final before = _clockUs();
       final reply = _expect<ClockFrame>(
+        connection,
         await connection.request(
           ClockRequest(_nextId()),
           config.requestTimeout,
         ),
       );
       final after = _clockUs();
-      final rtt = math.max(0, after - before);
+      if (after < before) {
+        // The observer's own clock went backward: this probe proves nothing.
+        _diagnostic(SpeakerObserverDiagnosticCode.clockRejected);
+        continue;
+      }
+      final rtt = after - before;
       if (best == null || rtt < bestRtt) {
         bestRtt = rtt;
         best = (
@@ -719,56 +1080,62 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
         );
       }
     }
-    if (best != null) {
-      _diagnostic(SpeakerObserverDiagnosticCode.clockMeasured, bestRtt);
+    if (best == null) {
+      throw const SpeakerObserverException(
+        SpeakerObserverFailure.clockUnavailable,
+      );
     }
-    return best ?? (offsetUs: 0, uncertaintyUs: 0);
+    _diagnostic(SpeakerObserverDiagnosticCode.clockMeasured, bestRtt);
+    return best;
   }
 
   void _emit(SpeakerObserverEvent event) {
     if (!_events.isClosed) _events.add(event);
   }
 
-  void _emitState(ObserverStatus status, [SpeakerObserverFailure? failure]) =>
-      _emit(
-        ObserverStateEvent(
-          _epoch,
-          status: status,
-          atUs: _clockUs(),
-          restartCount: _restarts,
-          failure: failure,
-        ),
-      );
+  void _emitState(
+    ObserverStatus status, {
+    SpeakerObserverFailure? failure,
+    ObserverAvailability? availability,
+    String? helperCode,
+  }) => _emit(
+    ObserverStateEvent(
+      _epoch,
+      status: status,
+      atUs: _clockUs(),
+      restartCount: _restarts,
+      failure: failure,
+      availability: availability,
+      helperCode: helperCode,
+    ),
+  );
 
   void _onStreamFrame(_Connection connection, ObserverFrame frame) {
     switch (frame) {
       case ObservationFrame(:final observation):
         if (observation.session != _session) {
-          return connection.fail(
-            const SpeakerObserverException(
-              SpeakerObserverFailure.protocolError,
-            ),
-          );
+          return connection.protocolFailure();
+        }
+        final shifted = _qualified(observation, connection.epoch).shifted(
+          connection.clock.offsetUs,
+          extraUncertaintyUs: connection.clock.uncertaintyUs,
+        );
+        if (!_plausible(shifted.readStartUs, shifted.readEndUs) ||
+            observation.readEndUs - observation.readStartUs >
+                (config.readDeadlineMs + config.readSkew.inMilliseconds) *
+                    1000) {
+          return _implausible(connection);
         }
         _lastUnavailableReason = null;
         _count(observations: 1);
-        _emit(
-          ObservationEvent(
-            connection.epoch,
-            _qualified(observation, connection.epoch).shifted(
-              connection.clock.offsetUs,
-              extraUncertaintyUs: connection.clock.uncertaintyUs,
-            ),
-          ),
-        );
+        _emit(ObservationEvent(connection.epoch, shifted));
       case UnavailableFrame():
-        if (frame.session != _session) {
-          return connection.fail(
-            const SpeakerObserverException(
-              SpeakerObserverFailure.protocolError,
-            ),
-          );
-        }
+        if (frame.session != _session) return connection.protocolFailure();
+        final since =
+            frame.sinceUs +
+            connection.clock.offsetUs -
+            connection.clock.uncertaintyUs;
+        if (!_plausible(since, since)) return _implausible(connection);
         _count(unavailableFrames: 1);
         // A helper repeats the same unavailability every poll as a heartbeat.
         if (frame.reason != _lastUnavailableReason ||
@@ -778,10 +1145,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
           _emit(
             UnavailableEvent(
               connection.epoch,
-              sinceUs:
-                  frame.sinceUs +
-                  connection.clock.offsetUs -
-                  connection.clock.uncertaintyUs,
+              sinceUs: since,
               reason: frame.reason,
             ),
           );
@@ -790,6 +1154,18 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
         return;
     }
     _armStall(connection);
+  }
+
+  /// A time on the capture clock that the helper could not have observed: well
+  /// in the observer's future, or before the session began.
+  bool _plausible(int startUs, int endUs) {
+    final skew = config.readSkew.inMicroseconds;
+    return endUs <= _clockUs() + skew && startUs >= _sessionStartUs - skew;
+  }
+
+  void _implausible(_Connection connection) {
+    _diagnostic(SpeakerObserverDiagnosticCode.implausibleRead);
+    connection.protocolFailure();
   }
 
   static SpeakerObservation _qualified(SpeakerObservation o, int epoch) {
@@ -823,6 +1199,8 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     });
   }
 
+  // Restarts.
+
   void _onConnectionFailure(
     _Connection connection,
     SpeakerObserverException failure,
@@ -834,38 +1212,81 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     }
     _phase = _Phase.restarting;
     _stall?.cancel();
-    _restartOp = _restart(connection, failure).then<void>(
-      (_) {},
-      onError: (Object _, StackTrace _) {
-        _phase = _Phase.failed;
-        _emitState(ObserverStatus.failed);
-      },
+    final refill = config.restartRefillAfter;
+    if (refill != null && _restarts > 0 && _liveFor.elapsed >= refill) {
+      // The helper ran healthily for long enough: isolated crashes hours
+      // apart must not add up to a permanent failure.
+      _diagnostic(SpeakerObserverDiagnosticCode.restartRefilled, _restarts);
+      _restarts = 0;
+    }
+    _restartOp = _restart(connection, failure, _generation, _stopSignal)
+        .then<void>(
+          (_) {},
+          onError: (Object _, StackTrace _) {
+            _diagnostic(SpeakerObserverDiagnosticCode.internalError);
+            _phase = _Phase.failed;
+            _emitState(
+              ObserverStatus.failed,
+              failure: SpeakerObserverFailure.internalError,
+            );
+          },
+        );
+  }
+
+  /// Helper answers that more attempts cannot change: setup, permission and
+  /// version problems. `zoomNotRunning`, `noMeeting` and plain `unavailable`
+  /// are transient (the meeting window may reappear) and retried within the
+  /// restart budget.
+  static bool _terminal(SpeakerObserverException error) =>
+      error.failure == SpeakerObserverFailure.reapFailed ||
+      (error.failure == SpeakerObserverFailure.unavailable &&
+          switch (error.availability) {
+            ObserverAvailability.zoomNotRunning ||
+            ObserverAvailability.noMeeting ||
+            ObserverAvailability.unavailable => false,
+            _ => true,
+          });
+
+  void _terminalFailure(SpeakerObserverException error) {
+    _phase = _Phase.failed;
+    _emitState(
+      ObserverStatus.failed,
+      failure: error.failure,
+      availability: error.availability,
+      helperCode: error.helperCode,
     );
   }
 
   Future<void> _restart(
     _Connection failed,
     SpeakerObserverException cause,
+    int generation,
+    Completer<void> signal,
   ) async {
-    final generation = _generation;
     _conn = null;
-    final reaped = await failed.terminate();
+    await _reap(failed);
     if (generation != _generation) return;
-    if (!reaped) {
-      _reapFailed = true;
-      _diagnostic(SpeakerObserverDiagnosticCode.reapFailed);
-      _phase = _Phase.failed;
-      _emitState(ObserverStatus.failed, SpeakerObserverFailure.reapFailed);
-      return;
+    if (_reapFailed) {
+      return _terminalFailure(
+        const SpeakerObserverException(SpeakerObserverFailure.reapFailed),
+      );
     }
-    _emitState(ObserverStatus.restarting, cause.failure);
+    _emitState(
+      ObserverStatus.restarting,
+      failure: cause.failure,
+      availability: cause.availability,
+      helperCode: cause.helperCode,
+    );
     var latest = cause;
     while (generation == _generation) {
+      if (_reapFailed) {
+        return _terminalFailure(
+          const SpeakerObserverException(SpeakerObserverFailure.reapFailed),
+        );
+      }
       if (_restarts >= config.maxRestarts) {
         _diagnostic(SpeakerObserverDiagnosticCode.restartsExhausted, _restarts);
-        _phase = _Phase.failed;
-        _emitState(ObserverStatus.failed, latest.failure);
-        return;
+        return _terminalFailure(latest);
       }
       final attempt = ++_restarts;
       _count(restarts: 1);
@@ -875,24 +1296,27 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
         delay.inMilliseconds,
       );
       if (!await _sleep(delay, generation)) return;
-      _epoch++;
       try {
-        final connection = await _launchAndStart(_session!, _epoch);
+        final connection = await _launchAndStart(_session!, generation, signal);
         if (generation != _generation) {
           await _reap(connection);
+          _forget(connection);
           return;
         }
         _goLive(connection);
         return;
       } on SpeakerObserverException catch (error) {
-        if (generation != _generation) return;
-        latest = error;
-        if (error.failure == SpeakerObserverFailure.unavailable ||
-            error.failure == SpeakerObserverFailure.reapFailed) {
-          _phase = _Phase.failed;
-          _emitState(ObserverStatus.failed, error.failure);
+        if (generation != _generation ||
+            error.failure == SpeakerObserverFailure.cancelled) {
           return;
         }
+        latest = error;
+        if (_terminal(error)) return _terminalFailure(error);
+      } on Object {
+        _diagnostic(SpeakerObserverDiagnosticCode.internalError);
+        return _terminalFailure(
+          const SpeakerObserverException(SpeakerObserverFailure.internalError),
+        );
       }
     }
   }
@@ -915,51 +1339,105 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     return wake.future.then((_) => generation == _generation);
   }
 
+  // Shutdown.
+
   @override
   Future<void> stop() => _stopOp ??= _stop().whenComplete(() => _stopOp = null);
 
   Future<void> _stop() async {
-    if (_phase == _Phase.idle && _startOp == null) return;
+    if (_phase == _Phase.idle &&
+        _startOp == null &&
+        _shot == null &&
+        _orphans.isEmpty &&
+        _conn == null) {
+      if (_reapFailed) {
+        throw const SpeakerObserverException(SpeakerObserverFailure.reapFailed);
+      }
+      return;
+    }
+    final session = _session;
     _generation++;
+    _phase = _Phase.stopping;
     _stall?.cancel();
     _backoff?.cancel();
     final wake = _backoffWake;
     if (wake != null && !wake.isCompleted) wake.complete();
-    await _startOp;
-    await _restartOp;
+    final signal = _stopSignal;
+    if (!signal.isCompleted) signal.complete();
+    // Cancel work that has not produced a running session yet.
+    final pending = _conn;
+    if (pending != null && !pending.live) {
+      pending.fail(
+        const SpeakerObserverException(SpeakerObserverFailure.cancelled),
+      );
+    }
+    _shot?.fail(
+      const SpeakerObserverException(SpeakerObserverFailure.cancelled),
+    );
+    final start = _startOp;
+    if (start != null) await start.then<void>((_) {}, onError: (Object _) {});
+    final restart = _restartOp;
+    if (restart != null) await restart;
     _restartOp = null;
+    await _oneShotTail;
+    if (_orphans.isNotEmpty) {
+      // A launch that never completes owns nothing yet. Give a slow one one
+      // kill grace to produce its child; if it appears later it is still
+      // drained and reaped in the background, and the next stop() or
+      // dispose() waits for that again.
+      await Future.wait(
+        _orphans.toList(),
+      ).timeout(config.killGrace, onTimeout: () => const []);
+    }
     final connection = _conn;
     _conn = null;
-    var reaped = true;
+    SpeakerObserverFailure? unclean;
     if (connection != null) {
       if (connection.live && connection.failure == null) {
         try {
-          await connection.request(StopRequest(_nextId()), config.exitGrace);
-        } on SpeakerObserverException {
-          // Escalation below terminates and reaps regardless.
+          final reply = await connection.request(
+            StopRequest(_nextId()),
+            config.exitGrace,
+          );
+          if (reply is! StoppedFrame || reply.session != session) {
+            unclean = reply is ErrorFrame
+                ? SpeakerObserverFailure.helperError
+                : SpeakerObserverFailure.protocolError;
+          }
+        } on SpeakerObserverException catch (error) {
+          unclean = error.failure == SpeakerObserverFailure.requestTimeout
+              ? SpeakerObserverFailure.shutdownTimeout
+              : error.failure;
         }
+      } else {
+        unclean = connection.failure?.failure;
       }
-      reaped = await connection.terminate();
+      final result = await _reap(connection);
+      if (result.termSent || result.killSent) {
+        unclean ??= SpeakerObserverFailure.shutdownTimeout;
+      } else if (result.reaped && result.status != 0) {
+        unclean ??= SpeakerObserverFailure.helperExited;
+      }
     }
-    _emitState(ObserverStatus.stopped);
+    _stopSignal = Completer<void>();
+    _emitState(ObserverStatus.stopped, failure: unclean);
     _resetToIdle();
-    if (!reaped) {
-      _reapFailed = true;
-      _diagnostic(SpeakerObserverDiagnosticCode.reapFailed);
+    if (_reapFailed) {
       throw const SpeakerObserverException(SpeakerObserverFailure.reapFailed);
     }
   }
 
   @override
-  Future<void> dispose() async {
-    if (_disposed) return;
+  Future<void> dispose() => _disposeOp ??= _dispose();
+
+  Future<void> _dispose() async {
+    _disposing = true;
     try {
       await stop();
     } finally {
-      _disposed = true;
       await _events.close();
     }
   }
 }
 
-enum _Phase { idle, starting, running, restarting, failed }
+enum _Phase { idle, starting, running, restarting, stopping, failed }

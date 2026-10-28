@@ -338,6 +338,10 @@ final class SpeakerAttributor {
     if (mapped == null) {
       return _plain(SpeakerDecisionState.unknown, missReason, null);
     }
+    // A sample-rate change inside the range (MappedAudioRange.crossesRateChange)
+    // is deliberately not a reason to refuse: each run is mapped with its own
+    // rate and the capture path ends a segment at a rate change, so such a
+    // range is as well placed on the clock as any other.
     if (mapped.hasDiscontinuity) {
       return _plain(
         SpeakerDecisionState.unknown,

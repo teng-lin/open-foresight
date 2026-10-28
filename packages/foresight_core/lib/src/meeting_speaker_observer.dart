@@ -42,6 +42,9 @@ enum SpeakerObserverFailure {
   reapFailed,
   busy,
   cancelled,
+  invalidArgument,
+  clockUnavailable,
+  internalError,
 }
 
 /// Failure with a fixed description. It never includes helper-supplied text,
@@ -91,9 +94,15 @@ final class UnavailableEvent extends SpeakerObserverEvent {
   final String reason;
 }
 
-/// Lifecycle change, stamped with the capture clock. A [restarting] or
-/// [failed] status means observations stopped at [atUs]; consumers must treat
-/// the time until the next observation as blind.
+/// Lifecycle change, stamped with the capture clock. [ObserverStatus.restarting],
+/// [ObserverStatus.failed] and [ObserverStatus.stopped] mean observations
+/// stopped at [atUs]; consumers must treat the time until the next observation
+/// as blind. [epoch] is the helper the event describes.
+///
+/// [failure] explains `restarting` and `failed`, and an unclean `stopped`
+/// (the helper had to be signalled, exited nonzero or answered stop wrongly).
+/// [availability] and [helperCode] carry the helper's own answer when that is
+/// the reason (for example `permissionDenied`, or an error frame's code).
 final class ObserverStateEvent extends SpeakerObserverEvent {
   const ObserverStateEvent(
     super.epoch, {
@@ -101,15 +110,21 @@ final class ObserverStateEvent extends SpeakerObserverEvent {
     required this.atUs,
     required this.restartCount,
     this.failure,
+    this.availability,
+    this.helperCode,
   });
   final ObserverStatus status;
   final int atUs, restartCount;
   final SpeakerObserverFailure? failure;
+  final ObserverAvailability? availability;
+  final String? helperCode;
 }
 
 abstract interface class MeetingSpeakerObserver {
   /// Events of the current session. A broadcast stream: events with no listener
-  /// are dropped, so listen before [start].
+  /// are dropped, so listen before [start]. Events are produced at most about
+  /// one per poll, but a listener that pauses its subscription makes the stream
+  /// buffer them without bound; consumers must keep draining (or cancel).
   Stream<SpeakerObserverEvent> get events;
 
   /// Report availability. Must not prompt or change settings.
