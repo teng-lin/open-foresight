@@ -916,6 +916,14 @@ class ApplicationService {
       cause: DiagnosticCaptureStopReason.desktopDetached,
       reason: 'Recording stopped because the desktop connection detached.',
     ),
+    cancelRecordingStart: () async {
+      if (application.recording?.starting != true) return;
+      await application.stopRecording(
+        cause: DiagnosticCaptureStopReason.desktopHiddenBeforeStart,
+        reason:
+            'Recording startup cancelled because the desktop became hidden.',
+      );
+    },
     preference: domain.store.preference,
     setPreference: domain.store.setPreference,
     stopIfIdle: _stopIfIdle,

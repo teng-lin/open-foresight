@@ -34,6 +34,7 @@ class ServiceOperationHandlers {
     required this.onAttached,
     required this.onDetached,
     required this.stopRecording,
+    required this.cancelRecordingStart,
     required this.preference,
     required this.setPreference,
     required this.stopIfIdle,
@@ -44,6 +45,7 @@ class ServiceOperationHandlers {
   final Set<Socket> desktopClients;
   final void Function() onAttached, onDetached;
   final Future<void> Function() stopRecording;
+  final Future<void> Function() cancelRecordingStart;
   final _diagnostics = captureServiceDiagnosticEmitter();
   void _visibilityChanged(bool visible) {
     try {
@@ -53,6 +55,15 @@ class ServiceOperationHandlers {
       );
     } catch (_) {
       // Logging never changes desktop or capture ownership.
+    }
+    if (!visible) {
+      unawaited(
+        cancelRecordingStart().catchError((Object error) {
+          stderr.writeln(
+            'Cancel recording startup after desktop hidden: $error',
+          );
+        }),
+      );
     }
   }
 

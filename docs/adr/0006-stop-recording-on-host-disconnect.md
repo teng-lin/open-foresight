@@ -26,7 +26,8 @@ Rejected: give the recording stop the same 1 s reattach grace that the desktop's
 
 Window visibility is separate from desktop ownership. An existing recording now
 continues when the window is hidden, minimized or covered. Visibility still gates
-new recording starts, resumes and agent approvals. Explicit Stop, desktop detach
+new recording starts, resumes and agent approvals; hiding the window cancels a
+recording that is still starting. Explicit Stop, desktop detach
 or disconnect, and application shutdown still finish capture immediately.
 
 A local diagnostic trace showed a clean capture stop at the exact time of a
