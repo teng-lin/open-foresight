@@ -112,6 +112,42 @@ void main() {
       expect(encoder.nextSeq, 0);
     });
 
+    test('request bounds match what the helper accepts', () {
+      final encoder = ObserverFrameEncoder();
+      for (final (poll, deadline) in [(100, 100), (5000, 30000)]) {
+        expect(
+          () => encoder.encode(
+            StartRequest(
+              id: 'a',
+              session: 's',
+              pollMs: poll,
+              deadlineMs: deadline,
+            ),
+          ),
+          returnsNormally,
+        );
+      }
+      for (final (poll, deadline) in [
+        (99, 1000),
+        (5001, 1000),
+        (500, 99),
+        (500, 30001),
+      ]) {
+        expect(
+          () => encoder.encode(
+            StartRequest(
+              id: 'a',
+              session: 's',
+              pollMs: poll,
+              deadlineMs: deadline,
+            ),
+          ),
+          throwsArgumentError,
+          reason: '$poll/$deadline',
+        );
+      }
+    });
+
     test('rejects identifiers and bounds that the helper must refuse', () {
       final encoder = ObserverFrameEncoder();
       expect(
@@ -208,8 +244,8 @@ void main() {
       expect(caps.reason, 'ax_untrusted');
       expect(caps.zoomVersion, '7.2.2.88465');
       final started = frames[2] as StartedFrame;
-      expect(started.target.pid, 7);
-      expect(started.target.zoomVersion, isNull);
+      expect(started.pid, 7);
+      expect(started.zoomVersion, isNull);
       final unavailable = frames[4] as UnavailableFrame;
       expect(unavailable.sinceUs, 99000);
       expect((frames[5] as ClockFrame).monotonicUs, 1234000);
@@ -641,6 +677,52 @@ void main() {
         ).code,
         ObserverProtocolErrorCode.malformed,
       );
+    });
+
+    test('started carries what the helper knew, which may be nothing', () {
+      final frames = ObserverFrameDecoder().add(
+        utf8.encode(
+          line(
+                frame('started', 0, {
+                  'id': 'a',
+                  'session': 's1',
+                  'target': {'pid': null, 'zoom_version': null},
+                }),
+              ) +
+              line(
+                frame('started', 1, {
+                  'id': 'b',
+                  'session': 's1',
+                  'target': {'pid': 42, 'zoom_version': '7.2.2.88465'},
+                }),
+              ),
+        ),
+      );
+      final nothing = frames[0] as StartedFrame;
+      expect(nothing.pid, isNull);
+      expect(nothing.zoomVersion, isNull);
+      final known = frames[1] as StartedFrame;
+      expect(known.pid, 42);
+      expect(known.zoomVersion, '7.2.2.88465');
+      for (final bad in [
+        <String, Object?>{'id': 'a', 'session': 's'},
+        {'id': 'a', 'session': 's', 'target': 'x'},
+        {
+          'id': 'a',
+          'session': 's',
+          'target': {'pid': -1},
+        },
+        {
+          'id': 'a',
+          'session': 's',
+          'target': {'pid': 'x'},
+        },
+      ]) {
+        expect(
+          decodeFailure(line(frame('started', 0, bad))).code,
+          ObserverProtocolErrorCode.malformed,
+        );
+      }
     });
 
     test('stopped may carry a null or absent session, never a bad one', () {

@@ -60,7 +60,7 @@ platform helpers (`zoom_observer_macos`, `zoom_observer_linux`). Design context:
 | --- | --- | --- |
 | `capabilities` | `id` | Report availability without prompting or changing settings |
 | `setup` | `id` | Explicit accessibility setup (may prompt / guide the user); reply with `capabilities` |
-| `start` | `id`, `session`, `poll_ms` (50 to 60000), `deadline_ms` (1 to 600000) | Begin observing the selected meeting for recording session `session`; `deadline_ms` bounds one read and the helper's shutdown |
+| `start` | `id`, `session`, `poll_ms` (100 to 5000), `deadline_ms` (100 to 30000) | Begin observing the selected meeting for recording session `session`; `deadline_ms` bounds one read and the helper's shutdown |
 | `stop` | `id` | Finish the interval, emit `stopped`, exit 0 within `deadline_ms` |
 | `clock` | `id` | Reply with `clock` frame for offset measurement |
 
@@ -113,7 +113,7 @@ thread (between reads); `clock` is answered immediately.
 | --- | --- |
 | `hello` | `helper`, `helper_version`, `parser_version`, `platform` (`macos` or `linux`) |
 | `capabilities` | `id`, `state`, `reason`, `zoom_version`, `locale` |
-| `started` | `id`, `session`, `target` |
+| `started` | `id`, `session`, `target` (`pid` and `zoom_version`, each `null` while Zoom is not running) |
 | `observation` | see below |
 | `unavailable` | `session`, `reason`, `since_ms` |
 | `clock` | `id`, `monotonic_ms`, `uptime_ms` (optional extra) |
@@ -127,12 +127,16 @@ error. A first start reports the failure to its caller without retrying; what
 the service does when a restart is answered this way is under Service
 supervision.
 
-While started, the helper emits exactly one `observation` or `unavailable`
-frame per poll. An `unavailable` condition repeats with an unchanged `since_ms`
-at every poll, which doubles as the heartbeat; the service treats silence for
-longer than `poll_ms + deadline_ms` plus a slack as a stalled helper, terminates
-it and restarts it. An `error` frame without `id` while started is fatal. An
-`observation` before `started`, or for another `session`, is a protocol error.
+While started, the helper emits one `observation` per poll while it can read
+the meeting, and an `unavailable` frame only when an unavailable interval begins
+or its reason changes. The service therefore expects a frame within
+`poll_ms + deadline_ms` plus a slack after an `observation`, and treats longer
+silence as a stalled helper, terminates it and restarts it. After an
+`unavailable` frame silence is normal; the service then sends a `capabilities`
+request each stall timeout, which the polling thread answers between reads, and
+restarts the helper if none is answered within the request timeout. An `error`
+frame without `id` while started is fatal. An `observation` before `started`,
+or for another `session`, is a protocol error.
 
 `state` is one of `available`, `needs_setup`, `permission_denied`,
 `zoom_not_running`, `no_meeting`, `unsupported_version`, `unsupported_platform`,

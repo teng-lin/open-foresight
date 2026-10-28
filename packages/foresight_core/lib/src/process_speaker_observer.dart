@@ -136,10 +136,10 @@ final class SpeakerObserverConfig {
 
   void validate() {
     if (executable.isEmpty ||
-        pollMs < 50 ||
-        pollMs > 60000 ||
-        readDeadlineMs < 1 ||
-        readDeadlineMs > 600000 ||
+        pollMs < 100 ||
+        pollMs > 5000 ||
+        readDeadlineMs < 100 ||
+        readDeadlineMs > 30000 ||
         maxRestarts < 0 ||
         clockProbes < 1 ||
         maxStderrBytes < 0 ||
@@ -313,6 +313,10 @@ final class _Connection {
   SpeakerObserverException? failure;
   HelloFrame? hello;
   bool started = false, live = false;
+
+  /// The latest stream frame was `unavailable`: the helper reports that only
+  /// when it changes, so silence is normal and liveness needs a probe.
+  bool quiet = false;
   int epoch = 0;
   _ClockFix clock = (offsetUs: 0, uncertaintyUs: 0);
 
@@ -1237,6 +1241,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
           return _implausible(connection);
         }
         _lastUnavailableReason = null;
+        connection.quiet = false;
         _count(observations: 1);
         _emit(ObservationEvent(connection.epoch, shifted));
       case UnavailableFrame():
@@ -1246,6 +1251,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
             connection.clock.offsetUs -
             connection.clock.uncertaintyUs;
         if (!_plausible(since, since)) return _implausible(connection);
+        connection.quiet = true;
         _count(unavailableFrames: 1);
         // A helper repeats the same unavailability every poll as a heartbeat.
         if (frame.reason != _lastUnavailableReason ||
@@ -1303,12 +1309,46 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
   void _armStall(_Connection connection) {
     _stall?.cancel();
     _stall = Timer(config.stallTimeout, () {
-      _diagnostic(SpeakerObserverDiagnosticCode.stalled);
-      _count(stalls: 1);
-      connection.fail(
-        const SpeakerObserverException(SpeakerObserverFailure.stalled),
-      );
+      if (connection.quiet) {
+        unawaited(_probe(connection));
+        return;
+      }
+      _stalled(connection);
     });
+  }
+
+  void _stalled(_Connection connection) {
+    _diagnostic(SpeakerObserverDiagnosticCode.stalled);
+    _count(stalls: 1);
+    connection.fail(
+      const SpeakerObserverException(SpeakerObserverFailure.stalled),
+    );
+  }
+
+  /// While the helper reports `unavailable` it sends nothing until that
+  /// changes, so a hung polling thread would look like a quiet one. A
+  /// capabilities request is answered by the polling thread between reads: an
+  /// answer, even a refusal, proves it is alive; none within the request
+  /// timeout is a stall.
+  Future<void> _probe(_Connection connection) async {
+    try {
+      await connection.request(
+        CapabilitiesRequest(_nextId()),
+        config.requestTimeout,
+        failOnTimeout: false,
+      );
+    } on SpeakerObserverException catch (error) {
+      if (error.failure == SpeakerObserverFailure.requestTimeout) {
+        _stalled(connection);
+      }
+      return;
+    }
+    if (identical(connection, _conn) &&
+        connection.live &&
+        _phase == _Phase.running &&
+        connection.failure == null) {
+      _armStall(connection);
+    }
   }
 
   // Restarts.

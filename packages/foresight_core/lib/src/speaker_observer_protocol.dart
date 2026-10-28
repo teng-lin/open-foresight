@@ -20,7 +20,9 @@ const _maxMessageRunes = 256;
 
 /// Larger values cannot be multiplied to microseconds or round-tripped.
 const _maxMs = 1 << 50;
-const _minPollMs = 50, _maxPollMs = 60000, _maxDeadlineMs = 600000;
+// The helper refuses anything outside these (invalid_request).
+const _minPollMs = 100, _maxPollMs = 5000;
+const _minDeadlineMs = 100, _maxDeadlineMs = 30000;
 
 enum ObserverProtocolErrorCode {
   malformed,
@@ -132,10 +134,15 @@ final class StartedFrame extends ObserverFrame {
     super.seq, {
     required this.id,
     required this.session,
-    required this.target,
+    this.pid,
+    this.zoomVersion,
   });
   final String id, session;
-  final ObservationTarget target;
+
+  /// What the helper knew when it started: both are null while Zoom is not
+  /// running (the meeting window is only known from observations).
+  final int? pid;
+  final String? zoomVersion;
 }
 
 final class ObservationFrame extends ObserverFrame {
@@ -199,7 +206,8 @@ final class ObserverFrameEncoder {
       if (start.pollMs < _minPollMs || start.pollMs > _maxPollMs) {
         throw ArgumentError.value(start.pollMs, 'pollMs', 'out of range');
       }
-      if (start.deadlineMs < 1 || start.deadlineMs > _maxDeadlineMs) {
+      if (start.deadlineMs < _minDeadlineMs ||
+          start.deadlineMs > _maxDeadlineMs) {
         throw ArgumentError.value(
           start.deadlineMs,
           'deadlineMs',
@@ -405,12 +413,7 @@ final class _FrameReader {
       zoomVersion: _optionalText(json, 'zoom_version'),
       locale: _optionalText(json, 'locale'),
     ),
-    'started' => StartedFrame(
-      seq,
-      id: _opaqueField(json, 'id'),
-      session: _opaqueField(json, 'session'),
-      target: _target(json['target']),
-    ),
+    'started' => _started(seq, json),
     'observation' => ObservationFrame(seq, _observation(json)),
     'unavailable' => UnavailableFrame(
       seq,
@@ -505,6 +508,22 @@ final class _FrameReader {
       speakers: speakers,
     );
   }
+}
+
+StartedFrame _started(int seq, Map<String, dynamic> json) {
+  final target = json['target'];
+  if (target is! Map<String, dynamic>) throw _malformed('Target invalid');
+  final pid = target['pid'];
+  if (pid != null && (pid is! int || pid < 0 || pid > 0xffffffff)) {
+    throw _malformed('Target process id invalid');
+  }
+  return StartedFrame(
+    seq,
+    id: _opaqueField(json, 'id'),
+    session: _opaqueField(json, 'session'),
+    pid: pid as int?,
+    zoomVersion: _optionalText(target, 'zoom_version'),
+  );
 }
 
 ObservationTarget _target(Object? value) {

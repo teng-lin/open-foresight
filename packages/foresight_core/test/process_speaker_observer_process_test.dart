@@ -74,7 +74,7 @@ void main() {
               '--pidfile=${pidFile.path}',
               '--statefile=${root.path}/state',
             ],
-        pollMs: 50,
+        pollMs: 100,
         readDeadlineMs: 500,
         spawnTimeout: const Duration(seconds: 20),
         handshakeTimeout: const Duration(seconds: 20),
@@ -276,10 +276,10 @@ void main() {
     );
     expect(codes(), contains(SpeakerObserverDiagnosticCode.frameFlood));
     // The flood never reached consumers beyond the rate limit.
-    // At 50 ms polls the limit is 80 frames per second.
+    // At 100 ms polls the limit is 40 frames per second.
     expect(
       observations().where((o) => o.epoch == 0).length,
-      lessThanOrEqualTo(80),
+      lessThanOrEqualTo(40),
     );
     expect(alive(pids().first), false);
     await value.stop();

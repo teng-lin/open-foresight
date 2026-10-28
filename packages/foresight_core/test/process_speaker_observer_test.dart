@@ -18,8 +18,8 @@ import 'support/fake_speaker_helper.dart';
 SpeakerObserverConfig fastConfig({
   int maxRestarts = 5,
   Duration? restartRefillAfter = const Duration(minutes: 5),
-  int pollMs = 50,
-  int readDeadlineMs = 50,
+  int pollMs = 100,
+  int readDeadlineMs = 100,
   Duration stallSlack = const Duration(seconds: 5),
   int clockProbes = 3,
   int maxStderrBytes = 1024,
@@ -418,8 +418,8 @@ void main() {
       expect(helper.requestTypes, ['clock', 'clock', 'clock', 'start']);
       final start = helper.requests.last;
       expect(start['session'], 's1');
-      expect(start['poll_ms'], 50);
-      expect(start['deadline_ms'], 50);
+      expect(start['poll_ms'], 100);
+      expect(start['deadline_ms'], 100);
       expect(h.states.map((e) => e.status), [ObserverStatus.running]);
       expect(h.observer.stats.helperStarts, 1);
     });
@@ -985,8 +985,8 @@ void main() {
       h = Harness(
         config: SpeakerObserverConfig(
           executable: '/fake/helper',
-          pollMs: 50,
-          readDeadlineMs: 50,
+          pollMs: 100,
+          readDeadlineMs: 100,
           backoffInitial: const Duration(seconds: 20),
           backoffMax: const Duration(seconds: 20),
           exitGrace: const Duration(milliseconds: 100),
@@ -1171,8 +1171,8 @@ void main() {
       h = Harness(
         config: SpeakerObserverConfig(
           executable: '/fake/helper',
-          pollMs: 50,
-          readDeadlineMs: 50,
+          pollMs: 100,
+          readDeadlineMs: 100,
           backoffInitial: const Duration(seconds: 30),
           backoffMax: const Duration(seconds: 30),
           stallSlack: const Duration(seconds: 30),
@@ -1602,6 +1602,70 @@ void main() {
       expect(h.observer.stats.stalls, greaterThan(0));
     });
 
+    test(
+      'a helper reporting unavailable once is probed, not restarted',
+      () async {
+        h = Harness(
+          config: fastConfig(stallSlack: const Duration(milliseconds: 100)),
+        );
+        await h.observer.start('s1');
+        final helper = h.helpers.single;
+        helper.send('unavailable', {
+          'session': 's1',
+          'reason': 'zoom_not_running',
+          'since_ms': 1500,
+        });
+        // Several stall timeouts (300 ms) of legitimate silence.
+        await Future<void>.delayed(const Duration(milliseconds: 1500));
+        expect(h.helpers, hasLength(1));
+        expect(h.observer.stats.stalls, 0);
+        expect(
+          helper.requestTypes.where((t) => t == 'capabilities').length,
+          greaterThanOrEqualTo(3),
+        );
+      },
+    );
+
+    test('a quiet helper that stops answering probes is replaced', () async {
+      h = Harness(
+        config: fastConfig(stallSlack: const Duration(milliseconds: 100)),
+      );
+      await h.observer.start('s1');
+      final helper = h.helpers.single;
+      helper.send('unavailable', {
+        'session': 's1',
+        'reason': 'zoom_not_running',
+        'since_ms': 1500,
+      });
+      await settle();
+      helper.behavior.answerCapabilities = false;
+      await eventually(() => h.helpers.length == 2);
+      expect(h.states[1].failure, SpeakerObserverFailure.stalled);
+      expect(h.observer.stats.stalls, greaterThan(0));
+    });
+
+    test(
+      'an observation after unavailable restores per-poll stall detection',
+      () async {
+        h = Harness(
+          config: fastConfig(stallSlack: const Duration(milliseconds: 100)),
+        );
+        await h.observer.start('s1');
+        final helper = h.helpers.single;
+        helper.send('unavailable', {
+          'session': 's1',
+          'reason': 'x',
+          'since_ms': 1500,
+        });
+        await settle();
+        helper.send('observation', observationFields('s1'));
+        // Probes would keep it alive if it were still considered quiet.
+        helper.behavior.answerCapabilities = true;
+        await eventually(() => h.helpers.length == 2);
+        expect(h.states[1].failure, SpeakerObserverFailure.stalled);
+      },
+    );
+
     test('frames keep a helper alive past the stall timeout', () async {
       h = Harness(
         config: fastConfig(stallSlack: const Duration(milliseconds: 500)),
@@ -1881,8 +1945,8 @@ void main() {
           executable: '/fake/helper',
           backoffInitial: const Duration(seconds: 30),
           backoffMax: const Duration(seconds: 30),
-          pollMs: 50,
-          readDeadlineMs: 50,
+          pollMs: 100,
+          readDeadlineMs: 100,
           stallSlack: const Duration(seconds: 30),
           exitGrace: const Duration(milliseconds: 100),
           termGrace: const Duration(milliseconds: 100),
@@ -1989,7 +2053,10 @@ void main() {
     test('rejects invalid configuration', () {
       for (final bad in [
         const SpeakerObserverConfig(executable: ''),
-        const SpeakerObserverConfig(executable: 'x', pollMs: 10),
+        const SpeakerObserverConfig(executable: 'x', pollMs: 99),
+        const SpeakerObserverConfig(executable: 'x', pollMs: 5001),
+        const SpeakerObserverConfig(executable: 'x', readDeadlineMs: 99),
+        const SpeakerObserverConfig(executable: 'x', readDeadlineMs: 30001),
         const SpeakerObserverConfig(executable: 'x', readDeadlineMs: 0),
         const SpeakerObserverConfig(executable: 'x', maxRestarts: -1),
         const SpeakerObserverConfig(executable: 'x', clockProbes: 0),
