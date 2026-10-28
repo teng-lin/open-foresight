@@ -8,15 +8,20 @@ export without a system FFmpeg dependency. This does not edit SDK trust inputs.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import stat
 import subprocess
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,25 +74,46 @@ def checked_archive(
 ) -> Path:
     archive = cache / (name + ".tar.gz")
     if not archive.exists() and fetch:
-        with tempfile.NamedTemporaryFile(
-            dir=cache, prefix="download-", delete=False
-        ) as output:
-            partial = Path(output.name)
-            # Do not publish unverified bytes into the content-addressed cache.
-            if not url.startswith("https://"):
-                raise ValueError("source downloads require HTTPS")
-            with urllib.request.urlopen(url, timeout=120) as response:  # noqa: S310 - reviewed hash-pinned HTTPS URLs
-                if not response.url.startswith("https://"):
-                    raise ValueError("source download redirected outside HTTPS")
-                total = 0
-                while block := response.read(65536):
-                    total += len(block)
-                    if total > 64 * 1024 * 1024:
-                        raise ValueError("source archive exceeds size limit")
-                    output.write(block)
-        if sha(partial) != expected:
-            raise ValueError(f"source checksum mismatch: {name}")
-        partial.replace(archive)
+        if not url.startswith("https://"):
+            raise ValueError("source downloads require HTTPS")
+        deadline = time.monotonic() + 120
+        for attempt in range(3):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"source download budget exhausted: {name}")
+            try:
+                with tempfile.NamedTemporaryFile(
+                    dir=cache, prefix="download-", delete=False
+                ) as output:
+                    partial = Path(output.name)
+                    # Each attempt starts a private file; no partial response or
+                    # unverified bytes can enter the content-addressed cache.
+                    with urllib.request.urlopen(url, timeout=remaining) as response:  # noqa: S310 - reviewed hash-pinned HTTPS URLs
+                        if not response.url.startswith("https://"):
+                            raise ValueError("source download redirected outside HTTPS")
+                        total = 0
+                        while block := response.read(65536):
+                            total += len(block)
+                            if total > 64 * 1024 * 1024:
+                                raise ValueError("source archive exceeds size limit")
+                            output.write(block)
+                if sha(partial) != expected:
+                    raise ValueError(f"source checksum mismatch: {name}")
+                partial.replace(archive)
+                break
+            except (OSError, http.client.IncompleteRead) as error:
+                if attempt == 2 or not transient_source_failure(error):
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                # Retain failed partial files and the transport failure. Retry
+                # neither source/redirect policy nor checksum/ownership refusal.
+                print(
+                    f"Source download {name} attempt {attempt + 1} failed: {error}",
+                    flush=True,
+                )
+                time.sleep(min(attempt + 1, remaining))
     info = archive.lstat()
     if (
         not stat.S_ISREG(info.st_mode)
@@ -98,6 +124,28 @@ def checked_archive(
     if sha(archive) != expected:
         raise ValueError(f"source checksum mismatch: {name}")
     return archive
+
+
+def transient_source_failure(error: BaseException) -> bool:
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code in (408, 429, 500, 502, 503, 504)
+    if isinstance(error, urllib.error.URLError):
+        return (
+            transient_source_failure(error.reason)
+            if isinstance(error.reason, BaseException)
+            else False
+        )
+    if isinstance(error, socket.gaierror):
+        return error.errno == socket.EAI_AGAIN
+    if isinstance(error, (TimeoutError, http.client.IncompleteRead)):
+        return True
+    return isinstance(error, OSError) and error.errno in (
+        errno.ECONNRESET,
+        errno.ECONNABORTED,
+        errno.ECONNREFUSED,
+        errno.ETIMEDOUT,
+        errno.EPIPE,
+    )
 
 
 def extract(archive: Path, destination: Path) -> None:

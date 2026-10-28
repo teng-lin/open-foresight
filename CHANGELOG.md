@@ -6,6 +6,15 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep diagnostic retry and native-drain fixtures synchronized with actual
+  writer admission, preserving their correlation and configured-level assertions.
+- Retry transient codec-source download failures within the existing request
+  budget, retaining failed partials and verifying source hashes before publication.
+- Ad-hoc sign the Mac disk image itself before generating its checksums;
+  Developer ID signing and notarization remain separate options.
+
 ## [0.1.4] - 2026-10-28
 
 Published as `v0.1.4-signed`, with the original Linux installers and an ad-hoc

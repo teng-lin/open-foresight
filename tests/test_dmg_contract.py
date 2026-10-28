@@ -244,6 +244,11 @@ class DmgContractTest(unittest.TestCase):
             image = packager.create(
                 app, manifest, "Open-Foresight-fixture-macos-arm64.dmg", root / "dist"
             )
+            subprocess.run(
+                ["codesign", "--verify", "--strict", str(image)],
+                check=True,
+                timeout=60,
+            )
             metadata = json.loads(Path(str(image) + ".build.json").read_text())
             self.assertEqual(
                 metadata["sha256"], hashlib.sha256(image.read_bytes()).hexdigest()

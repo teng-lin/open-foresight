@@ -259,7 +259,7 @@ packages:
       path: "../../packages/foresight_core"
       relative: true
     source: path
-    version: "0.1.4"
+    version: "0.1.5"
   foresight_test_support:
     dependency: "direct dev"
     description:
