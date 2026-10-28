@@ -39,7 +39,9 @@ old and new locations select their consumers. The merge base keeps commits that
 landed on the base branch after you branched out of the change.
 
 For a source export without `.git`, pass `--files PATH...` or `--files-from FILE`
-(newline- or NUL-separated, `-` for stdin). No Git command runs. `--revision`
+(newline- or NUL-separated, `-` for stdin). No Git command runs. Plans and runs both work from an export: the shared
+workflow-lint guard names the workflow files for actionlint when no Git root
+exists, since actionlint otherwise refuses to run outside a repository. `--revision`
 and `--base-revision` only label the evidence; they are never verified. The
 change identity is a SHA-256 over path, class and content (plus revision and
 merge base), so a dirty tree is never confused with its `HEAD`.

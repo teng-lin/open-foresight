@@ -305,7 +305,7 @@ def support_consumers(
         for name in files
         if (name.startswith(_SUPPORT_SCAN) and name.endswith((".dart", ".py"))) or (name.startswith("tests/") and name.endswith(".py"))
     ]
-    support = [path for path in changed if path.startswith(("packages/foresight_test_support/", "tests/service/gated_helper"))]
+    support = list(changed)
     if any(not path.endswith(".dart") and PurePosixPath(path).suffix != ".py" for path in support):
         return sorted(scanned)  # pubspec, analysis options: every consumer
     importers: dict[str, set[str]] = defaultdict(set)
@@ -337,8 +337,11 @@ def support_consumers(
         # A file mentioned by name is a consumer: Python tests read Dart fixtures (and
         # the Python twin of a Dart fixture), and the twin pairs read each other.
         base = PurePosixPath(current).name
+        stem = re.compile(rf"\b{re.escape(PurePosixPath(current).stem)}\b")
         for name, text in texts.items():
-            if name not in seen and base in text and (current.endswith(".py") or name.endswith(".py")):
+            # A Python helper is also imported by module name (`from tests.source_export import ...`).
+            mentioned = base in text or (current.endswith(".py") and stem.search(text) is not None)
+            if name not in seen and mentioned and (current.endswith(".py") or name.endswith(".py")):
                 seen.add(name)
                 queue.append(name)
     return sorted((seen | unreadable) - set(support))
@@ -514,7 +517,7 @@ def _requirement(requirement: Mapping[str, Any], context: Context, runnable: Map
         if target.exists():
             record.update(met=True, detail=str(target))
         elif producers:
-            record.update(met=True, detail=f"{target} is missing now; {producers[0]} produces it if that check passes earlier in this run", satisfied_by=producers[0])
+            record.update(met=True, detail=f"{target} is not present yet; it is produced by the earlier selected stage {producers[0]}, if that stage passes in this run", satisfied_by=producers[0])
         else:
             record.update(met=False, detail=f"{target} is missing")
     return record
@@ -610,7 +613,7 @@ def build_plan(
                 select_gate(target, why)
     for closure in closures:
         for target in closure["boundaries"]:
-            select_boundary(target, {"source": "closure", "rule": closure["rule"], "kind": "import-graph", "reason": f"Imports shared test support changed in {closure['changed'][0]}"})
+            select_boundary(target, {"source": "closure", "rule": closure["rule"], "kind": "import-graph", "reason": f"Imports or names the shared test support changed in {closure['changed'][0]}"})
     if ci["candidate_error"]:
         conservative.append("ci_selection error: " + ci["candidate_error"])
     for gate, selected in ci["effective"].items():
@@ -1173,7 +1176,8 @@ def render(plan: Mapping[str, Any], *, results: Sequence[Mapping[str, Any]] | No
         for entry in check["why"]:
             out.append(f"      why: {entry['reason']}")
         for item in check.get("prerequisites", ()):
-            out.append(f"      prerequisite {'ok' if item['met'] else 'MISSING'}: {item['detail']}")
+            label = "MISSING" if not item["met"] else f"pending ({item['satisfied_by']})" if item.get("satisfied_by") else "ok"
+            out.append(f"      prerequisite {label}: {item['detail']}")
         for item in check.get("reuse", ()):
             out.append(f"      reuse: {item['presented_as']} ({item['path']})")
         if check.get("reason"):

@@ -1688,3 +1688,42 @@ def test_f(): pass
     assert bi._python_tests(module) == {"test_g": True}
     assert bi._python_tests("import pytest\npytest.skip('x', allow_module_level=True)\ndef test_h(): pass\n") == {"test_h": True}
     assert bi._python_tests("import pytest\ndef test_i(): pass\n") == {"test_i": False}
+
+
+# --------------------------------------------- fourth review: the batch's own files
+
+
+BATCH_FILES = [
+    "tests/source_export.py", "tests/test_validate_change.py", "tests/test_boundary_inventory.py",
+    "tests/test_validation_evidence.py", "tests/test_workflow_lint_export.py", "tests/test_local_validation.py",
+    "tools/validate_change.py", "tools/validation_evidence.py", "tools/boundary_inventory.py",
+    "tools/boundary_inventory.json", "tools/check_local_validation.py", "docs/boundary-validation.md",
+    "CONTRIBUTING.md", "docs/README.md", "docs/testing.md",
+]
+
+
+def test_the_batchs_own_files_resolve_without_falling_through_to_unknown():
+    plan = plan_for(BATCH_FILES)
+    assert not plan["conservative"], plan["conservative_reasons"]
+    assert all(not item["unknown"] for item in plan["paths"])
+    assert {item["id"] for item in plan["checks"]} < GATES  # not everything
+
+
+def test_the_python_export_helper_belongs_to_the_harness_boundary_and_names_its_importers():
+    plan = plan_for(["tests/source_export.py"])
+    assert not plan["conservative"] and selected(plan)[0] == {"harness-os"}
+    assert {"shared-guards", "python-coverage"} <= selected(plan)[1]
+    consumers = plan["closure"][0]["consumers"]
+    assert {"tests/test_boundary_inventory.py", "tests/test_validate_change.py", "tests/test_workflow_lint_export.py"} <= set(consumers)
+    assert [entry["kind"] for entry in plan["paths"][0]["matches"]] == ["shared-test-support"]
+
+
+def test_a_prerequisite_produced_by_an_earlier_stage_is_not_shown_as_satisfied(monkeypatch, capsys):
+    monkeypatch.setattr(vc.shutil, "which", lambda name: f"/usr/bin/{name}")
+    plan = plan_for(["native/foresight_native.h"], environ={"FORESIGHT_BUILD_DIR": "/var/tmp/of-wp1/absent-build"})
+    core = next(item for item in plan["checks"] if item["id"] == "core-stage")
+    pending = next(item for item in core["prerequisites"] if item.get("satisfied_by"))
+    assert pending["detail"].endswith("is not present yet; it is produced by the earlier selected stage native-stage, if that stage passes in this run")
+    assert "missing now" not in pending["detail"]
+    text = vc.render(plan)
+    assert "prerequisite pending (native-stage): " in text and "prerequisite ok: /var/tmp/of-wp1/absent-build" not in text

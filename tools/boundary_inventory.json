@@ -1623,6 +1623,15 @@
         },
         {
           "kind": "static-guard",
+          "path": "tests/test_workflow_lint_export.py",
+          "skip_gate": "shared-guards",
+          "names": [
+            "test_the_real_guard_passes_in_a_git_archive_export_without_git"
+          ],
+          "note": "The workflow-lint guard in a Git-free source export; skipped when the hosted actionlint 1.7.7 and ShellCheck 0.9.0 are absent."
+        },
+        {
+          "kind": "static-guard",
           "path": "tests/test_dart_fixture_hygiene.py"
         },
         {
@@ -1949,6 +1958,22 @@
       ],
       "reason": "Shared fixtures are imported by Dart core, desktop and compiled-service tests; every consumer re-executes (the importing test files are listed from the import graph).",
       "closure": "dart-test-support-imports"
+    },
+    {
+      "id": "python-test-support",
+      "kind": "shared-test-support",
+      "globs": [
+        "tests/source_export.py"
+      ],
+      "boundaries": [
+        "harness-os"
+      ],
+      "gates": [
+        "shared-guards",
+        "python-coverage"
+      ],
+      "reason": "A Python test helper that builds source exports; the tests that import it (listed from the scan) re-run in the full Python suite, and it belongs with the harness boundary.",
+      "closure": "python-test-support-imports"
     },
     {
       "id": "native-abi",
