@@ -1,52 +1,69 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:foresight_test_support/poll.dart';
 import 'package:grpc/grpc.dart';
 import 'package:http2/transport.dart' show ServerTransportConnection;
 import 'package:test/test.dart';
 
-/// Own the listener and accepted sockets as well as gRPC's serving futures.
-/// Graceful shutdown alone can wait for remote HTTP/2 IO after the body ends.
+/// Own the listener, accepted sockets and serving futures of a fixture peer.
+/// Graceful shutdown alone can wait for unfinished remote HTTP/2 streams.
 final class OwnedRpcServer {
-  OwnedRpcServer(this.server, this.listener);
+  OwnedRpcServer({required List<Service> services})
+    : server = Server.create(services: services);
+  OwnedRpcServer._(this.server);
 
   final Server server;
-  final ServerSocket listener;
-  final sockets = <Socket>[];
-  final connections = <ServerTransportConnection>[];
-  final serving = <Future<void>>[];
+  ServerSocket? listener;
   StreamSubscription<Socket>? accepts;
+  final sockets = <Socket>[];
+  final serving = <Future<void>>[];
   Future<void>? closing;
 
+  Map<ServerTransportConnection, Iterable<ServiceCall>> get handlers =>
+      server.handlers;
+
   static Future<OwnedRpcServer> start(Server server, String path) async {
-    final listener = await ServerSocket.bind(
-      InternetAddress(path, type: InternetAddressType.unix),
-      0,
+    final fixture = OwnedRpcServer._(server);
+    await fixture.serve(
+      address: InternetAddress(path, type: InternetAddressType.unix),
+      port: 0,
     );
-    final fixture = OwnedRpcServer(server, listener);
-    addTearDown(fixture.close);
-    fixture.accepts = listener.listen(
+    return fixture;
+  }
+
+  Future<void> serve({
+    required InternetAddress address,
+    required int port,
+  }) async {
+    if (listener != null) throw StateError('Fixture already serving');
+    final bound = listener = await ServerSocket.bind(address, port);
+    addTearDown(close);
+    accepts = bound.listen(
       (socket) {
-        fixture.sockets.add(socket);
-        final connection = ServerTransportConnection.viaSocket(socket);
-        fixture.connections.add(connection);
-        final serving = server.serveConnection(connection: connection);
-        // Preserve the same future for the final join, while observing early errors.
-        serving.ignore();
-        fixture.serving.add(serving);
+        sockets.add(socket);
+        final future = server.serveConnection(
+          connection: ServerTransportConnection.viaSocket(socket),
+        );
+        // Keep the original future for the final join and observe early errors.
+        future.ignore();
+        serving.add(future);
       },
       onError: (Object error, StackTrace stack) {
         Zone.current.handleUncaughtError(error, stack);
       },
     );
-    return fixture;
   }
 
+  Future<void> shutdown() => close();
   Future<void> close() => closing ??= _close();
 
   Future<void> _close() async {
-    await listener.close();
+    print('RPC_FIXTURE_CLOSE phase=0 sockets=${sockets.length}');
+    await listener?.close();
     await accepts?.cancel();
+    final connections = server.handlers.keys.toList();
+    print('RPC_FIXTURE_CLOSE phase=1 connections=${connections.length}');
     for (final socket in sockets) {
       socket.destroy();
     }
@@ -55,8 +72,11 @@ final class OwnedRpcServer {
         ...serving,
         for (final connection in connections) connection.terminate(),
       ]);
+      print('RPC_FIXTURE_CLOSE phase=2');
     } finally {
       await server.shutdown();
     }
+    await eventually(() => server.handlers.isEmpty);
+    print('RPC_FIXTURE_CLOSE phase=3');
   }
 }
