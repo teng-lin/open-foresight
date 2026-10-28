@@ -1178,6 +1178,7 @@ def execute(
                         leaked_descendants=bool(outcome.get("leaked_descendants")),
                         started=bool(outcome.get("started", True)),
                         group_survivors=outcome.get("group_survivors", False),
+                        unkillable=bool(outcome.get("unkillable")),
                         seconds=outcome["seconds"],
                         log=outcome["log"],
                         junit=[validation_evidence.junit_counts(Path(item), started) for item in check.get("junit", ())],
@@ -1452,7 +1453,8 @@ def _main(argv: Sequence[str] | None, root: Path, environ: Mapping[str, str] | N
     if signals:
         return 128 + signals[0]
     if summary is None:
-        return 2
+        # A failed check still wins: the evidence failure is on stderr, the run's verdict is the exit status.
+        return 1 if any(check.get("status") == "failed" for check in checks) else 2
     if mode == "plan":
         return 0 if written else 2
     if summary["status"] == "failed":

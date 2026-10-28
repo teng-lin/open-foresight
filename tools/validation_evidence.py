@@ -428,11 +428,15 @@ def cache_and_artifacts(
 
 
 _ABSOLUTE_PATH = re.compile(r"(?<![\w.:/-])/[^\s'\"),;:]+")
+_QUOTED_PATH = re.compile(r"(['\"`])/[^'\"`\n]*\1")
+# An account directory may contain spaces ("John Smith"): take everything up to the next separator after it.
+_ACCOUNT_PATH = re.compile(r"(?<![\w.:/-])/(?:Users|home)/[^/\n'\"`]+/[^\s'\"),;:]*")
 
 
 def redact(text: str) -> str:
-    """Gap prose names conditions, not locations: absolute paths are replaced."""
-    return _ABSOLUTE_PATH.sub("<path>", text)
+    """Prose names conditions, not locations: absolute paths (quoted, with spaces, or bare) are replaced."""
+    text = _QUOTED_PATH.sub(lambda found: f"{found.group(1)}<path>{found.group(1)}", text)
+    return _ABSOLUTE_PATH.sub("<path>", _ACCOUNT_PATH.sub("<path>", text))
 
 
 def derive_gaps(summary: Mapping[str, Any]) -> list[dict[str, str]]:
@@ -457,6 +461,8 @@ def derive_gaps(summary: Mapping[str, Any]) -> list[dict[str, str]]:
     source = summary["source"]
     if source.get("dirty") is True:
         add("dirty-at-recording", "the working tree had uncommitted changes; the change identity names them, the revision alone does not")
+    if not source.get("revision"):
+        add("revision-unrecorded", "the packet records no revision (an explicit file list), so it cannot be tied to a checkout; only the change identity names the content")
     if source.get("dirty") is None:
         add("change-set-dirty-unknown", str(source.get("dirty_unknown") or "the working tree was not inspected"))
     if source.get("revision_declared"):
@@ -507,7 +513,7 @@ def build_summary(
         "environment": collect_environment(environ),
         "tools": dict(tools) if tools is not None else None,
         "selection": dict(selection),
-        "checks": [dict(check) for check in checks],
+        "checks": [dict(check, reason=redact(check["reason"])) if isinstance(check.get("reason"), str) else dict(check) for check in checks],
         "counts": summarize_checks(checks),
         "unexecuted_platforms": list(unexecuted_platforms),
         "incomplete_reasons": list(incomplete_reasons),

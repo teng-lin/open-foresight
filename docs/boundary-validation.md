@@ -155,8 +155,10 @@ environment:
   a dirty or unknown dirty state, a declared and unverified revision, unexecuted
   platforms, checks that did not pass, checks subsumed by another rather than run, unrecorded
   artifact provenance). Gap prose
-  names conditions, not locations: absolute paths are replaced, and free text from
-  failed commands is not copied. The environment allowlist concerns environment
+  and a check's recorded reason name conditions, not locations: absolute paths,
+  including quoted ones with spaces and account directories, are replaced, and free
+  text from failed commands is not copied. An explicit file list records no
+  revision (`revision-unrecorded`); only the change identity names its content. The environment allowlist concerns environment
   variables only; reasons and notes are bounded text written by the tool.
 
 `python -m tools.validation_replay PACKET [--check] [--json]` reads a packet and
@@ -170,8 +172,10 @@ packet has control and non-printable characters escaped and its length bounded,
 so a packet cannot forge report lines or terminal sequences. A reproduction
 command is offered only when the recorded entrypoint is a `tools.*` module that
 exists in this checkout, and a failed check's entrypoint only when it matches
-that gate's definition in the boundary inventory; otherwise the report says
-"unrecorded". The packet must be a regular file under 8 MiB with correctly typed
+that gate's definition in the boundary inventory (`{python}` must be an
+interpreter named python or python3.N outside the temporary directories,
+`{platform}` linux or macos, other placeholders printable paths without `..`);
+otherwise the report says "unrecorded". The packet must be a regular file under 8 MiB with correctly typed
 fields; a FIFO, an oversized, deeply nested or wrongly typed packet is refused.
 The replay never runs a recorded command and reads no environment; on this host
 it runs only `git` status queries and tool version probes, each with a 10 second
@@ -183,27 +187,44 @@ corrupt packet.
 
 `python -m tools.check_entrypoint_parity` (part of the shared guards) reads the
 workflows without changing them and checks that every command gate's script is
-called by some workflow step, or that the gate declares `local_only` with a
+reached by some workflow step, or that the gate declares `local_only` with a
 reason, and that a `local_only` claim no workflow contradicts. The `run:` text
 is split into commands the way a shell would (comments stripped, quotes honored,
 `;`, `&&`, `||`, pipes and newlines separate commands). A script is called when it
 is a whole token of a command that executes things, so launchers (`bash`, `sh`,
 `env VAR=1`, `exec`, `time`) work; a mention in `echo`, `cp`, `chmod`, `test`,
-`git add` or another non-executing command, or inside a quoted string or comment,
-is not a call. A step or job whose `if:` is literally false never runs and calls
-nothing. A call to a shell script counts for the gate scripts that script calls
-(to depth four), reported as `via <script>`; this over-approximates, since every
-branch of the called script is credited to each step that calls it. A gate with a
-`--stage` or `--suite` is satisfied by a call with that value (a `build.sh` call
-with no `--stage` or `all` covers every stage); a value read from a variable is
-reported as ambiguous, not as an exact match. It also rejects a workflow that
-calls a repository script that no longer exists and fails on any workflow shape
-it does not understand. It reads only `.yml` and `.yaml` files, and refuses YAML
-anchors, aliases and duplicate keys (a pull request controls these files; an alias
-expansion could exhaust the guard, and a repeated `steps:` key would let the last
-one silently win). It is script-level: it does not check that a workflow
-passes the same arguments (other than `--stage` and `--suite`), and inline `dart test`, `flutter test`, `ctest` or
-`pytest` invocations are listed in its `--json` output for information only.
+`git add` or another non-executing command, inside a quoted string or comment,
+or in a here-document body (unless the document is fed to a shell) is not a call.
+A step or job whose `if:` is literally false never runs and calls nothing. A gate
+with a `--stage` or `--suite` is satisfied by a call with that value (a
+`build.sh` call with no `--stage`, or `all`, covers every stage); a `--build-only`
+call builds and runs no tests, so it satisfies no gate that does not ask for it.
+
+Evidence comes in two strengths. `called_by` lists the steps that call the gate's
+script directly with its own literal `--stage`/`--suite`. `may_call` lists weaker
+evidence: a call made by a repository shell script a step runs (shown as
+`via <script>`; the script is read with the caller's literal arguments, so the
+branch `linux_acceptance.sh audio` takes is followed and an `exit` it is certain
+to reach ends the read, but a condition on the environment stays unknown and every
+branch it may take is kept) and a call whose stage or suite comes from a shell
+variable. A gate with only `may_call` evidence is reported as **wiring
+unverified**: it is listed in the output and in `--json` as `wiring_unverified`,
+and it is never counted as a pass. On the current tree that is
+`integration-virtual-audio`: only `bash tools/linux_acceptance.sh audio` (the
+`acceptance-audio` job and the weekly audit) runs it, inside a container and only
+when the audio selection variable allows it.
+
+The check also rejects a workflow that calls a repository script that no longer
+exists and fails on any workflow shape it does not understand. It reads only
+`.yml` and `.yaml` files, and refuses YAML anchors, aliases and duplicate keys (a
+pull request controls these files; an alias expansion could exhaust the guard,
+and a repeated `steps:` key would let the last one silently win). Static limits
+remain: an `if false; then ...; fi` or code after `exit 0` inside a step, shell
+functions that are never invoked, and the `--platform` argument (not compared) are
+read as if they ran or matched. It is script-level: it does not check that a
+workflow passes the same other arguments, and inline `dart test`, `flutter test`,
+`ctest` or `pytest` invocations are listed in its `--json` output for information
+only.
 
 | Overall status | Meaning |
 | --- | --- |
@@ -227,8 +248,8 @@ export inside another Git checkout is refused; pass `--files`.
 
 Exit status is 0 only for a full pass (or a plan), 1 for a failure, 2 for invalid
 input, an inconsistent inventory, or evidence that cannot be built or written (a
-completed run still prints every result first and says the evidence failed), 3
-for a partial run and
+completed run still prints every result first and says the evidence failed on
+stderr; a failed check still exits 1), 3 for a partial run and
 128 plus the signal number after an interruption (130 for Ctrl-C, 143 for SIGTERM,
 129 for SIGHUP). SIGTERM and SIGHUP are routed like Ctrl-C: the entrypoint's
 process group is killed, the results so far and the evidence are written, and

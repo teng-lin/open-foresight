@@ -51,7 +51,13 @@ def test_the_real_gates_and_workflows_agree():
     assert report["problems"] == []
     assert report["runs"] > 100 and set(report["gates"]) >= {"platform-contracts", "bindings-check", "document-sandbox", "dmg-contracts"}
     assert report["gates"]["shared-guards"]["local_only"] and not report["gates"]["shared-guards"]["called_by"]
-    assert all(gate["called_by"] for gate in report["gates"].values() if not gate["local_only"])
+    assert all(gate["called_by"] or gate["may_call"] for gate in report["gates"].values() if not gate["local_only"])
+    # The one gate no step calls directly: the hosted acceptance-audio job runs it inside a container through
+    # tools/linux_acceptance.sh, under a selection variable. That is reported, never counted as a pass.
+    assert report["wiring_unverified"] == ["integration-virtual-audio"]
+    assert all("tools/linux_acceptance.sh" in label for label in report["gates"]["integration-virtual-audio"]["may_call"])
+    assert not any("acceptance-cpu" in label or "acceptance-deb" in label for label in report["gates"]["integration-virtual-audio"]["may_call"])
+    assert any("acceptance-cpu" in label for label in report["gates"]["integration-models"]["may_call"])
     assert parity.main([]) == 0
 
 
@@ -59,7 +65,7 @@ def test_a_gate_no_workflow_calls_must_say_why(tmp_path):
     root = tree(tmp_path, {"ci.yml": workflow("bash tools/build.sh --stage native")})
     report = parity.check(root, inventory())
     assert report["problems"] == ["gate bindings-check: no workflow step calls `tools/check_dart_bindings.py`; wire it or declare local_only with a reason"]
-    assert report["gates"]["native-stage"]["called_by"] == [".github/workflows/ci.yml:build"] and report["gates"]["native-stage"]["ambiguous"] == []
+    assert report["gates"]["native-stage"]["called_by"] == [".github/workflows/ci.yml:build"] and report["gates"]["native-stage"]["may_call"] == []
     assert parity.check(root, inventory(**{"bindings-check": "runs only before a push"}))["problems"] == []
 
 
@@ -131,7 +137,7 @@ def test_cli_json_and_text_output_and_exit_status(capsys, monkeypatch):
     assert parity.main(["--json"]) == 0
     assert json.loads(capsys.readouterr().out)["problems"] == []
     assert parity.main([]) == 0 and "command gates" in capsys.readouterr().out
-    monkeypatch.setattr(parity, "check", lambda root: {"problems": ["gate x: drifted"], "gates": {}, "runs": 1, "inline_runners": []})
+    monkeypatch.setattr(parity, "check", lambda root: {"problems": ["gate x: drifted"], "gates": {}, "runs": 1, "inline_runners": [], "wiring_unverified": []})
     assert parity.main([]) == 1
     assert "- gate x: drifted" in capsys.readouterr().err
 
@@ -176,7 +182,6 @@ def test_mentions_comments_quoted_strings_and_other_stages_are_not_calls(tmp_pat
     "command",
     [
         "bash tools/build.sh --platform linux --stage native",
-        "bash tools/build.sh --stage=native --build-only",
         "FOO=1 bash tools/build.sh --stage native",
         "xvfb-run -a dbus-run-session -- bash tools/build.sh --stage native",
         "if true; then bash tools/build.sh --stage native; fi",
@@ -197,10 +202,13 @@ def test_real_calls_are_found_through_launchers_operators_and_continuations(tmp_
 def test_a_stage_chosen_by_a_shell_variable_is_ambiguous_not_exact(tmp_path):
     report = calling(tmp_path, 'bash tools/build.sh --stage "$STAGE"', extra=NATIVE)
     gate = report["gates"]["native-stage"]
-    assert gate["called_by"] == gate["ambiguous"] == [".github/workflows/ci.yml:build"]
-    assert report["problems"] == []
+    # A variable may choose any stage, so it is evidence of wiring, not a pass: the gate is unverified.
+    assert gate["called_by"] == [] and gate["may_call"] == [".github/workflows/ci.yml:build"] and gate["wiring_unverified"] is True
+    assert report["problems"] == [] and report["wiring_unverified"] == ["native-stage"]
     exact = calling(tmp_path / "again", 'bash tools/build.sh --stage "$STAGE"', "bash tools/build.sh --stage native", extra=NATIVE)
-    assert exact["gates"]["native-stage"]["ambiguous"] == []
+    assert exact["gates"]["native-stage"]["called_by"] == [".github/workflows/ci.yml:build"] and exact["gates"]["native-stage"]["may_call"] == []
+    assert exact["gates"]["native-stage"]["wiring_unverified"] is False
+    assert exact["wiring_unverified"] == []
 
 
 def test_a_job_or_step_that_can_never_run_calls_nothing(tmp_path):
@@ -214,11 +222,12 @@ def test_a_job_or_step_that_can_never_run_calls_nothing(tmp_path):
     assert parity.check(tree(tmp_path / "ok", {"ci.yml": conditional}), inventory(**NATIVE))["gates"]["native-stage"]["called_by"]
 
 
-def test_a_script_run_through_a_called_shell_script_counts_and_says_via(tmp_path):
+def test_a_script_run_through_a_called_shell_script_is_may_call_and_says_via(tmp_path):
     root = tree(tmp_path, {"ci.yml": workflow("bash tools/b.sh audio")})
     (root / "tools/b.sh").write_text("#!/bin/sh\n# tools/build.sh --stage native is not run here\nif [ \"$1\" = audio ]; then\n  docker run image python3 tools/build.sh \\\n    --stage native\nfi\n")
     report = parity.check(root, inventory(**NATIVE))
-    assert report["gates"]["native-stage"]["called_by"] == [".github/workflows/ci.yml:build via tools/b.sh"]
+    gate = report["gates"]["native-stage"]
+    assert gate["called_by"] == [] and gate["may_call"] == [".github/workflows/ci.yml:build via tools/b.sh"] and gate["wiring_unverified"]
 
 
 def test_scripts_that_call_each_other_cannot_loop_forever(tmp_path):
@@ -226,7 +235,7 @@ def test_scripts_that_call_each_other_cannot_loop_forever(tmp_path):
     (root / "tools/b.sh").write_text("bash tools/c.sh\n")
     (root / "tools/c.sh").write_text("bash tools/b.sh\nbash tools/build.sh --stage native\n")
     report = parity.check(root, inventory(**NATIVE))
-    assert report["gates"]["native-stage"]["called_by"] == [".github/workflows/ci.yml:build via tools/c.sh"]
+    assert report["gates"]["native-stage"]["may_call"] == [".github/workflows/ci.yml:build via tools/c.sh"]
     # Each script is expanded once per call chain: the cycle b -> c -> b is cut, not re-walked to the depth limit.
     calls = parity.collect_calls([parity.Run("ci.yml", "build", "step", "bash tools/b.sh")], root)
     assert [(call.script, call.via) for call in calls] == [
@@ -305,3 +314,139 @@ def test_only_yml_and_yaml_workflows_and_actions_are_read(tmp_path):
     root = tree(tmp_path / "action", {"ci.yml": workflow("echo hi")}, actions={"a": action})
     (root / ".github/actions/a/action.yml").rename(root / ".github/actions/a/action.yaml")
     assert parity.check(root, inventory(**NATIVE))["gates"]["native-stage"]["called_by"] == [".github/actions/a/action.yaml:(action)"]
+
+
+# ------------------------------------------------- review round 3: what never executes, and what only might
+
+HEREDOC_NO_CALL = "cat > run.sh <<'EOF'\nbash tools/build.sh --stage native\nEOF\nchmod +x run.sh"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        HEREDOC_NO_CALL,
+        "cat > run.sh <<EOF\nbash tools/build.sh --stage native\nEOF",
+        'cat <<"EOF" > run.sh\nbash tools/build.sh --stage native\nEOF',
+        "cat <<-EOF\n\tbash tools/build.sh --stage native\n\tEOF\ntrue",
+        "bash tools/build.sh --stage native --build-only",
+        "bash tools/build.sh --stage=native --build-only",
+    ],
+)
+def test_heredoc_bodies_and_build_only_runs_are_not_calls(tmp_path, command):
+    report = calling(tmp_path, command, extra=NATIVE)
+    gate = report["gates"]["native-stage"]
+    assert gate["called_by"] == [] and gate["may_call"] == []
+    assert any(problem.startswith("gate native-stage: no workflow step calls") for problem in report["problems"])
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash <<'EOF'\nbash tools/build.sh --stage native\nEOF",
+        "sh <<EOF\nbash tools/build.sh --stage native\nEOF",
+        "cat <<EOF | bash\nbash tools/build.sh --stage native\nEOF\nbash tools/build.sh --stage native",
+    ],
+)
+def test_a_heredoc_fed_to_a_shell_does_run_its_body(tmp_path, command):
+    assert calling(tmp_path, command, extra=NATIVE)["gates"]["native-stage"]["called_by"]
+
+
+def test_text_after_a_heredoc_is_still_read(tmp_path):
+    command = "cat <<'EOF' > note\nnothing here\nEOF\nbash tools/build.sh --stage native"
+    assert calling(tmp_path, command, extra=NATIVE)["gates"]["native-stage"]["called_by"] == [".github/workflows/ci.yml:build"]
+    assert parity.strip_heredocs("cat <<'EOF'\nx\nEOF\ny") == "cat \ny"
+    tabbed = "cat <<-EOF\n\tnot a call\n\tEOF\nbash tools/build.sh --stage native"
+    assert calling(tmp_path / "tabs", tabbed, extra=NATIVE)["gates"]["native-stage"]["called_by"] == [".github/workflows/ci.yml:build"]
+
+
+DISPATCHER = """#!/usr/bin/env bash
+set -euo pipefail
+task_suite=${1:?cpu, audio, or deb}
+if [[ "$task_suite" == deb ]]; then
+  bash tools/build.sh --stage package
+  exit 0
+fi
+[[ "$task_suite" == cpu || "$task_suite" == audio ]] || { echo bad >&2; exit 2; }
+if [[ "$task_suite" == cpu && "${CPU_SELECTED:-true}" == false ]]; then
+  exit 0
+fi
+if [[ "$task_suite" == cpu ]]; then
+  docker run image python3 tools/build.sh --stage native
+elif [[ "$task_suite" == audio ]]; then
+  docker run image python3 tools/build.sh --stage core
+else
+  bash tools/build.sh --stage desktop
+fi
+"""
+
+
+def dispatched(tmp_path, argument):
+    root = tree(tmp_path, {"ci.yml": workflow(f"bash tools/d.sh {argument}")}, scripts=("tools/build.sh", "tools/check_dart_bindings.py"))
+    (root / "tools/d.sh").write_text(DISPATCHER)
+    gates = {name: {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", name]} for name in ("package", "native", "core", "desktop")}
+    report = parity.check(root, {"gates": gates})
+    return {name: gate["may_call"] for name, gate in report["gates"].items()}, report
+
+
+@pytest.mark.parametrize(
+    ("argument", "expected"),
+    [
+        ("deb", {"package"}),  # the taken branch exits before anything else
+        ("cpu", {"native"}),  # an unknown environment test does not hide the branch, and the other branches are dropped
+        ("audio", {"core"}),
+        ("other", {"desktop"}),
+        ('"$SUITE"', {"package", "native", "core", "desktop"}),  # a variable argument selects nothing
+    ],
+)
+def test_a_dispatcher_script_is_read_with_the_callers_literal_argument(tmp_path, argument, expected):
+    may, report = dispatched(tmp_path, argument)
+    assert {name for name, labels in may.items() if labels} == expected
+    assert all(gate["called_by"] == [] for gate in report["gates"].values())
+    assert set(report["wiring_unverified"]) == expected
+
+
+def test_reachable_text_follows_branches_exits_and_unknown_tests():
+    text = parity.reachable_text(DISPATCHER, ["deb"])
+    assert "package" in text and "native" not in text and "exit 0" in text
+    assert "native" in parity.reachable_text(DISPATCHER, ["cpu"]) and "core" not in parity.reachable_text(DISPATCHER, ["cpu"])
+    single = 'if [ "$1" = a ]; then\n  echo one\nelif [ "$1" != b ]; then\n  echo two\nelse\n  echo three\nfi\n'
+    assert parity.reachable_text(single, ["a"]).split() == ["echo", "one"]
+    assert parity.reachable_text(single, ["c"]).split() == ["echo", "two"]
+    assert parity.reachable_text(single, ["b"]).split() == ["echo", "three"]
+    assert parity.reachable_text(single, ["$X"]).split() == ["echo", "one", "echo", "two", "echo", "three"]
+    unknown_first = 'if [[ "${E:-x}" == y ]]; then\n  echo env\nelif [[ "$1" == a ]]; then\n  echo arg\nelse\n  echo rest\nfi\n'
+    assert "env" in parity.reachable_text(unknown_first, ["a"]) and "rest" in parity.reachable_text(unknown_first, ["a"])
+    oneline = 'if [[ "$1" == a ]]; then echo here\nfi\nif [[ "$1" == b ]]; then echo hidden\nfi\nexit 0\necho after\n'
+    assert parity.reachable_text(oneline, ["a"]).split() == ["echo", "here", "exit", "0"]
+    assert parity.reachable_text("if cmd; then\n  echo x\nfi\n", []).split() == ["echo", "x"]
+
+
+def test_evaluate_is_three_valued():
+    bindings = {"s": "cpu"}
+    assert parity.evaluate('[[ "$s" == cpu ]]', bindings) is True
+    assert parity.evaluate('[[ "$s" != cpu ]]', bindings) is False
+    assert parity.evaluate('[[ "$s" == cpu && "${E:-1}" == false ]]', bindings) is None
+    assert parity.evaluate('[[ "$s" == audio && "${E:-1}" == false ]]', bindings) is False
+    assert parity.evaluate('[[ "$s" == cpu || "${E:-1}" == false ]]', bindings) is True
+    assert parity.evaluate('[[ "$s" == audio ]] || [[ "$s" == cpu ]]', bindings) is True
+    assert parity.evaluate('[[ "$s" == audio ]] && [[ "$s" == cpu ]]', bindings) is False
+    assert parity.evaluate('[[ "$s" == audio ]] || [[ "${E}" == x ]] && [[ "$s" == cpu ]]', bindings) is None
+    assert parity.evaluate("command -v tool", bindings) is None and parity.evaluate("", bindings) is None
+    assert parity.evaluate('[[ "$other" == cpu ]]', bindings) is None
+    # A command in the condition can succeed or fail whatever the tests say.
+    assert parity.evaluate('[[ "$s" == cpu ]] && command -v tool', bindings) is None
+    assert parity.evaluate('[[ "$s" == audio ]] || command -v tool', bindings) is None
+
+
+def test_a_build_only_call_does_not_satisfy_a_stage_but_a_gate_that_asks_for_it_is_satisfied(tmp_path):
+    argv = ["bash", "tools/build.sh", "--stage", "native", "--build-only"]
+    gate = {"gates": {"build-native": {"kind": "command", "argv": argv}}}
+    root = tree(tmp_path, {"ci.yml": workflow("bash tools/build.sh --stage native --build-only")})
+    assert parity.check(root, gate)["gates"]["build-native"]["called_by"] == [".github/workflows/ci.yml:build"]
+
+
+def test_the_wiring_unverified_gates_are_listed_in_the_text_output(capsys, tmp_path, monkeypatch):
+    root = tree(tmp_path, {"ci.yml": workflow('bash tools/build.sh --stage "$S"')})
+    monkeypatch.setattr(parity, "boundary_inventory", type("B", (), {"load": staticmethod(lambda r: inventory(**NATIVE)), "_argv_entrypoints": staticmethod(parity.boundary_inventory._argv_entrypoints)}))
+    assert parity.main([], root=root) in (0, 1)
+    assert "Wiring unverified: native-stage" in capsys.readouterr().out

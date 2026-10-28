@@ -118,14 +118,41 @@ def load_gates(root: Path = validation_evidence.ROOT) -> dict[str, list[str]]:
         return {}
 
 
+_PLACEHOLDERS = {
+    "python": r"(?:[^\0]*/)?python(?:3(?:\.[0-9]+)?)?",
+    "platform": r"linux|macos",
+}
+_DEFAULT_PLACEHOLDER = r"[^\0\n]+"
+_TEMP_DIRECTORIES = ("/tmp/", "/var/tmp/", "/private/tmp/", "/private/var/tmp/", "/dev/shm/")  # noqa: S108 - a denylist; nothing is created here
+
+
+def _placeholder_ok(token: str, names: Sequence[str]) -> bool:
+    if not token.isprintable() or re.search(r"(?:^|/)\.\.(?:/|$)", token):
+        return False
+    return not ("python" in names and token.startswith(_TEMP_DIRECTORIES))
+
+
 def matches_gate(argv: Any, template: Sequence[str] | None) -> bool:
-    """Whether a recorded argv is the gate's template with its `{placeholders}` filled in."""
+    """Whether a recorded argv is the gate's template with its `{placeholders}` filled in plausibly.
+
+    `{python}` must be an interpreter named python or python3(.N) outside the
+    temporary directories, `{platform}` linux or macos, and every other placeholder
+    a printable path without `..`. The match decides whether a command is shown,
+    never whether it is safe to run.
+    """
     if template is None or not isinstance(argv, list) or len(argv) != len(template):
         return False
-    return all(
-        isinstance(token, str) and re.fullmatch(".*".join(re.escape(part) for part in re.split(r"\{[a-z_]+\}", pattern)), token, re.DOTALL)
-        for token, pattern in zip(argv, template, strict=True)
-    )
+    for token, pattern in zip(argv, template, strict=True):
+        if not isinstance(token, str):
+            return False
+        names = re.findall(r"\{([a-z_]+)\}", pattern)
+        pieces = re.split(r"\{[a-z_]+\}", pattern)
+        expression = re.escape(pieces[0])
+        for name, piece in zip(names, pieces[1:], strict=True):
+            expression += f"(?:{_PLACEHOLDERS.get(name, _DEFAULT_PLACEHOLDER)})" + re.escape(piece)
+        if not re.fullmatch(expression, token, re.DOTALL) or (names and not _placeholder_ok(token, names)):
+            return False
+    return True
 
 
 def observe_git(root: Path, run: Callable[..., Any] = subprocess.run) -> dict[str, Any]:

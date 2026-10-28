@@ -1976,3 +1976,35 @@ def test_an_entrypoint_that_only_dies_to_the_final_cleanup_is_still_unkillable(t
     assert result["error"] == "the entrypoint did not exit after SIGKILL" and result["unkillable"] is True
     assert result["returncode"] == -9  # reaped by the final cleanup, but not when it was first asked to die
     assert vc.check_phases({"status": "failed", **result}, "runnable")["teardown"] == "unknown"
+
+
+# ------------------------------------------------ review round 3
+
+def test_execute_carries_the_unkillable_flag_into_the_check_so_the_teardown_is_unknown(tmp_path, monkeypatch):
+    monkeypatch.setattr(vc.validation_evidence, "SHORT_TEMP_LIMIT", 500)
+    monkeypatch.setattr(vc.shutil, "which", lambda name: f"/usr/bin/{name}")
+    plan = plan_for(["docs/testing.md"])
+    plan["checks"] = [c for c in plan["checks"] if c["id"] == "shared-guards"]
+    output = tmp_path / "o"
+    output.mkdir(mode=0o700)
+
+    def runner(*a, **k):
+        return {"returncode": None, "timed_out": True, "leaked_descendants": False, "error": "reworded: still running", "seconds": 1.0,
+                "log": None, "started": True, "group_survivors": False, "unkillable": True}
+
+    [result], _ = vc.execute(plan, output, {}, include_long=False, runner=runner)
+    assert result["unkillable"] is True
+    assert result["phases"] == {"setup": "ok", "body": "timed-out", "teardown": "unknown"}
+    evidence_check = vc._evidence_check(result)
+    assert evidence_check["unkillable"] is True and evidence_check["phases"]["teardown"] == "unknown"
+    calm = {**runner(), "timed_out": False, "returncode": 0, "error": None, "unkillable": False}
+    [fine], _ = vc.execute(plan, tmp_path / "o", {}, include_long=False, runner=lambda *a, **k: calm)
+    assert fine["unkillable"] is False and fine["phases"]["teardown"] == "clean"
+
+
+def test_a_failed_check_wins_over_an_evidence_failure_and_the_message_goes_to_stderr(private_output, accepting_junit, monkeypatch, capsys):
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({"check_local_validation": 1}))
+    monkeypatch.setattr(vc.validation_evidence, "pinned_tools", lambda root: (_ for _ in ()).throw(KeyError("flutter")))
+    code = vc.main(["--files", "docs/testing.md", "--output", str(private_output)], root=ROOT, environ={})
+    captured = capsys.readouterr()
+    assert code == 1 and "the evidence could not be built" in captured.err and "shared-guards" in captured.out

@@ -341,7 +341,7 @@ def test_gaps_name_every_condition_a_reader_could_not_reproduce():
     result["artifacts"] = [{"check": "x", "path": "/p", "sha256": "0" * 64, "producer": None}]
     codes = {gap["code"] for gap in evidence.derive_gaps(result)}
     assert codes == {
-        "pin-mismatch:protoc", "pin-unobserved:dart", "pin-unobserved:flutter", "pin-unobserved:actionlint", "pin-unobserved:shellcheck", "temp-root-noncompliant", "home-differs-from-nss", "change-set-dirty-unknown",
+        "pin-mismatch:protoc", "revision-unrecorded", "pin-unobserved:dart", "pin-unobserved:flutter", "pin-unobserved:actionlint", "pin-unobserved:shellcheck", "temp-root-noncompliant", "home-differs-from-nss", "change-set-dirty-unknown",
         "revision-declared-not-verified", "unexecuted-platform:linux", "check-not-passed:native-stage", "artifact-provenance-not-recorded",
     }
     assert evidence.derive_gaps(result)[0]["detail"]
@@ -573,3 +573,31 @@ def test_the_summary_records_the_policy_it_is_given_not_a_recomputed_one():
         temp_root_policy=policy,
     )
     assert result["temp_root_policy"] == policy and "temp-root-noncompliant" in {gap["code"] for gap in result["reproduction_gaps"]}
+
+
+# ------------------------------------------------ review round 3
+
+def test_a_packet_without_a_revision_has_a_gap_and_one_with_it_does_not():
+    bare = summary_with()
+    assert "revision-unrecorded" in {gap["code"] for gap in bare["reproduction_gaps"]}
+    named = json.loads(json.dumps(bare))
+    named["source"]["revision"] = "a" * 40
+    assert "revision-unrecorded" not in {gap["code"] for gap in evidence.derive_gaps(named)}
+
+
+def test_redaction_handles_quoted_paths_with_spaces_and_account_directories():
+    assert evidence.redact("cannot open '/Users/John Smith/My Project/x.log' now") == "cannot open '<path>' now"
+    assert evidence.redact('cannot open "/var/tmp/a b/log"') == 'cannot open "<path>"'
+    assert evidence.redact("failed in /Users/John Smith/src/app/build.log, retry") == "failed in <path>, retry"
+    assert evidence.redact("see /home/ada/.cache/x and /opt/tool/bin") == "see <path> and <path>"
+    assert evidence.redact("no path here, a/b, 1/2, https://x.org/p") == "no path here, a/b, 1/2, https://x.org/p"
+    assert "Smith" not in evidence.redact("/Users/John Smith/x")
+
+
+def test_a_checks_recorded_reason_is_redacted_but_its_status_and_log_are_kept():
+    failing = check("native-stage", "failed", reason="cannot start the entrypoint: FileNotFoundError: '/Users/John Smith/repo/tools/x.sh'", log="/var/tmp/x/native.log")
+    result = summary_with(checks=[failing])
+    [recorded] = result["checks"]
+    assert "Smith" not in recorded["reason"] and recorded["reason"].endswith("'<path>'") and recorded["log"] == "/var/tmp/x/native.log"
+    assert failing["reason"].startswith("cannot start") and "Smith" in failing["reason"]  # the caller's own record is untouched
+    assert summary_with(checks=[check("shared-guards", "passed")])["checks"][0].get("reason") is None

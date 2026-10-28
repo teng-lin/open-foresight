@@ -482,3 +482,74 @@ def test_whatever_else_an_untrusted_packet_breaks_is_a_refusal(tmp_path, monkeyp
     assert replay.main([str(write(tmp_path, packet()))], observe=lambda: HERE) == 2
     err = capsys.readouterr().err
     assert "malformed (ZeroDivisionError)" in err and "Traceback" not in err
+
+
+# ------------------------------------------------ review round 3
+
+def test_an_explicit_file_list_packet_has_no_revision_and_says_so():
+    explicit = packet()
+    explicit["source"].update(mode="explicit", revision=None)
+    explicit["reproduction_gaps"] = []
+    report = replay.analyze(explicit, HERE)
+    assert "revision-unrecorded" in {gap["code"] for gap in report["recorded_gaps"]}
+    assert report["gap_count"] >= 1
+    assert replay.host_mismatches(explicit, HERE) == []  # nothing to compare, hence the recorded gap
+
+
+def test_a_source_export_packet_replayed_elsewhere_cannot_pass_the_check(tmp_path):
+    explicit = packet()
+    explicit["source"].update(mode="explicit", revision=None)
+    explicit["checks"] = [check("shared-guards", "passed")]
+    explicit["reproduction_gaps"] = []
+    assert replay.main([str(write(tmp_path, explicit)), "--check"], observe=lambda: HERE) == 1
+    explicit["source"]["revision"] = "a" * 40
+    assert replay.main([str(write(tmp_path, explicit, "with.json")), "--check"], observe=lambda: HERE) == 0
+
+
+GATE = ["{python}", "-m", "tools.check_local_validation"]
+
+
+@pytest.mark.parametrize(
+    ("argv", "offered"),
+    [
+        (["/Users/ada/repo/.venv/bin/python", "-m", "tools.check_local_validation"], True),
+        (["/usr/bin/python3", "-m", "tools.check_local_validation"], True),
+        (["/opt/hostedtoolcache/Python/3.13.1/x64/bin/python3.13", "-m", "tools.check_local_validation"], True),
+        ([".venv/bin/python", "-m", "tools.check_local_validation"], True),
+        (["python", "-m", "tools.check_local_validation"], True),
+        (["/tmp/payload", "-m", "tools.check_local_validation"], False),
+        (["/tmp/python3", "-m", "tools.check_local_validation"], False),
+        (["/var/tmp/x/python", "-m", "tools.check_local_validation"], False),
+        (["/private/tmp/x/python3.13", "-m", "tools.check_local_validation"], False),
+        (["/dev/shm/python", "-m", "tools.check_local_validation"], False),
+        (["/usr/bin/bash", "-m", "tools.check_local_validation"], False),
+        (["/usr/bin/python3x", "-m", "tools.check_local_validation"], False),
+        (["/usr/bin/../../tmp/python", "-m", "tools.check_local_validation"], False),
+        (["/usr/bin/python\n", "-m", "tools.check_local_validation"], False),
+        (["/usr/bin/python", "-m", "tools.other"], False),
+    ],
+)
+def test_the_python_placeholder_is_an_interpreter_not_an_arbitrary_path(argv, offered):
+    assert replay.matches_gate(argv, GATE) is offered
+
+
+def test_platform_and_path_placeholders_are_constrained():
+    template = ["bash", "tools/build.sh", "--platform", "{platform}", "--output", "{output}/integration-models", "{build_dir}/native/{native_library}"]
+    good = ["bash", "tools/build.sh", "--platform", "linux", "--output", "/var/tmp/o/integration-models", "build/native/libx.so"]
+    assert replay.matches_gate(good, template) is True
+    assert replay.matches_gate([*good[:3], "windows", *good[4:]], template) is False
+    assert replay.matches_gate([*good[:3], "linux; rm", *good[4:]], template) is False
+    assert replay.matches_gate([*good[:5], "/a/../../etc/integration-models", good[6]], template) is False
+    assert replay.matches_gate([*good[:6], "../x/native/libx.so"], template) is False
+    assert replay.matches_gate([*good[:6], "b/native/\x1b[31m"], template) is False
+    assert replay.matches_gate([*good[:5], "/var/tmp/o/integration-models", "native/x"], template) is False  # the literal /native/ is missing
+    assert replay.matches_gate(good, [*template[:-1], "{unknown_kind}"]) is True
+
+
+def test_a_replaced_interpreter_is_reported_as_unrecorded_in_the_report():
+    hostile = packet()
+    hostile["checks"][1].update(id="shared-guards", entrypoint=["/tmp/payload", "-m", "tools.check_local_validation"])
+    [failed] = replay.analyze(hostile, HERE)["failing_checks"]
+    assert failed["command"] is None and failed["command_status"].startswith("unrecorded")
+    hostile["checks"][1]["entrypoint"] = ["/usr/bin/python3", "-m", "tools.check_local_validation"]
+    assert replay.analyze(hostile, HERE)["failing_checks"][0]["command"].startswith("/usr/bin/python3")
