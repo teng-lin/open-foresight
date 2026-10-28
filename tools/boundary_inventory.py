@@ -513,6 +513,11 @@ def verify(root: Path = ROOT) -> dict[str, Any]:
         if status == "closed-production":
             if cell.get("missing"):
                 fail(f"{label}: a closed cell cannot list missing coverage")
+            gap_language = re.search(
+                r"not covered|not exercised|never exercised|never covered|never tested|untested|not proven|unproven|not yet", str(cell.get("note") or ""), re.I
+            )
+            if gap_language:
+                fail(f"{label}: a closed cell's note names a gap ({gap_language.group(0)!r}); list it in missing")
             backed = [entry for entry in evidence if "production both" in str(entry.get("sides", "")).lower()]
             if not backed:
                 fail(f"{label}: a closed cell needs evidence whose sides say production both")

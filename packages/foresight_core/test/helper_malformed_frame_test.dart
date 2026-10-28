@@ -248,10 +248,16 @@ Future<void> _guarded(Future<void> Function(List<Object> uncaught) body) async {
       }
     }, fail),
   );
-  return await done.future.timeout(
+  await done.future.timeout(
     const Duration(minutes: 2),
     onTimeout: () => throw TimeoutException('hostile-peer scenario hung'),
   );
+  // Errors can arrive after the body, for example from teardown: the zone's
+  // handler keeps recording, and a final settle barrier checks what it saw.
+  await Future<void>.delayed(const Duration(milliseconds: 600));
+  if (uncaught.isNotEmpty) {
+    throw StateError('Errors escaped after the scenario finished: $uncaught');
+  }
 }
 
 class _Peer {

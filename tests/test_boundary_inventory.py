@@ -430,7 +430,7 @@ def test_a_closed_cell_has_no_missing_coverage_and_no_gap_language_in_its_note()
     for item in inventory.load(ROOT)["lifecycle_reconciliation"]:
         if str(item["status"]).startswith("closed"):
             assert not item.get("missing"), item
-            assert not re.search(r"not covered|not exercised|untested|not proven|unproven", str(item.get("note", "")), re.I), item
+            assert not re.search(r"not covered|not exercised|never exercised|never covered|never tested|untested|not proven|unproven|not yet", str(item.get("note", "")), re.I), item
         elif item["status"] != "open":
             assert item["missing"], item  # a non-closed cell says what is missing
 
@@ -468,10 +468,11 @@ def test_cells_say_why_and_cite_what_the_tests_prove():
         ("service_crash_contract_test.dart", "a service killed after committing a mutation and before its reply"),
         ("remote_domain_test.dart", "a command whose outcome is unknown is never resent"),
     ]
-    for key in ("Several requests in flight", "before the commit", "startup", "helper enabled", "/usr/bin/open", "/bin/sh launcher"):
+    for key in ("a kill before the commit", "several requests pending", "a read-only request", "startup", "helper or a recording", "/usr/bin/open", "/bin/sh launcher"):
         assert key in eof["missing"], key
     crash = cell(data, "Desktop to service", "Crash")
-    assert "SIGKILL" in crash["evidence"][0]["sides"] and "Several requests in flight" in crash["missing"]
+    assert "SIGKILL" in crash["evidence"][0]["sides"] and "several requests in flight" in crash["missing"]
+    assert "no command issued" in crash["evidence"][0]["sides"] and "next command" not in json.dumps(data)
     reconnect = cell(data, "Desktop to service", "Reconnect")
     assert reconnect["status"] == "partial" and "literal true" in reconnect["missing"]
     assert [e["path"].rsplit("/", 1)[1] for e in reconnect["evidence"][:2]] == ["service_crash_contract_test.dart"] * 2
@@ -519,3 +520,45 @@ def test_class_and_module_level_skips_in_cited_files_must_declare_a_skip_gate(ex
         "tests/test_macos_bundle.py": "platform-contracts",
         "tests/test_dmg_contract.py": "dmg-contracts",
     }
+
+
+def test_a_closed_cells_note_cannot_hide_a_gap(export, editable):
+    for phrase in ("Not covered: several requests in flight", "this was never exercised", "still untested", "NOT PROVEN for startup"):
+        def hide(data, phrase=phrase):
+            target = cell(data, "Desktop to service", "Crash")
+            target.update(status="closed-production", missing=None, note=phrase)
+
+        editable("tools/boundary_inventory.json", hide)
+        failing(export, "a closed cell's note names a gap")
+
+    def honest(data):
+        target = cell(data, "Desktop to service", "Crash")
+        target.update(status="closed-production", missing=None, note="Verified by the SIGKILL contract test.")
+
+    editable("tools/boundary_inventory.json", honest)
+    assert inventory.verify(export)["lifecycle_cells"] == 14
+
+
+HOSTILE_SCENARIOS = [
+    "a handshake, then EOF once the request has arrived",
+    "a handshake, half a frame header, then EOF once the request has arrived",
+    "a handshake followed by half a frame header, then silence",
+    "a handshake followed by a frame header that announces a huge payload",
+    "a message shorter than its length prefix",
+    "a message that is not valid protobuf",
+    "a compressed message without a negotiated codec",
+    "a peer that closes before the client writes, then calls after EOF",
+    "KNOWN DEFICIENCY: bytes that are not HTTP/2 are reported only at the deadline",
+    "KNOWN DEFICIENCY: a peer that closes before any frame is reported only at the deadline",
+]
+
+
+def test_the_hostile_peer_scenarios_cited_by_one_template_name_all_still_exist():
+    """The cited test name is an interpolated template, so one scenario would keep it green."""
+    source = (ROOT / "packages/foresight_core/test/helper_malformed_frame_test.dart").read_text()
+    source = re.sub(r"'\s*\n\s*'", "", source)  # adjacent literals the formatter wrapped
+    for name in HOSTILE_SCENARIOS:
+        assert name in source, name
+    assert len(inventory.dart_registered_tests(source)) == 5  # three templated tests, two literal ones in a group
+    assert len(re.findall(r"^\s+Scenario\(\s*'", source, re.M)) == 4
+    assert source.count("MalformedMessage('") == 3

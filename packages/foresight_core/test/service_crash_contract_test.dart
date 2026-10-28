@@ -117,6 +117,16 @@ void main() {
     expect(await titles(domain), ['Rewritten by an agent']);
   }
 
+  /// The desktop reconnects on its own when it sees the loss (RemoteDomain
+  /// listens for its connection ending); no command is needed to start the
+  /// replacement. Wait for that launch, with the service output on failure.
+  Future<void> reconnectedByItself(_Session s) => within(
+    eventually(() => s.launcher.launched.length == 1, timeout: bound),
+    'the desktop starting a replacement on its own',
+    s.owner,
+    s.launcher,
+  );
+
   /// SIGKILL [owner] and check that it died of that signal, not of a clean
   /// exit that would have run shutdown code.
   Future<void> crash(
@@ -190,7 +200,9 @@ void main() {
       expect(error, isA<RpcError>(), reason: 'outcome: $error');
       expect((error as RpcError).reason, RpcErrorReason.outcomeUnknown);
 
-      // The next command rides the reconnect, which must not resend notes.save.
+      // The desktop reconnects by itself once it sees the loss; that reconnect
+      // must not resend notes.save.
+      await reconnectedByItself(s);
       expect(
         await within(titles(s.domain), 'listing notes', s.owner, s.launcher),
         ['Committed once'],
@@ -209,39 +221,33 @@ void main() {
     timeout: const Timeout(Duration(minutes: 3)),
   );
 
-  test(
-    'a service killed while idle: the next command reconnects once to a '
-    'replacement, the desktop re-attaches, and the committed data survived',
-    () async {
-      final s = await start('of-crash-idle-');
-      await s.domain.command(Operation.notesSave, {
-        'title': 'Before the crash',
-        'body': 'committed and replied',
-      });
-      await crash(s.owner, s.launcher);
-      // A killed service leaves its endpoint record behind: no shutdown ran.
-      expect(
-        File('${s.owner.profile.data}/.application-endpoint.json').existsSync(),
-        isTrue,
-      );
+  test('a service killed while idle: the desktop reconnects on its own to one '
+      'replacement, re-attaches its approval window, and the committed data '
+      'survived', () async {
+    final s = await start('of-crash-idle-');
+    await s.domain.command(Operation.notesSave, {
+      'title': 'Before the crash',
+      'body': 'committed and replied',
+    });
+    await crash(s.owner, s.launcher);
+    // No command is issued: the desktop starts the replacement itself.
+    await reconnectedByItself(s);
 
-      expect(
-        await within(titles(s.domain), 'listing notes', s.owner, s.launcher),
-        ['Before the crash'],
-      );
-      expect(s.launcher.launched, hasLength(1));
-      expect(s.launcher.launched.single, isNot(s.owner.pid));
-      final status = await s.domain.command(Operation.status) as Map;
-      expect(status['pid'], s.launcher.launched.single);
-      await approvedOverwriteRoundTrip(
-        s.domain,
-        s.approvals,
-        s.profile,
-        'Before the crash',
-      );
-    },
-    timeout: const Timeout(Duration(minutes: 3)),
-  );
+    expect(
+      await within(titles(s.domain), 'listing notes', s.owner, s.launcher),
+      ['Before the crash'],
+    );
+    expect(s.launcher.launched, hasLength(1));
+    expect(s.launcher.launched.single, isNot(s.owner.pid));
+    final status = await s.domain.command(Operation.status) as Map;
+    expect(status['pid'], s.launcher.launched.single);
+    await approvedOverwriteRoundTrip(
+      s.domain,
+      s.approvals,
+      s.profile,
+      'Before the crash',
+    );
+  }, timeout: const Timeout(Duration(minutes: 3)));
 
   test(
     'control: a request issued after the loss was seen was never sent, so the '
