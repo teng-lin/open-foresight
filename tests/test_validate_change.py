@@ -2008,3 +2008,37 @@ def test_a_failed_check_wins_over_an_evidence_failure_and_the_message_goes_to_st
     code = vc.main(["--files", "docs/testing.md", "--output", str(private_output)], root=ROOT, environ={})
     captured = capsys.readouterr()
     assert code == 1 and "the evidence could not be built" in captured.err and "shared-guards" in captured.out
+
+
+# ------------------------------------------------ review round 4
+
+def test_a_runner_that_reports_no_group_state_is_unknown_not_clean(tmp_path, monkeypatch):
+    monkeypatch.setattr(vc.validation_evidence, "SHORT_TEMP_LIMIT", 500)
+    monkeypatch.setattr(vc.shutil, "which", lambda name: f"/usr/bin/{name}")
+    plan = plan_for(["docs/testing.md"])
+    plan["checks"] = [c for c in plan["checks"] if c["id"] == "shared-guards"]
+    output = tmp_path / "o"
+    output.mkdir(mode=0o700)
+    silent = {"returncode": 0, "timed_out": False, "leaked_descendants": False, "error": None, "seconds": 1.0, "log": None}
+    [result], _ = vc.execute(plan, output, {}, include_long=False, runner=lambda *a, **k: dict(silent))
+    assert result["group_survivors"] is None
+    assert result["phases"] == {"setup": "ok", "body": "passed", "teardown": "unknown"}
+    [observed], _ = vc.execute(plan, tmp_path / "o", {}, include_long=False, runner=lambda *a, **k: {**silent, "group_survivors": False})
+    assert observed["phases"]["teardown"] == "clean"
+
+
+@pytest.mark.parametrize("breakage", ["evidence-check", "unexecuted", "source-key", "runtime-error"])
+def test_any_failure_while_assembling_the_evidence_keeps_the_results_and_the_verdict(private_output, accepting_junit, monkeypatch, capsys, breakage):
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({"check_local_validation": 1}))
+    if breakage == "evidence-check":
+        monkeypatch.setattr(vc, "_evidence_check", lambda check: (_ for _ in ()).throw(RuntimeError("boom")))
+    elif breakage == "unexecuted":
+        monkeypatch.setattr(vc, "unexecuted_platforms", lambda *a: (_ for _ in ()).throw(AttributeError("odd")))
+    elif breakage == "source-key":
+        monkeypatch.setattr(vc, "reproduction_lines", lambda *a: (_ for _ in ()).throw(KeyError("dirty")))
+    else:
+        monkeypatch.setattr(vc.validation_evidence, "observe_tools", lambda: (_ for _ in ()).throw(RuntimeError("probe")))
+    code = vc.main(["--files", "docs/testing.md", "--output", str(private_output)], root=ROOT, environ={})
+    captured = capsys.readouterr()
+    assert code == 1  # the failed check wins
+    assert "shared-guards" in captured.out and "the evidence could not be built" in captured.err and "Traceback" not in captured.err

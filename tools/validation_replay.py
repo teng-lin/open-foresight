@@ -16,8 +16,9 @@ printed only for an entrypoint that is a repository `tools.*` module, and a
 check's entrypoint only when it matches that gate's definition in the boundary
 inventory; anything else is reported as unrecorded.
 
-The replay never runs a recorded command. On this host it runs only `git`
-status queries and the tool version probes, each with a short timeout.
+The replay never runs a recorded command. On this host it runs only `git status`
+and `git rev-parse` (without optional locks) and the tools' `--version` probes
+(`flutter --version` may touch the Flutter SDK cache), each with a short timeout.
 `--check` exits 1 while any gap remains, 2 for an unreadable or corrupt packet.
 """
 
@@ -42,7 +43,8 @@ Gap = dict[str, str]
 
 MAX_PACKET_BYTES = 8 << 20
 PROBE_TIMEOUT_SECONDS = 10
-ENTRYPOINT = re.compile(r"tools\.[a-z_]+")
+# The only entrypoint `tools.validate_change` records for itself; any other module is not offered.
+REPLAYABLE_ENTRYPOINTS = ("tools.validate_change",)
 TEXT_LIMIT = 400
 LIST_LIMIT = 200
 
@@ -72,29 +74,52 @@ def read_packet_bytes(path: Path) -> bytes:
 
 
 def load_packet(path: Path) -> dict[str, Any]:
-    """Read and validate a packet (schema 1 or 2); raises ValueError if unusable."""
+    """Read and validate a packet (schema 1 or 2); raises ValueError if unusable.
+
+    Validation messages quote packet strings (an environment key, a phase name, a
+    check id), so every message leaves here neutralized.
+    """
+    try:
+        return _load_packet(path)
+    except ValueError as error:
+        raise ValueError(neutralize(str(error))) from error
+
+
+def _load_packet(path: Path) -> dict[str, Any]:
     try:
         packet = json.loads(read_packet_bytes(path))
     except (OSError, ValueError, RecursionError) as error:  # ValueError: bad JSON, bad bytes, size and type refusals
-        raise ValueError(f"Cannot read packet {neutralize(str(path))}: {type(error).__name__}") from error
+        raise ValueError(f"Cannot read packet {path}: {type(error).__name__}") from error
     if not isinstance(packet, dict):
-        raise ValueError(f"Packet {neutralize(str(path))} is not a JSON object")
+        raise ValueError(f"Packet {path} is not a JSON object")
     try:
         validation_evidence.validate_summary(packet)
         analyze(packet, NEUTRAL_HOST, gates={})  # a packet the replay cannot read is rejected here, not half-printed
     except ValueError:
         raise
     except Exception as error:  # untrusted input: whatever it breaks is a refusal, not a traceback
-        raise ValueError(f"Packet {neutralize(str(path))} is malformed ({type(error).__name__})") from error
+        raise ValueError(f"Packet {path} is malformed ({type(error).__name__})") from error
     return packet
 
 
 def neutralize(text: str) -> str:
-    """Text safe to print: control, format and non-printable characters are escaped, length is bounded."""
-    clean = "".join(
-        char if char.isprintable() else f"\\x{ord(char):02x}" if ord(char) < 256 else f"\\u{ord(char):04x}" if ord(char) < 0x10000 else f"\\U{ord(char):08x}"
-        for char in text
-    )
+    """Text safe to print: only printable ASCII passes, everything else is escaped, length is bounded.
+
+    A backslash is escaped too, so literal `\\x1b` text in a packet is distinguishable from an
+    escaped ESC. Non-ASCII characters are escaped wholesale: invisible ones (zero-width, Hangul
+    filler, braille blank, variation selectors, combining marks) and look-alikes cannot be told
+    apart by a reader.
+    """
+    pieces = []
+    for char in text:
+        code = ord(char)
+        if char == "\\":
+            pieces.append("\\\\")
+        elif 0x20 <= code <= 0x7E:
+            pieces.append(char)
+        else:
+            pieces.append(f"\\x{code:02x}" if code < 0x100 else f"\\u{code:04x}" if code < 0x10000 else f"\\U{code:08x}")
+    clean = "".join(pieces)
     return clean if len(clean) <= TEXT_LIMIT else clean[:TEXT_LIMIT] + "...[truncated]"
 
 
@@ -119,26 +144,29 @@ def load_gates(root: Path = validation_evidence.ROOT) -> dict[str, list[str]]:
 
 
 _PLACEHOLDERS = {
-    "python": r"(?:[^\0]*/)?python(?:3(?:\.[0-9]+)?)?",
+    "python": r"(?:[^\s|;&<>$`'\"]*/)?python[0-9.]*",
     "platform": r"linux|macos",
 }
-_DEFAULT_PLACEHOLDER = r"[^\0\n]+"
+_DEFAULT_PLACEHOLDER = r"[^\s|;&<>$`'\"]{1,512}"
 _TEMP_DIRECTORIES = ("/tmp/", "/var/tmp/", "/private/tmp/", "/private/var/tmp/", "/dev/shm/")  # noqa: S108 - a denylist; nothing is created here
 
 
 def _placeholder_ok(token: str, names: Sequence[str]) -> bool:
-    if not token.isprintable() or re.search(r"(?:^|/)\.\.(?:/|$)", token):
+    if not token.isprintable() or re.search(r"(?:^|/)\.\.(?:/|$)", token) or len(token) > 1024:
         return False
-    return not ("python" in names and token.startswith(_TEMP_DIRECTORIES))
+    if "python" in names:
+        return not token.startswith(_TEMP_DIRECTORIES)
+    return not token.startswith("/tmp/")  # noqa: S108
 
 
 def matches_gate(argv: Any, template: Sequence[str] | None) -> bool:
     """Whether a recorded argv is the gate's template with its `{placeholders}` filled in plausibly.
 
-    `{python}` must be an interpreter named python or python3(.N) outside the
-    temporary directories, `{platform}` linux or macos, and every other placeholder
-    a printable path without `..`. The match decides whether a command is shown,
-    never whether it is safe to run.
+    `{python}` must be an interpreter named python or python3.N, without spaces or
+    shell metacharacters, outside the temporary directories; `{platform}` linux or
+    macos; every other placeholder a printable path of bounded length without
+    whitespace, shell metacharacters or `..`, and not under /tmp. The match
+    decides whether a command is shown, never whether it is safe to run.
     """
     if template is None or not isinstance(argv, list) or len(argv) != len(template):
         return False
@@ -150,7 +178,7 @@ def matches_gate(argv: Any, template: Sequence[str] | None) -> bool:
         expression = re.escape(pieces[0])
         for name, piece in zip(names, pieces[1:], strict=True):
             expression += f"(?:{_PLACEHOLDERS.get(name, _DEFAULT_PLACEHOLDER)})" + re.escape(piece)
-        if not re.fullmatch(expression, token, re.DOTALL) or (names and not _placeholder_ok(token, names)):
+        if not re.fullmatch(expression, token) or (names and not _placeholder_ok(token, names)):
             return False
     return True
 
@@ -162,7 +190,7 @@ def observe_git(root: Path, run: Callable[..., Any] = subprocess.run) -> dict[st
 
     def git(*arguments: str) -> str | None:
         try:
-            result = run(["git", "-C", str(root), *arguments], capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS, check=False)
+            result = run(["git", "--no-optional-locks", "-C", str(root), *arguments], capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS, check=False)
         except (OSError, subprocess.SubprocessError):
             return None
         return result.stdout if result.returncode == 0 else None
@@ -199,14 +227,15 @@ NEUTRAL_HOST: dict[str, Any] = {
 def reproduction_command(packet: Mapping[str, Any], root: Path = validation_evidence.ROOT) -> tuple[str | None, str]:
     """The recorded invocation as one shell-quoted line, or None with the reason it is not offered.
 
-    Only a `tools.*` module that exists in this checkout is offered, so a packet
-    cannot make the replay print `pip install ...` or any other command.
+    Only `tools.validate_change`, the one entrypoint that records packets, is
+    offered, so a packet cannot make the replay print `pip install ...` or any
+    other repository tool with attacker arguments.
     """
     invocation = packet["invocation"]
     entrypoint = invocation.get("entrypoint") or "tools.validate_change"
     arguments = invocation.get("argv", [])
-    if not isinstance(entrypoint, str) or not ENTRYPOINT.fullmatch(entrypoint) or not (root / "tools" / f"{entrypoint[6:]}.py").is_file():
-        return None, "unrecorded: the recorded entrypoint is not a tools module of this checkout"
+    if entrypoint not in REPLAYABLE_ENTRYPOINTS or not (root / "tools" / f"{entrypoint[6:]}.py").is_file():
+        return None, "unrecorded: the recorded entrypoint is not one this replay offers (only tools.validate_change)"
     if not isinstance(arguments, list) or not all(isinstance(token, str) for token in arguments):
         return None, "unrecorded: the recorded arguments are not a list of text"
     return shlex.join([".venv/bin/python", "-m", entrypoint, *arguments]), "recorded, unverified"
@@ -231,7 +260,7 @@ def failing_checks(packet: Mapping[str, Any], gates: Mapping[str, Sequence[str]]
                     "no entrypoint was recorded" if not entrypoint else "it does not match this checkout's gate definition"
                 ),
                 "log": check.get("log"),
-                "phases": check.get("phases"),
+                "phases": {key: value for key, value in (check.get("phases") or {}).items() if key in validation_evidence.PHASE_VALUES} or None,
             }
         )
     return result
@@ -257,7 +286,9 @@ def host_mismatches(packet: Mapping[str, Any], here: Mapping[str, Any]) -> list[
         now = here["tools"].get(name)
         if name == "python":
             continue
-        if value is not None and now is None:
+        if any(isinstance(item, str) and item.startswith("probe failed") for item in (value, now)):
+            add(f"tool-probe-failed:{name}", f"recorded {value!r}, this host {now!r}; a failed probe says nothing about the version")
+        elif value is not None and now is None:
             add(f"tool-missing:{name}", f"recorded {value!r}, absent on this host")
         elif value is not None and now != value:
             add(f"tool-differs:{name}", f"recorded {value!r}, this host {now!r}")
@@ -282,6 +313,8 @@ def host_mismatches(packet: Mapping[str, Any], here: Mapping[str, Any]) -> list[
             add("revision-differs", "this checkout is at a different revision than the recorded run")
     if here.get("dirty") is True:
         add("dirty-here", "this checkout has uncommitted changes")
+    elif here.get("dirty") is None:
+        add("dirty-unobserved-here", "whether this checkout has uncommitted changes could not be read")
     return gaps
 
 

@@ -25,8 +25,8 @@ def tree(tmp_path, workflows, actions=None, scripts=("tools/build.sh", "tools/ch
     return root
 
 
-def workflow(*commands, job="build"):
-    steps = "\n".join(f"      - run: {json.dumps(command)}" for command in commands)
+def workflow(*commands, job="build", uses=()):
+    steps = "\n".join([f"      - uses: {name}" for name in uses] + [f"      - run: {json.dumps(command)}" for command in commands])
     return f"on: push\njobs:\n  {job}:\n    runs-on: ubuntu-24.04\n    steps:\n{steps}\n"
 
 
@@ -90,7 +90,7 @@ def test_a_workflow_calling_a_script_that_does_not_exist_is_reported(tmp_path):
 
 def test_python_module_invocations_and_composite_actions_count_as_calls(tmp_path):
     action = "runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: python -m tools.check_dart_bindings\n"
-    root = tree(tmp_path, {"ci.yml": workflow("bash tools/build.sh")}, {"bindings": action})
+    root = tree(tmp_path, {"ci.yml": workflow("bash tools/build.sh", uses=["./.github/actions/bindings"])}, {"bindings": action})
     report = parity.check(root, inventory())
     assert report["problems"] == []
     assert report["gates"]["bindings-check"]["called_by"] == [".github/actions/bindings/action.yml:(action)"]
@@ -311,7 +311,7 @@ def test_only_yml_and_yaml_workflows_and_actions_are_read(tmp_path):
         root = tree(tmp_path / extension, {f"ci.{extension}": call})
         assert parity.check(root, inventory(**NATIVE))["gates"]["native-stage"]["called_by"] == [f".github/workflows/ci.{extension}:build"]
     action = "runs:\n  using: composite\n  steps:\n    - run: bash tools/build.sh --stage native\n      shell: bash\n"
-    root = tree(tmp_path / "action", {"ci.yml": workflow("echo hi")}, actions={"a": action})
+    root = tree(tmp_path / "action", {"ci.yml": workflow("echo hi", uses=["./.github/actions/a"])}, actions={"a": action})
     (root / ".github/actions/a/action.yml").rename(root / ".github/actions/a/action.yaml")
     assert parity.check(root, inventory(**NATIVE))["gates"]["native-stage"]["called_by"] == [".github/actions/a/action.yaml:(action)"]
 
@@ -450,3 +450,147 @@ def test_the_wiring_unverified_gates_are_listed_in_the_text_output(capsys, tmp_p
     monkeypatch.setattr(parity, "boundary_inventory", type("B", (), {"load": staticmethod(lambda r: inventory(**NATIVE)), "_argv_entrypoints": staticmethod(parity.boundary_inventory._argv_entrypoints)}))
     assert parity.main([], root=root) in (0, 1)
     assert "Wiring unverified: native-stage" in capsys.readouterr().out
+
+
+# ------------------------------------------------- review round 4: only an executing position is a call
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "shellcheck tools/build.sh",
+        "shellcheck -x tools/build.sh",
+        "bash -n tools/build.sh",
+        "sh -n tools/build.sh",
+        "python -m py_compile tools/check_dart_bindings.py",
+        "python3 -m py_compile tools/check_dart_bindings.py",
+        "ruff check tools/check_dart_bindings.py",
+        "ruff format tools/check_dart_bindings.py",
+        "xargs -n1 tools/build.sh",
+        "git diff tools/build.sh",
+        "cat tools/build.sh | head",
+        "wc -l tools/build.sh",
+        r"find . -exec tools/build.sh {} \;",
+        "mypy tools/check_dart_bindings.py",
+        "python -m mypy tools/check_dart_bindings.py",
+        "bash -c tools/build.sh",
+        "stat tools/build.sh && ls tools/build.sh",
+        "awk 1 tools/build.sh",
+        "tar czf out.tgz tools/build.sh",
+        "bash tools/other.sh tools/build.sh",
+    ],
+)
+def test_lint_compile_and_probe_commands_are_not_calls(tmp_path, command):
+    report = calling(tmp_path, command, extra=NATIVE)
+    gate = report["gates"]["native-stage"]
+    assert gate["called_by"] == [] and gate["may_call"] == [], command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "tools/build.sh --stage native",
+        "./tools/build.sh --stage native",
+        "bash tools/build.sh --stage native",
+        "bash -e tools/build.sh --stage native",
+        "bash -euo pipefail tools/build.sh --stage native",
+        "sh tools/build.sh --stage native",
+        "source tools/build.sh --stage native",
+        ". tools/build.sh --stage native",
+        "exec tools/build.sh --stage native",
+        "env FOO=1 tools/build.sh --stage native",
+        "FOO=1 bash tools/build.sh --stage native",
+        "time bash tools/build.sh --stage native",
+        "timeout 60 bash tools/build.sh --stage native",
+        "timeout 60 tools/build.sh --stage native",
+        "xvfb-run -a dbus-run-session -- bash tools/build.sh --stage native",
+        "xvfb-run -a tools/build.sh --stage native",
+        "python tools/build.sh --stage native",
+        ".venv/bin/python tools/build.sh --stage native",
+        "python3.13 -u tools/build.sh --stage native",
+        "docker run --rm image python3 tools/build.sh --stage native",
+        "if tools/build.sh --stage native; then echo ok; fi",
+        "for i in 1; do bash tools/build.sh --stage native; done",
+    ],
+)
+def test_the_executing_positions_are_the_calls(tmp_path, command):
+    assert calling(tmp_path, command, extra=NATIVE)["gates"]["native-stage"]["called_by"] == [".github/workflows/ci.yml:build"], command
+
+
+def test_modules_run_by_an_interpreter_count_and_other_dash_m_heads_do_not(tmp_path):
+    gate = {"gates": {"bindings": {"kind": "command", "argv": ["{python}", "-m", "tools.check_dart_bindings"]}}}
+    for command, called in (
+        ("python -m tools.check_dart_bindings", True),
+        (".venv/bin/python3.13 -m tools.check_dart_bindings", True),
+        ("python -m py_compile tools.check_dart_bindings", False),
+        ("python -m pytest tools.check_dart_bindings", False),
+        ("echo -m tools.check_dart_bindings", False),
+    ):
+        root = tree(tmp_path / str(abs(hash(command))), {"ci.yml": workflow(command)})
+        assert bool(parity.check(root, gate)["gates"]["bindings"]["called_by"]) is called, command
+
+
+def test_a_path_that_climbs_out_of_the_tools_directory_is_not_a_script(tmp_path):
+    assert parity.calls_in("bash tools/../tools/build.sh --stage native") == []
+    assert parity.calls_in("bash tools/a/../build.sh") == []
+    assert parity.calls_in("bash tools/build.sh") == [("tools/build.sh", ())]
+    assert parity.calls_in("bash /tools/build.sh") == []
+
+
+def _action(run):
+    return f"runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: {json.dumps(run)}\n"
+
+
+def test_an_action_nothing_uses_and_a_workflow_nothing_triggers_call_nothing(tmp_path):
+    call = "bash tools/build.sh --stage native"
+    lonely_action = tree(tmp_path / "a", {"ci.yml": workflow("echo hi")}, {"build": _action(call)})
+    assert parity.check(lonely_action, inventory(**NATIVE))["gates"]["native-stage"]["called_by"] == []
+    used = tree(tmp_path / "b", {"ci.yml": workflow("echo hi", uses=["./.github/actions/build"])}, {"build": _action(call)})
+    assert parity.check(used, inventory(**NATIVE))["gates"]["native-stage"]["called_by"] == [".github/actions/build/action.yml:(action)"]
+    nested = tree(tmp_path / "c", {"ci.yml": workflow("echo hi", uses=["./.github/actions/outer/"])}, {"outer": _action("echo hi").replace("- shell: bash", "- uses: ./.github/actions/build\n    - shell: bash"), "build": _action(call)})
+    assert parity.check(nested, inventory(**NATIVE))["gates"]["native-stage"]["called_by"] == [".github/actions/build/action.yml:(action)"]
+    remote = tree(tmp_path / "d", {"ci.yml": workflow("echo hi", uses=["actions/checkout@v4", "someone/.github/actions/build@v1", "x/.github/actions/build"])}, {"build": _action(call)})
+    assert parity.check(remote, inventory(**NATIVE))["gates"]["native-stage"]["called_by"] == []
+
+
+@pytest.mark.parametrize("trigger", ["workflow_call", "[workflow_call]", "{workflow_call: {}}"])
+def test_a_workflow_only_others_can_call_counts_only_when_something_calls_it(tmp_path, trigger):
+    callee = f"on: {trigger}\njobs:\n  build:\n    runs-on: x\n    steps:\n      - run: bash tools/build.sh --stage native\n"
+    alone = tree(tmp_path / "alone", {"callee.yml": callee, "ci.yml": workflow("echo hi")})
+    assert parity.check(alone, inventory(**NATIVE))["gates"]["native-stage"]["called_by"] == []
+    caller = "on: push\njobs:\n  go:\n    uses: ./.github/workflows/callee.yml\n"
+    called = tree(tmp_path / "called", {"callee.yml": callee, "ci.yml": caller})
+    assert parity.check(called, inventory(**NATIVE))["gates"]["native-stage"]["called_by"] == [".github/workflows/callee.yml:build"]
+    dead_caller = "on: workflow_call\njobs:\n  go:\n    uses: ./.github/workflows/callee.yml\n"
+    chain = tree(tmp_path / "chain", {"callee.yml": callee, "mid.yml": dead_caller, "ci.yml": workflow("echo hi")})
+    assert parity.check(chain, inventory(**NATIVE))["gates"]["native-stage"]["called_by"] == []
+    also_pushed = callee.replace(f"on: {trigger}", "on: [push, workflow_call]")
+    assert parity.check(tree(tmp_path / "both", {"callee.yml": also_pushed, "ci.yml": workflow("echo hi")}), inventory(**NATIVE))["gates"]["native-stage"]["called_by"]
+
+
+def test_a_conditionally_skipped_call_of_a_workflow_or_action_does_not_reach_it(tmp_path):
+    callee = "on: workflow_call\njobs:\n  build:\n    runs-on: x\n    steps:\n      - run: bash tools/build.sh --stage native\n"
+    caller = "on: push\njobs:\n  go:\n    if: false\n    uses: ./.github/workflows/callee.yml\n"
+    assert parity.check(tree(tmp_path, {"callee.yml": callee, "ci.yml": caller}), inventory(**NATIVE))["gates"]["native-stage"]["called_by"] == []
+
+
+def test_duplicate_keys_are_counted_in_one_pass_not_by_rescanning(tmp_path, monkeypatch):
+    seen = []
+    real = parity.Counter
+    monkeypatch.setattr(parity, "Counter", lambda keys: seen.append(len(list(keys))) or real(keys))
+    keys = "".join(f"  k{i}: 1\n" for i in range(5000))
+    text = f"on: push\nenv:\n{keys}jobs:\n  build:\n    runs-on: x\n    steps:\n      - run: bash tools/build.sh --stage native\n"
+    report = parity.check(tree(tmp_path, {"ci.yml": text}), inventory(**NATIVE))
+    assert report["gates"]["native-stage"]["called_by"] and 5000 in seen
+
+
+def test_may_call_evidence_is_in_the_default_output_not_only_in_json(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(parity, "boundary_inventory", type("B", (), {"load": staticmethod(lambda r: inventory(**NATIVE)), "_argv_entrypoints": staticmethod(parity.boundary_inventory._argv_entrypoints)}))
+    other = tree(tmp_path / "other", {"ci.yml": workflow("bash tools/b.sh")})
+    (other / "tools/b.sh").write_text("bash tools/build.sh --stage native\n")
+    assert parity.main([], root=other) in (0, 1)
+    out = capsys.readouterr().out
+    assert "Wiring unverified: native-stage" in out
+    two_jobs = workflow("bash tools/build.sh --stage native") + "  other:\n    runs-on: x\n    steps:\n      - run: bash tools/build.sh --stage \"$S\"\n"
+    third = tree(tmp_path / "third", {"ci.yml": two_jobs})
+    assert parity.main([], root=third) in (0, 1)
+    assert "May also run (not verified): native-stage" in capsys.readouterr().out

@@ -1177,7 +1177,7 @@ def execute(
                         timed_out=bool(outcome.get("timed_out")),
                         leaked_descendants=bool(outcome.get("leaked_descendants")),
                         started=bool(outcome.get("started", True)),
-                        group_survivors=outcome.get("group_survivors", False),
+                        group_survivors=outcome.get("group_survivors"),
                         unkillable=bool(outcome.get("unkillable")),
                         seconds=outcome["seconds"],
                         log=outcome["log"],
@@ -1392,45 +1392,45 @@ def _main(argv: Sequence[str] | None, root: Path, environ: Mapping[str, str] | N
     else:
         checks = [dict(check, junit=[]) for check in plan["checks"]]
     with deferred_signals() as received:
-        unexecuted = [] if mode == "plan" else unexecuted_platforms(plan, checks, context.platform)
-        build: dict[str, Any] = dict(
-            mode=mode,
-            source={key: change[key] for key in ("mode", "revision", "base", "merge_base", "identity_sha256", "dirty", "dirty_paths", "dirty_unknown", "excluded_classes", "excluded_dirty_paths", "unreadable_paths", "counts")}
-            | {"revision_declared": change.get("revision_declared"), "path_count": len(change["paths"])},
-            invocation={
-                "entrypoint": "tools.validate_change",
-                "argv": raw_arguments,
-                "cwd": str(Path.cwd()),
-                "executable": sys.executable,
-                "root": str(root),
-                "started_epoch": round(started_utc, 3),
-                "inventory_verified": inventory_verified,
-                "baseline_only": arguments.baseline_only,
-            },
-            selection={
-                "conservative": plan["conservative"],
-                "conservative_reasons": plan["conservative_reasons"],
-                "ci": plan["ci_selection"]["effective"],
-                "ci_required_jobs": plan["ci_selection"]["required_jobs"],
-                "sanitizers": plan["ci_selection"]["sanitizers"],
-                "boundaries": [boundary["id"] for boundary in plan["boundaries"]],
-                "required_platforms": plan["required_platforms"],
-            },
-            checks=[_evidence_check(check) for check in checks],
-            unexecuted_platforms=unexecuted,
-            reproduction=reproduction_lines(plan, raw_arguments),
-            environ=environ,
-            incomplete_reasons=incomplete,
-            temp_root_policy=temp_policy,
-        )
         summary: dict[str, Any] | None
         try:
+            unexecuted = [] if mode == "plan" else unexecuted_platforms(plan, checks, context.platform)
+            build: dict[str, Any] = dict(
+                mode=mode,
+                source={key: change[key] for key in ("mode", "revision", "base", "merge_base", "identity_sha256", "dirty", "dirty_paths", "dirty_unknown", "excluded_classes", "excluded_dirty_paths", "unreadable_paths", "counts")}
+                | {"revision_declared": change.get("revision_declared"), "path_count": len(change["paths"])},
+                invocation={
+                    "entrypoint": "tools.validate_change",
+                    "argv": raw_arguments,
+                    "cwd": str(Path.cwd()),
+                    "executable": sys.executable,
+                    "root": str(root),
+                    "started_epoch": round(started_utc, 3),
+                    "inventory_verified": inventory_verified,
+                    "baseline_only": arguments.baseline_only,
+                },
+                selection={
+                    "conservative": plan["conservative"],
+                    "conservative_reasons": plan["conservative_reasons"],
+                    "ci": plan["ci_selection"]["effective"],
+                    "ci_required_jobs": plan["ci_selection"]["required_jobs"],
+                    "sanitizers": plan["ci_selection"]["sanitizers"],
+                    "boundaries": [boundary["id"] for boundary in plan["boundaries"]],
+                    "required_platforms": plan["required_platforms"],
+                },
+                checks=[_evidence_check(check) for check in checks],
+                unexecuted_platforms=unexecuted,
+                reproduction=reproduction_lines(plan, raw_arguments),
+                environ=environ,
+                incomplete_reasons=incomplete,
+                temp_root_policy=temp_policy,
+            )
             summary = validation_evidence.build_summary(
                 **build,
                 tools=validation_evidence.observe_tools() if mode == "run" else None,
                 pins=validation_evidence.pinned_tools(root),
             )
-        except (OSError, ValueError, KeyError, TypeError) as error:
+        except Exception as error:  # noqa: BLE001 - whatever breaks evidence building must not hide a completed run
             # A completed run's results are printed even when its evidence cannot be built.
             summary = None
             print(f"validate_change: the evidence could not be built: {type(error).__name__}: {error}", file=sys.stderr)

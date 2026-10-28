@@ -153,13 +153,18 @@ environment:
   derived from the packet (a plan that executed nothing, pin mismatches and
   unobserved pins, a non-compliant temp root, `HOME` differing from the NSS home,
   a dirty or unknown dirty state, a declared and unverified revision, unexecuted
-  platforms, checks that did not pass, checks subsumed by another rather than run, unrecorded
-  artifact provenance). Gap prose
-  and a check's recorded reason name conditions, not locations: absolute paths,
-  including quoted ones with spaces and account directories, are replaced, and free
-  text from failed commands is not copied. An explicit file list records no
-  revision (`revision-unrecorded`); only the change identity names its content. The environment allowlist concerns environment
-  variables only; reasons and notes are bounded text written by the tool.
+  platforms, checks that did not pass, checks subsumed by another rather than run, an
+  unidentified image, an unrecorded revision, unrecorded artifact provenance).
+  Redaction has a deliberately narrow scope. Gap prose, a check's recorded
+  `reason` and the `cache`/`artifacts` paths are redacted: absolute paths (bare,
+  after a colon, quoted, or under an account directory containing spaces) become
+  `<path>`, and cache/artifact paths under the account home start with `~`. A
+  packet is **not anonymized**: it still carries the account name and home, the
+  working directory, checkout root, interpreter path and retained log paths,
+  because a replay needs them. Treat it as a local diagnostic, not as something to
+  publish. An explicit file list records no revision (`revision-unrecorded`); only
+  the change identity names its content. The environment allowlist concerns
+  environment variables only; reasons and notes are bounded text written by the tool.
 
 `python -m tools.validation_replay PACKET [--check] [--json]` reads a packet and
 prints the recorded invocation, each failed check, the packet's gaps and the
@@ -168,18 +173,23 @@ release, image identity, architecture, Python, tool versions, root versus
 non-root, NSS account name, temp roots, and whether this checkout is at the
 recorded revision and clean). A packet is untrusted input and the report says so:
 everything printed is labelled "recorded, unverified", and every string from the
-packet has control and non-printable characters escaped and its length bounded,
-so a packet cannot forge report lines or terminal sequences. A reproduction
-command is offered only when the recorded entrypoint is a `tools.*` module that
-exists in this checkout, and a failed check's entrypoint only when it matches
-that gate's definition in the boundary inventory (`{python}` must be an
-interpreter named python or python3.N outside the temporary directories,
-`{platform}` linux or macos, other placeholders printable paths without `..`);
-otherwise the report says "unrecorded". The packet must be a regular file under 8 MiB with correctly typed
+packet is reduced to printable ASCII (a backslash and every other character is
+escaped, so invisible characters, look-alikes and literal `\x1b` text cannot pass
+as plain text) with its length bounded. That includes the validation errors, which
+quote packet strings. A packet cannot forge report lines or terminal sequences. A reproduction
+command is offered only for `tools.validate_change`, the one entrypoint that
+records packets, and a failed check's entrypoint only when it matches that gate's
+definition in the boundary inventory (`{python}` must be an interpreter named
+python or python3.N with no spaces or shell metacharacters, outside the temporary
+directories; `{platform}` linux or macos; other placeholders printable paths of
+bounded length without whitespace, shell metacharacters, `..` or a leading
+`/tmp`); otherwise the report says "unrecorded". The packet must be a regular file under 8 MiB with correctly typed
 fields; a FIFO, an oversized, deeply nested or wrongly typed packet is refused.
 The replay never runs a recorded command and reads no environment; on this host
-it runs only `git` status queries and tool version probes, each with a 10 second
-limit. A packet cannot hide a gap by omitting it: the gaps its contents imply are
+it runs only `git status` and `git rev-parse` (without optional locks) and the
+tools' `--version` probes (`flutter --version` may touch the Flutter SDK cache),
+each with a 10 second limit. A failed probe on either side, an unreadable
+revision or dirty state here, and an unidentified image are gaps, never matches. A packet cannot hide a gap by omitting it: the gaps its contents imply are
 added to the ones it recorded. A replay that lists no gap still does not prove a
 hosted failure reproduces; the recorded conditions are the ones this tool could
 observe. `--check` exits 1 while any gap remains and 2 for an unreadable or
@@ -190,12 +200,18 @@ workflows without changing them and checks that every command gate's script is
 reached by some workflow step, or that the gate declares `local_only` with a
 reason, and that a `local_only` claim no workflow contradicts. The `run:` text
 is split into commands the way a shell would (comments stripped, quotes honored,
-`;`, `&&`, `||`, pipes and newlines separate commands). A script is called when it
-is a whole token of a command that executes things, so launchers (`bash`, `sh`,
-`env VAR=1`, `exec`, `time`) work; a mention in `echo`, `cp`, `chmod`, `test`,
-`git add` or another non-executing command, inside a quoted string or comment,
-or in a here-document body (unless the document is fed to a shell) is not a call.
-A step or job whose `if:` is literally false never runs and calls nothing. A gate
+`;`, `&&`, `||`, pipes and newlines separate commands). A script is called when it is
+a whole token in an executing position: the command itself (after keywords,
+assignments and wrappers such as `env`, `time`, `timeout`, `xvfb-run`,
+`dbus-run-session`), or the argument of `bash`, `sh`, `source`, `.`, `exec` or a
+`python` interpreter that has no flag stopping it from running the script (`-n`,
+`-c`). Anything else is not a call: `shellcheck tools/build.sh`, `bash -n`,
+`python -m py_compile`, `ruff check`, `xargs`, `find -exec`, `cat`, `cp`, `chmod`,
+`git add`, a quoted string, a comment, or a here-document body (unless the
+document is fed to a shell). A path with `..` is never a script. A step or job whose `if:` is literally false
+never runs and calls nothing. A workflow counts only if something can trigger it (a `workflow_call`-only workflow
+counts only when a triggered workflow calls it), and a composite action only if a
+reachable workflow or action `uses:` it. A gate
 with a `--stage` or `--suite` is satisfied by a call with that value (a
 `build.sh` call with no `--stage`, or `all`, covers every stage); a `--build-only`
 call builds and runs no tests, so it satisfies no gate that does not ask for it.
@@ -208,7 +224,9 @@ branch `linux_acceptance.sh audio` takes is followed and an `exit` it is certain
 to reach ends the read, but a condition on the environment stays unknown and every
 branch it may take is kept) and a call whose stage or suite comes from a shell
 variable. A gate with only `may_call` evidence is reported as **wiring
-unverified**: it is listed in the output and in `--json` as `wiring_unverified`,
+unverified**: it is listed in the default output and in `--json` as `wiring_unverified`
+(gates that also have a direct caller print their `may_call` entries as "May also
+run (not verified)"),
 and it is never counted as a pass. On the current tree that is
 `integration-virtual-audio`: only `bash tools/linux_acceptance.sh audio` (the
 `acceptance-audio` job and the weekly audit) runs it, inside a container and only

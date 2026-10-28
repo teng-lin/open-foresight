@@ -427,10 +427,10 @@ def cache_and_artifacts(
     return {"reused_outputs": reused}, artifacts
 
 
-_ABSOLUTE_PATH = re.compile(r"(?<![\w.:/-])/[^\s'\"),;:]+")
+_ABSOLUTE_PATH = re.compile(r"(?<![\w.\-/])/(?!/)[^\s'\"),;:]+")
 _QUOTED_PATH = re.compile(r"(['\"`])/[^'\"`\n]*\1")
 # An account directory may contain spaces ("John Smith"): take everything up to the next separator after it.
-_ACCOUNT_PATH = re.compile(r"(?<![\w.:/-])/(?:Users|home)/[^/\n'\"`]+/[^\s'\"),;:]*")
+_ACCOUNT_PATH = re.compile(r"(?<![\w.\-/])/(?:Users|home)/[^/\n'\"`]+/[^\s'\"),;:]*")
 
 
 def redact(text: str) -> str:
@@ -461,6 +461,8 @@ def derive_gaps(summary: Mapping[str, Any]) -> list[dict[str, str]]:
     source = summary["source"]
     if source.get("dirty") is True:
         add("dirty-at-recording", "the working tree had uncommitted changes; the change identity names them, the revision alone does not")
+    if not (summary.get("image") or {}).get("os_id"):
+        add("image-unrecorded", "the operating-system image was not identified (no os-release or macOS version), so images cannot be compared")
     if not source.get("revision"):
         add("revision-unrecorded", "the packet records no revision (an explicit file list), so it cannot be tied to a checkout; only the change identity names the content")
     if source.get("dirty") is None:

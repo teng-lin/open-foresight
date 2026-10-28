@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping, Sequence
+from collections import Counter
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
@@ -55,15 +56,6 @@ _MODULE = re.compile(r"^(tools\.[A-Za-z0-9_]+)$")
 _INLINE = re.compile(r"(?<![\w./-])(dart test|flutter test|ctest|pytest|python[\d.]* -m pytest)\b")
 _OPERATORS = {";", "&&", "||", "|", "|&", "&", "(", ")", ";;", "{", "}"}
 _KEYWORDS = {"if", "then", "elif", "else", "do", "while", "until", "!", "fi", "done", "time"}
-# Commands whose arguments are data, not something to execute: a script path
-# after them is a mention, not a call.
-_NOT_EXECUTING = {
-    "echo", "printf", "cat", "grep", "egrep", "fgrep", "sed", "awk", "test", "[", "[[", "ls", "cp", "mv", "rm",
-    "ln", "mkdir", "touch", "chmod", "chown", "tee", "diff", "cmp", "sha256sum", "shasum", "md5sum", "stat",
-    "wc", "head", "tail", "find", "read", "export", "local", "declare", "readonly", "set", "unset", "cd",
-    "command", "which", "type", "readlink", "realpath", "dirname", "basename", "file", "du", "tar", "zip",
-    "unzip", "curl", "wget", "git", "gh", "rsync", "install", "mapfile", "true", "false", ":",
-}
 _DISCRIMINATORS = ("--stage", "--suite")
 _HEREDOC = re.compile(r"<<(-?)\s*(?:'([^']+)'|\"([^\"]+)\"|([A-Za-z_][A-Za-z0-9_]*))")
 _SHELL_FEED = re.compile(r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:sudo\s+|exec\s+|env\s+)?(?:bash|sh|zsh|dash|source|\.)\b")
@@ -95,6 +87,8 @@ class Call:
 class Parsed:
     runs: list[Run] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    entries: set[str] = field(default_factory=set)  # workflows something can trigger
+    reaches: dict[str, set[str]] = field(default_factory=dict)  # file -> workflows and action files it calls
 
 
 class _Rejected(yaml.YAMLError):
@@ -116,7 +110,7 @@ class _Loader(yaml.SafeLoader):
 
     def construct_mapping(self, node: Any, deep: bool = False) -> Any:
         keys = [self.construct_object(key, deep=True) for key, _value in node.value]
-        duplicates = sorted({str(key) for key in keys if keys.count(key) > 1})
+        duplicates = sorted(str(key) for key, count in Counter(keys).items() if count > 1)
         if duplicates:
             raise _Rejected("duplicate keys: " + ", ".join(duplicates))
         return super().construct_mapping(node, deep)
@@ -128,6 +122,13 @@ _Loader.yaml_implicit_resolvers = {
 }
 
 
+def _local_target(uses: Any) -> str | None:
+    """The repository path a local `uses:` names, or None for a marketplace or remote reference."""
+    if not isinstance(uses, str) or not uses.startswith("./"):
+        return None
+    return uses[2:].rstrip("/")
+
+
 def _steps(document: Any, where: str, parsed: Parsed, file: str) -> None:
     if not isinstance(document, list):
         parsed.problems.append(f"{where}: steps must be a list")
@@ -136,6 +137,8 @@ def _steps(document: Any, where: str, parsed: Parsed, file: str) -> None:
         if not isinstance(step, dict):
             parsed.problems.append(f"{where}: step {index} is not a mapping")
             continue
+        if not _literally_false(step.get("if")) and (target := _local_target(step.get("uses"))):
+            parsed.reaches.setdefault(file, set()).add(target)  # a local composite action
         if "run" in step:
             if not isinstance(step["run"], str):
                 parsed.problems.append(f"{where}: step {index} has a run that is not text")
@@ -172,6 +175,8 @@ def workflow_runs(root: Path = ROOT) -> tuple[list[Run], list[str]]:
         if not isinstance(document, dict):
             parsed.problems.append(f"{name}: top level is not a mapping")
         elif "jobs" in document:
+            if _triggered(document.get("on", "push")):
+                parsed.entries.add(name)
             if not isinstance(document["jobs"], dict):
                 parsed.problems.append(f"{name}: jobs is not a mapping")
                 continue
@@ -179,6 +184,8 @@ def workflow_runs(root: Path = ROOT) -> tuple[list[Run], list[str]]:
                 if not isinstance(job, str):
                     parsed.problems.append(f"{name}: job id {job!r} is not text")
                 elif isinstance(body, dict) and "uses" in body and "steps" not in body:
+                    if not _literally_false(body.get("if")) and (target := _local_target(body["uses"])):
+                        parsed.reaches.setdefault(name, set()).add(target)
                     continue  # a reusable-workflow call has no steps of its own
                 elif not isinstance(body, dict) or "steps" not in body:
                     parsed.problems.append(f"{name}: job {job} has no steps")
@@ -188,7 +195,34 @@ def workflow_runs(root: Path = ROOT) -> tuple[list[Run], list[str]]:
             _steps(document["runs"].get("steps", []), f"{name}:(action)", parsed, name)
         else:
             parsed.problems.append(f"{name}: neither a workflow with jobs nor a composite action")
-    return parsed.runs, parsed.problems
+    reachable = _reachable(parsed)
+    return [run for run in parsed.runs if run.file in reachable], parsed.problems
+
+
+def _triggered(trigger: Any) -> bool:
+    """Whether anything but another workflow can start a workflow with this `on:`."""
+    if isinstance(trigger, str):
+        return trigger != "workflow_call"
+    if isinstance(trigger, list):
+        return any(item != "workflow_call" for item in trigger)
+    if isinstance(trigger, dict):
+        return any(key != "workflow_call" for key in trigger)
+    return True
+
+
+def _reachable(parsed: Parsed) -> set[str]:
+    """Files whose steps can run: triggered workflows, and what they call, transitively."""
+    known = {run.file for run in parsed.runs} | set(parsed.reaches) | parsed.entries
+    reachable = set(parsed.entries)
+    queue = list(reachable)
+    while queue:
+        for target in parsed.reaches.get(queue.pop(), ()):
+            for file in known:
+                same = file == target or Path(file).parent.as_posix() == target
+                if same and file not in reachable:
+                    reachable.add(file)
+                    queue.append(file)
+    return reachable
 
 
 def _tokens(line: str) -> list[str]:
@@ -251,24 +285,68 @@ def command_segments(text: str) -> list[list[str]]:
     return segments
 
 
-def _executes(segment: Sequence[str]) -> bool:
-    index = 0
-    while index < len(segment) and (segment[index] in _KEYWORDS or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", segment[index])):
-        index += 1
-    return index < len(segment) and segment[index] not in _NOT_EXECUTING
+_SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+_SOURCERS = {"source", "."}
+# Words that run the command they are given: the script after them is executed.
+_WRAPPERS = {
+    "env", "sudo", "time", "nohup", "exec", "xvfb-run", "dbus-run-session", "timeout", "nice", "ionice", "stdbuf",
+    "command", "setsid", "unbuffer",
+}
+# Flags that make an interpreter read a script without running it, or run something else.
+_NOT_RUNNING_FLAGS = {"-n", "-c", "--version", "-V", "--help", "-h", "--check"}
+
+
+def _interpreter(word: str) -> bool:
+    name = word.rsplit("/", 1)[-1]
+    return name in _SHELLS or name in _SOURCERS or bool(re.fullmatch(r"python[0-9.]*", name))
+
+
+def _skippable(word: str) -> bool:
+    """Tokens between a runner and its script that do not change what runs: flags, counts, assignments, keywords."""
+    return (
+        word.startswith("-")
+        or word in _KEYWORDS
+        or bool(re.fullmatch(r"[0-9]+[smhd]?", word))
+        or bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word))
+    )
+
+
+def _takes_value(segment: Sequence[str], cursor: int) -> bool:
+    """The value of a shell option such as `bash -euo pipefail script`."""
+    return cursor > 0 and bool(re.fullmatch(r"[-+][A-Za-z]*o", segment[cursor - 1])) and not segment[cursor].startswith("-")
+
+
+def _runs_script(segment: Sequence[str], index: int) -> bool:
+    """Whether the token at [index] sits where it is executed rather than read, linted or copied.
+
+    It is executed when it is the command itself (nothing before it but
+    keywords, assignments and wrappers) or the argument of an interpreter with no
+    flag that stops the interpreter from running it (`bash -n`, `-c`).
+    """
+    flags: list[str] = []
+    cursor = index - 1
+    while cursor >= 0 and (_skippable(segment[cursor]) or _takes_value(segment, cursor)):
+        flags.append(segment[cursor])
+        cursor -= 1
+    if cursor < 0:
+        return True  # the script itself is the command, as in `FOO=1 tools/build.sh` or `then tools/build.sh`
+    runner = segment[cursor]
+    if runner in _SOURCERS and any(not _skippable(word) for word in segment[:cursor]):
+        return False  # `find . -exec ...`: a dot that is an argument is not the `.` builtin
+    if _interpreter(runner):
+        return not _NOT_RUNNING_FLAGS.intersection(flags)
+    return runner.rsplit("/", 1)[-1] in _WRAPPERS
 
 
 def calls_in(text: str) -> list[tuple[str, tuple[str, ...]]]:
     """(script, arguments after it) for each repository script a command executes."""
     found = []
     for segment in command_segments(text):
-        if not _executes(segment):
-            continue
         for index, token in enumerate(segment):
             path = _PATH.match(token)
-            if path:
+            if path and ".." not in path.group(1).split("/") and _runs_script(segment, index):
                 found.append((path.group(1), tuple(segment[index + 1 :])))
-            elif index and segment[index - 1] == "-m" and _MODULE.match(token):
+            elif index and segment[index - 1] == "-m" and _MODULE.match(token) and _runs_script(segment, index - 1):
                 found.append((token.replace(".", "/") + ".py", tuple(segment[index + 1 :])))
     return found
 
@@ -490,9 +568,11 @@ def main(argv: Sequence[str] | None = None, root: Path = ROOT) -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print(f"Checked {report['runs']} workflow run steps against {len(report['gates'])} command gates.")
-        for name in report["wiring_unverified"]:
-            gate = report["gates"][name]
-            print(f"Wiring unverified: {name} (no step calls it directly; it may run via {', '.join(gate['may_call'])})")
+        for name, gate in sorted(report["gates"].items()):
+            if gate["wiring_unverified"]:
+                print(f"Wiring unverified: {name} (no step calls it directly; it may run via {', '.join(gate['may_call'])})")
+            elif gate["may_call"]:
+                print(f"May also run (not verified): {name} via {', '.join(gate['may_call'])}")
         for problem in report["problems"]:
             print(f"- {problem}", file=sys.stderr)
     return 1 if report["problems"] else 0
