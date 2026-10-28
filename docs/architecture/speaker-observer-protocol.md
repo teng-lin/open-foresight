@@ -19,12 +19,17 @@ platform helpers (`zoom_observer_macos`, `zoom_observer_linux`). Design context:
   first request is `seq` 0 independently.
 - A protocol error is fatal: the helper writes one `error` frame without `id`
   (`code` is one of `malformed_json`, `protocol_version`, `protocol_seq`,
-  `protocol_type`, `line_too_long`), then exits 2. Malformed JSON, a non-object
-  line, a blank line, invalid UTF-8, nesting deeper than 16 levels, a missing or
-  wrong `v`, a missing or wrong `seq`, and an unknown `type` are all protocol
-  errors. A well-formed request of a known type with invalid fields is not: it
-  gets `error` with `code` `invalid_request` (and the request `id` when it was
-  valid) and the session continues.
+  `protocol_type`, `line_too_long`, `truncated_line`, `input_error`), then exits
+  2. Malformed JSON, a non-object line, a blank line, invalid UTF-8, nesting
+  deeper than 16 levels (the top-level object counts as one), a missing or wrong
+  `v`, a missing or wrong `seq`, and an unknown `type` are all protocol errors,
+  as is a final request cut off by end of input (`truncated_line`) and a read
+  error on stdin (`input_error`, not a clean EOF). Requests behind a fatal one
+  are never processed. A well-formed request of a known type with invalid fields
+  is not fatal: it gets `error` with `code` `invalid_request` (and the request
+  `id` when it was valid) and the session continues.
+- If stdout can no longer be written the helper stops reading Zoom, writes the
+  token `stdout_closed` to stderr and exits 3.
 - The helper is launched as `<helper> --protocol 1`; any other arguments exit 64
   with a usage line on stderr.
 - All observed strings (names, window titles) are untrusted source data.
@@ -50,7 +55,12 @@ echoed in every observation. `poll_ms` is an integer from 100 to 5000 (default
 Zoom is running and `null` for either otherwise (the window is only known from
 observations). Until a meeting can be read it reports `unavailable`, and the
 session continues, so a recording that begins before the call does is not
-refused. A second `start` is answered with `error` / `already_started`.
+refused. A second `start` is answered with `error` / `already_started`; it never changes
+the running session's id or `deadline_ms`. A request that arrives after
+shutdown began (`stop`, end of input, a fatal error, a broken stdout) is
+answered with `error` / `cancelled` instead of a state the cancelled read could
+not establish; a `setup` in that position never prompts. End of input uses the
+session's `deadline_ms` for the same stall guard as `stop`.
 
 `stop` before any `start` is answered with `stopped` whose `session` is `null`.
 `stop` is honored while an accessibility read is stalled: the read is abandoned
@@ -81,7 +91,11 @@ its `reason` changes (`since_ms` stays at the start of the interval). Observed
 reason tokens include `zoom_not_running`, `accessibility_not_trusted`,
 `zoom_version_unsupported`, `no_meeting_window`, `no_participant_evidence`,
 `ambiguous_windows`, `ambiguous_processes`, `locale_conflict`,
-`unsupported_locale`, `ax_read_failed`, `frame_too_large`. `needs_setup` means
+`unsupported_locale`, `ax_read_failed`, `ax_timeout_unavailable`,
+`version_unreadable`, `incomplete_read`, `frame_too_large`. `incomplete_read`
+means a bound, timeout or failed attribute cut the read short and no evidence
+was found, so a meeting is neither confirmed nor ruled out; only a complete read
+with no evidence reports `no_meeting`. `needs_setup` means
 accessibility was never granted to this helper; after an explicit `setup` that
 is still not granted, or after a grant is lost, the state is `permission_denied`.
 `clock.uptime_ms` is the same instant on the sleep-excluding uptime clock
@@ -107,8 +121,16 @@ be derived from a steady clock that does not count system sleep.
   timestamps use the same clock domains; a `clock` exchange measures any offset.
   Never substitute wall-clock time.
 - `ref` is meeting-local and valid only within `session`/`window`; it is not a
-  durable user identifier. Equal display names with different `ref`s stay
+  durable user identifier. With element identity a ref is keyed by (element,
+  display-name key): an element that shows a different name gets a new ref. Equal display names with different `ref`s stay
   separate participants.
+- `complete` is false when a bound or failed read cut the tree short, when an
+  unnamed or unreadable tile was dropped, or when references could not be kept
+  trustworthy (element identity missing or the reference table at capacity, or
+  duplicate names with no element identity).
+- A frame (without its newline) is at most 262144 bytes in both directions. An
+  observation that would exceed it is replaced by `unavailable` /
+  `frame_too_large`.
 - `target.window` is a meeting-local label (`w1`, `w2`, ...) assigned in order of
   first sight; `target.locale` is the pattern-set id that produced the evidence
   or `null`. `self` is true only when exactly one participant carries the

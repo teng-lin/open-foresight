@@ -17,11 +17,13 @@ at the end passes on a real Zoom 7.2.2 (88465) call.
 | File | Role |
 | --- | --- |
 | `native/zoom_ax_parser.{h,mm}` | Pure parser. Snapshot tree in, participants and speakers out. Uses Foundation string folding only; no Accessibility API, no permission. |
-| `native/zoom_observer_core.{h,cpp}` | Platform-neutral protocol: NDJSON framing, `seq`, bounded line reader, polling session, reference assignment, stop deadline. Talks to the OS through an abstract `Source`. |
-| `native/zoom_observer_macos.mm` | `Source` implementation over `AXUIElement`, and `main`. |
+| `native/zoom_observer_core.{h,cpp}`, `zoom_ref_table.h` | Platform-neutral protocol: NDJSON framing, `seq`, bounded reader, polling session, reference table, stop deadline. Links no parser and no OS framework: the platform passes its parse function and parser version through `ObserverConfig`, and supplies a `Source`. A Linux helper reuses this library and the snapshot types in `zoom_ax_parser.h`. |
+| `native/zoom_collector.{h,cpp}` | Bounded traversal behind an `AxReader` interface: limits, absence versus failure, identity registry, cancellation. |
+| `native/zoom_mac_source.{h,cpp}` | The macOS `Source`: the gate order and trust transitions, over an `Environment` and an `AxReader`. Tested with fakes. |
+| `native/zoom_observer_macos.mm` | Only the OS bindings (`NSRunningApplication`, Info.plist, `AXUIElement`) and `main`. |
 | `native/zoom_observer_macos_info.plist` | Embedded `__info_plist` giving the helper the stable identifier `org.openforesight.zoom-observer`. |
-| `tests/fixtures/zoom_ax/` | Synthetic scenarios (59) and the 17-locale phrase set; controlled names only. |
-| `tests/native/zoom_ax_parser.cpp`, `zoom_observer_core.cpp`, `zoom_observer_protocol.py` | CTest `zoom_ax_parser`, `zoom_observer_core`, `zoom_observer_protocol`. |
+| `tests/fixtures/zoom_ax/` | Synthetic scenarios (76) and the 17-locale phrase set; controlled names only. |
+| `tests/native/zoom_ax_parser.cpp`, `zoom_observer_core.cpp`, `zoom_mac_source.cpp`, `zoom_observer_protocol.py` | CTest `zoom_ax_parser`, `zoom_observer_core`, `zoom_mac_source`, `zoom_observer_protocol`. |
 
 The helper is built only on macOS and installed to `bin/` like `foresight-audio`
 (arm64, deployment target from the build, `-fobjc-arc`). Packaging is not wired.
@@ -32,42 +34,56 @@ Input is an `AXApplication` whose children are `AXWindow` nodes (or one
 `AXWindow`). Each node carries role, description, value, identifier and an
 optional collector-assigned element id.
 
-- **Tile.** Role exactly `AXTabGroup`. The name is the text before the earliest
-  recognized computer-audio phrase (an equal position prefers the longer phrase);
-  trailing whitespace and ASCII, fullwidth and ideographic commas are removed.
-  Without an audio phrase the description must end with a locale's active-speaker
-  marker. A matched tile's descendants are not searched; an unmatched
-  `AXTabGroup` is searched through.
-- **Active.** The marker must be the last item and preceded by a comma, so
-  `Alice, Computer audio unmuted, Not Active speaker` is not active (the research
-  rule matched it by suffix alone). An unmuted microphone alone is not a speaker.
-  Several marked tiles are all reported.
-- **Names.** Display spelling is kept (only edge whitespace is trimmed; commas and
-  punctuation inside survive). The comparison key folds case and whitespace and
+- **Tile.** Role exactly `AXTabGroup`; the description is
+  `<name>, <audio status>[, <active marker>][, other details]`. The audio status
+  anchors on its LAST occurrence, so a name that itself contains a status phrase
+  (of the same or another locale) is kept whole; the research rule took the
+  earliest phrase. Trailing whitespace and ASCII, fullwidth and ideographic
+  commas are removed from the name. A matched tile's descendants are not
+  searched; an unmatched `AXTabGroup` is searched through.
+- **Unnamed and marker-only tiles.** A status with a name that is empty or only
+  whitespace, control or invisible format characters (zero-width space, joiners,
+  bidi marks, BOM) is an unnamed tile: it is dropped and the read is
+  `complete: false`. A description that ends in an active-speaker marker but has
+  no audio status is not accepted as a tile either (that structure is not
+  validated, and a participant named `Eve, Active speaker` would otherwise
+  become a speaker); it also makes the read incomplete.
+- **Active.** The marker must be the last item after the status and preceded by
+  a comma, so `Alice, Computer audio unmuted, Not Active speaker` is not active
+  (the research rule matched it by suffix alone) and neither is
+  `Mallory, Active speaker, Computer audio muted`. An unmuted microphone alone is
+  not a speaker. Several marked tiles are all reported.
+- **Names.** Display spelling is kept (only edge whitespace, including no-break
+  spaces, is trimmed; commas, punctuation, right-to-left text, emoji and ZWJ
+  sequences survive). The comparison key folds case and whitespace and
   canonicalizes Unicode composition but keeps diacritics, so distinct people do
   not merge. Equal names with different elements stay separate participants.
 - **Compact window.** Only when no ordinary tile exists anywhere and the snapshot
   is complete: an `AXWindow` whose direct `AXButton` children include both
   localized controls, then exactly one direct `AXStaticText` whose value begins
   with the locale's `Talking:` form. Zero labels is an observed absence; two
-  labels, or a label containing a comma (a list of names), makes the read
-  `complete: false` with no speaker. The two-child `Show video render` shape is
+  labels, a label containing a comma (a list of names), an invisible-only name, or
+  a direct static text whose value is empty or undecodable (it could have been
+  the label) makes the read `complete: false` with no speaker. The two-child `Show video render` shape is
   not supported.
-- **Self.** An `AXOutline` whose description is a localized `Participants list`,
-  then descendant `AXStaticText` values ending in a parenthetical that lists the
-  locale's self word (`Alice (me)`, `Alice (host, me)`, `Alice (Host) (me)`).
-  Self is set only for a single distinct self name that matches exactly one tile.
+- **Self.** An `AXOutline` whose description is the Participants-list label of
+  the meeting's locale, then descendant `AXStaticText` values ending in a
+  parenthetical that lists that locale's self word (`Alice (me)`,
+  `Alice (host, me)`, `Alice (Host) (me)`). Self is set only for a single
+  distinct self name that matches exactly one tile.
 - **Ordered-tile fallback.** Not implemented and not compiled. A fixture asserts
   that an ordered gallery layout without markers yields no speaker.
 - **Locales.** The 17 phrase sets are data in `zoom_ax_parser.mm`, copied from the
   `Localizable.strings` of the installed Zoom 7.2.2 (88465). English and
   Simplified Chinese are the intended first live targets; the rest are
-  fixture-covered only. Evidence from two locales in one snapshot is
-  `locale_conflict`. Spanish and Portuguese share the `Participants list` label,
-  so the self word decides. An unrecognized locale produces no evidence
-  (`no_participant_evidence`, reported as `no_meeting`); when the installed Zoom's
-  preferred localization has no phrase set the helper reports
-  `unavailable`/`unsupported_locale` instead.
+  fixture-covered only. The meeting locale comes only from tile statuses and the
+  compact controls; two locales among them are `locale_conflict`. The
+  Participants-list label is shared by Spanish and Portuguese, so it never
+  contributes locale evidence: the self word of the already established locale
+  decides (`Joao (eu)` in a Spanish meeting is not self and not a conflict). An
+  unrecognized locale produces no evidence (`no_participant_evidence`, reported as
+  `no_meeting`); when the installed Zoom's preferred localization has no phrase
+  set the helper reports `unavailable`/`unsupported_locale` instead.
 - **Windows.** Tiles in two windows, or two compact windows, are
   `ambiguous_windows`; nothing is combined. Self evidence is read from any window.
 - **Versions.** Only `7.2.x` bundle versions pass `zoom_version_supported`; others
@@ -75,6 +91,9 @@ optional collector-assigned element id.
 - **Bounds.** Depth 64, 20000 nodes, 256 participants, 512-byte names; the parser
   re-enforces them. Invalid UTF-8, oversized names, and a repeated element are
   dropped and make the result incomplete.
+- **Failed reads are not quiet meetings.** When no evidence is found but the
+  snapshot was truncated, or a tile was dropped, the result is
+  `incomplete_read` (reported as `unavailable`), never `no_meeting`.
 
 ## Helper behavior
 
@@ -89,14 +108,25 @@ optional collector-assigned element id.
   `AXIsProcessTrustedWithOptions` with the prompt option off; only `setup` turns
   it on. `needs_setup` becomes `permission_denied` once setup was requested or
   trust was seen and lost.
+- Zoom's version is read from `Info.plist` on disk at every poll
+  (`CFBundleCopyInfoDictionaryInDirectory`); `NSBundle` caches its dictionary, so
+  an in-place update would otherwise bypass the version gate.
 - Passive reads: one `AXUIElementCopyMultipleAttributeValues` per node (role,
   description, value, identifier, children) and `AXWindows` on the application.
   The helper never sets attributes, performs actions, posts events, activates
   Zoom, or opens panels (a test greps the sources for those APIs).
 - Messaging timeout 0.25 s on the system-wide element and the Zoom element; a read
   budget of 1.5 s. A missing attribute (`NoValue`, `AttributeUnsupported`,
-  `NotImplemented`) is an observed absence; any other error marks the snapshot
-  incomplete, and `APIDisabled` becomes `permission_denied`.
+  `NotImplemented`) is an observed absence, except for `AXWindows`, where only
+  `NoValue` is (anything else is a failed window list). A node whose role is empty
+  or whose whole read fails, an oversize or unencodable string (including one cut
+  at an embedded NUL), and a non-element child all mark the snapshot incomplete;
+  `APIDisabled` becomes `permission_denied`. Once a limit or cancellation is hit,
+  no further node is created or read. If a messaging timeout cannot be set, no
+  read is made (`ax_timeout_unavailable`). A missing `AXValue` on a `AXStaticText`
+  or `AXDescription` on an `AXTabGroup` is not itself treated as incomplete
+  (containers legitimately lack them); the parser covers the consequential cases
+  (an empty direct static text in a compact window, an unnamed tile).
 - Polling every `poll_ms` (default 500 ms), reads never overlap, stop abandons an
   in-flight read. `AXObserver` notifications are not used; polling is the only
   collection path.
@@ -104,14 +134,24 @@ optional collector-assigned element id.
   returns `uptime_ms` (`mach_absolute_time`). Native capture currently maps host
   time through `std::chrono::steady_clock`; the service must measure that
   offset with `clock` rather than assume equality across system sleep.
-- References: element identity (`CFEqual`) when available, else name plus
-  ordinal; scoped to a window label, so refs change if the meeting window is
-  replaced.
+- References: keyed by (element, comparison key) when an element id exists
+  (`CFEqual`), so a screen element that later shows another name gets a new ref;
+  scoped to a window label, so refs change if the meeting window is replaced.
+  Without element identity the key is (name, ordinal), trusted only while the
+  count of that name is unchanged, and duplicate names there mark the read
+  `complete: false`. A full identity table (4096) or reference table, or
+  dropping departed people to make room, also marks the read incomplete.
+- Shutdown and I/O: after `stop`, end of input, a fatal error or a broken stdout,
+  queued `capabilities`/`setup`/`start` requests are answered `error`/`cancelled`.
+  A broken stdout exits 3 with `stdout_closed` on stderr. The request queue holds
+  64 requests (the reader stops reading beyond that) and one request is handled
+  per loop turn so polling continues. The stop guard only try-locks the writer,
+  so a stdout wedged by a slow consumer cannot delay the exit.
 
 ## Build and packaging notes
 
 `native/CMakeLists.txt` (macOS only) adds `foresight_zoom_ax_parser`,
-`foresight_zoom_observer_core`, `zoom_observer_macos` and, for tests only,
+`foresight_zoom_observer_core`, `foresight_zoom_mac_source`, `zoom_observer_macos` and, for tests only,
 `zoom_observer_macos_absent` (the same source with bundle id
 `org.openforesight.test.absent-zoom`, so the protocol test holds on a machine
 running Zoom). The helper links AppKit, ApplicationServices and Foundation.
@@ -128,7 +168,9 @@ Settings names a command-line helper launched by the service is unverified.
    duplicate names. Capture a sanitized diagnostic tree to replace the guessed
    fixtures.
 2. Whether tile descriptions carry the marker at all in gallery, speaker, and
-   multi-speaker views, and whether the compact window shape matches.
+   multi-speaker views, whether a tile without an audio status ever carries the
+   marker (such tiles are rejected today), and whether the compact window shape
+   matches.
 3. Whether Zoom's elements keep identity across polls (refs and rename
    continuity), and whether the participants list lives in a separate window.
 4. Traversal cost and failure rate. Probing a Finder window (not Zoom) with the
