@@ -85,3 +85,5 @@ export 'src/client_results.dart'
 export 'src/operation_requests/graph_inputs.dart' show GraphSourceInput;
 export 'src/operation_descriptor.dart' show OperationDescriptor;
 export 'src/model_asset_failure.dart';
+
+export 'src/audio_presentation.dart';

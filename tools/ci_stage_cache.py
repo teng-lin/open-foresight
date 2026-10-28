@@ -23,6 +23,10 @@ import subprocess
 import tempfile
 import zipfile
 
+evidence_job_name = importlib.import_module(
+    "tools.ci_producer_trust" if __package__ else "ci_producer_trust"
+).evidence_job_name
+
 artifacts = importlib.import_module(
     "tools.ci_artifacts" if __package__ else "ci_artifacts"
 )
@@ -108,7 +112,7 @@ def find(
         candidates_jobs = [
             job
             for job in jobs
-            if job.get("name", "").split(" / ")[-1] == f"{stage}-{platform}"
+            if evidence_job_name(job).split(" / ")[-1] == f"{stage}-{platform}"
             and job.get("conclusion") == "success"
             and artifacts.in_producer_attempt(artifact, job)
         ]

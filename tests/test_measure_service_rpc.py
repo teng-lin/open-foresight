@@ -27,6 +27,15 @@ from tools import measure_service_rpc as rpc
 DIAGNOSTIC_CONTEXT = {"native_id": "1" * 64, "worker_id": "2" * 64, "catalog_id": "3" * 64}
 
 
+def test_diagnostic_peer_inventory_refuses_unsupported_platform_before_pidfd(monkeypatch):
+    monkeypatch.setattr(rpc.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        rpc.os, "pidfd_open", lambda *args: pytest.fail("opened Linux pidfd"), raising=False
+    )
+    with pytest.raises(RuntimeError, match="Diagnostic peer inventory requires Linux"):
+        rpc.RuntimeInventory.diagnostic_peers(17, 18, 17, 10)
+
+
 @pytest.fixture
 def diagnostic_page_factory(private, monkeypatch):
     if sys.platform != "linux":

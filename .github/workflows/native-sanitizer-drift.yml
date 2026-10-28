@@ -1,7 +1,7 @@
 name: Native sanitizer drift issue
 on:
   workflow_run:
-    workflows: [Native address and undefined behavior sanitizers]
+    workflows: [Linux sanitizer checks]
     types: [completed]
     branches: [main]
 permissions:

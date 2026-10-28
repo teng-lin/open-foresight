@@ -4,7 +4,7 @@
 |---|---|
 | Status | Superseded by events on 2026-10-20: the commits reached `main` through PR #150 (`1d28c0fa`). |
 | Deciders | Repository owner, 2026-10-19 |
-| Source | [Service lifecycle fix plan](../plans/2026-10-19-service-lifecycle-fix-plan.md), decision D1 and item 0.1 |
+| Source | [Service lifecycle fix plan](https://github.com/teng-lin/open-foresight/blob/52bdd39778f31d632d434ada3fca7b165b9c6336/docs/plans/2026-10-19-service-lifecycle-fix-plan.md), decision D1 and item 0.1 |
 
 ## Context
 

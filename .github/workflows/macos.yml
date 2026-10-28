@@ -1,4 +1,4 @@
-name: Platform candidates and checks
+name: Platform checks and bundles
 run-name: ${{ inputs.sweep && format('Main sweep {0} [{1}]', inputs.source || github.sha, inputs.sweep_namespace) || (inputs.request_id && format('Release candidate {0}', inputs.request_id) || format('Platform checks {0}', github.ref_name)) }}
 permissions:
   contents: read
@@ -10,6 +10,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   macos-checks:
+    name: macOS checks / ${{ matrix.stage }}
     runs-on: macos-15
     timeout-minutes: 90
     strategy:
@@ -90,6 +91,7 @@ jobs:
     - distribution-number
     if: '!cancelled() && needs.changes.outputs.macos == ''true'' && (inputs.tier != ''release'' || needs.distribution-number.result == ''success'')'
   macos:
+    name: macOS bundle / build and smoke
     runs-on: macos-15
     timeout-minutes: 180
     outputs:
@@ -161,7 +163,12 @@ jobs:
       run: |
         task_args=()
         if [[ "$REQUIRE_GOOGLE_CLIENT" == 'true' ]]; then task_args+=(--require-google-client); fi
+        # Pinned app-component codecs; per-run private cache, no shared writes.
+        install -d -m 700 "$RUNNER_TEMP/foresight-media-cache"
+        .venv/bin/python tools/build_media_worker.py --cache "$RUNNER_TEMP/foresight-media-cache" \
+          --output build/media-worker --fetch --jobs 2
         .venv/bin/python tools/package_macos.py "${task_args[@]}" --output 'dist/Open Foresight.app' --identity - --sdk build/sdk \
+          --media-worker-build build/media-worker \
           --litert-extensions-manifest build/macos-runtimes/litert-extensions/build-manifest.json \
           --whisper-runtime build/macos-runtimes/whisper/whisper-cli \
           --whisper-license build/macos-runtimes/whisper/LICENSE
@@ -177,6 +184,45 @@ jobs:
       run: |
         .venv/bin/python tools/verify_macos_release_runtime.py 'dist/Open Foresight.app' \
           --output test-results/macos-release-runtime.json
+    - name: Restore checksum-pinned acceptance models
+      if: ${{ !cancelled() && steps.macos-assembly.outcome == 'success' }}
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: build/acceptance-models
+        key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+        restore-keys: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+    - name: Prepare private model acceptance scratch
+      id: macos-model-temp
+      if: ${{ !cancelled() && steps.macos-assembly.outcome == 'success' }}
+      run: |
+        task_models_temp=$(mktemp -d /var/tmp/fa.XXXXXX)
+        task_models_temp=$(cd "$task_models_temp" && pwd -P)
+        printf 'root=%s\n' "$task_models_temp" >> "$GITHUB_OUTPUT"
+    - name: macOS acceptance / packaged CPU models and speech file
+      id: macos-speech-file
+      if: ${{ !cancelled() && steps.macos-assembly.outcome == 'success' && steps.macos-model-temp.outcome == 'success' }}
+      env:
+        TMPDIR: ${{ steps.macos-model-temp.outputs.root }}
+        FORESIGHT_TEST_TEMP_ROOT: ${{ steps.macos-model-temp.outputs.root }}
+      run: |
+        .venv/bin/python tools/test_macos_release_models.py 'dist/Open Foresight.app' \
+          --models build/acceptance-models --output test-results/macos-acceptance/packaged-models
+    - name: macOS acceptance / CPU models
+      id: macos-cpu-models
+      if: ${{ !cancelled() && steps.macos-assembly.outcome == 'success' && steps.macos-model-temp.outcome == 'success' }}
+      env:
+        TMPDIR: ${{ steps.macos-model-temp.outputs.root }}
+        FORESIGHT_TEST_TEMP_ROOT: ${{ steps.macos-model-temp.outputs.root }}
+      run: |
+        .venv/bin/python tools/integration_gates.py --suite models \
+          --bundle 'dist/Open Foresight.app' --models build/acceptance-models \
+          --output test-results/macos-acceptance/models
+    - name: Retire private model acceptance scratch
+      id: macos-model-cleanup
+      if: ${{ always() && steps.macos-model-temp.outcome == 'success' }}
+      env:
+        MODEL_SCRATCH: ${{ steps.macos-model-temp.outputs.root }}
+      run: rmdir "$MODEL_SCRATCH"
     - name: Installed application tooling tests
       id: macos-installed
       if: ${{ !cancelled() && steps.macos-assembly.outcome == 'success' }}
@@ -260,10 +306,13 @@ jobs:
         INFERENCE_RESULT: ${{ steps.macos-inference.outcome }}
         INSTALLED_RESULT: ${{ steps.macos-installed.outcome }}
         SMOKE_RESULT: ${{ steps.macos-smoke.outcome }}
+        SPEECH_FILE_RESULT: ${{ steps.macos-speech-file.outcome }}
+        CPU_MODELS_RESULT: ${{ steps.macos-cpu-models.outcome }}
+        MODEL_CLEANUP_RESULT: ${{ steps.macos-model-cleanup.outcome }}
       run: |
-        printf 'Mac lanes=%s build=%s assembly=%s inference=%s installed=%s smoke=%s\n' \
-          "$CHECKS_RESULT" "$BUILD_RESULT" "$ASSEMBLY_RESULT" "$INFERENCE_RESULT" "$INSTALLED_RESULT" "$SMOKE_RESULT"
-        for task_result in "$CHECKS_RESULT" "$BUILD_RESULT" "$ASSEMBLY_RESULT" "$INFERENCE_RESULT" "$INSTALLED_RESULT" "$SMOKE_RESULT"; do
+        printf 'Mac lanes=%s build=%s assembly=%s inference=%s installed=%s smoke=%s speech_file=%s cpu_models=%s model_cleanup=%s\n' \
+          "$CHECKS_RESULT" "$BUILD_RESULT" "$ASSEMBLY_RESULT" "$INFERENCE_RESULT" "$INSTALLED_RESULT" "$SMOKE_RESULT" "$SPEECH_FILE_RESULT" "$CPU_MODELS_RESULT" "$MODEL_CLEANUP_RESULT"
+        for task_result in "$CHECKS_RESULT" "$BUILD_RESULT" "$ASSEMBLY_RESULT" "$INFERENCE_RESULT" "$INSTALLED_RESULT" "$SMOKE_RESULT" "$SPEECH_FILE_RESULT" "$CPU_MODELS_RESULT" "$MODEL_CLEANUP_RESULT"; do
           [[ "$task_result" == success ]] || exit 1
         done
     needs:
@@ -272,12 +321,14 @@ jobs:
     - macos-checks
     if: ${{ always() && !cancelled() && needs.changes.outputs.macos == 'true' && (inputs.tier != 'release' || needs.distribution-number.result == 'success') }}
   sanitizers:
+    name: Linux sanitizer checks
     if: inputs.tier == 'release'
     uses: ./.github/workflows/native-sanitizers.yml
     with:
       source: ${{ inputs.source }}
       consume_only: true
   linux-native:
+    name: Linux checks
     needs: changes
     if: inputs.tier != 'release' && needs.changes.outputs.linux_build == 'true' && needs.changes.outputs.arch_retired != 'true'
     uses: ./.github/workflows/linux-platform-stages.yml
@@ -288,6 +339,7 @@ jobs:
       release: ${{ inputs.preview || github.ref == 'refs/heads/main' }}
       core_coverage_benchmark: ${{ inputs.core_coverage_benchmark || false }}
   linux-document-imports:
+    name: Linux checks / document imports
     needs: changes
     if: needs.changes.outputs.linux_document_imports == 'true'
     runs-on: ubuntu-24.04
@@ -487,12 +539,14 @@ jobs:
       run: |
         python -m tools.candidate_identity --source "$SOURCE"
   dmg:
+    name: macOS packaging
     needs: changes
     if: "!cancelled() && needs.changes.outputs.dmg == 'true'"
     uses: ./.github/workflows/dmg-contracts.yml
     with:
       source: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
   packaging:
+    name: Linux packaging
     needs: [changes, linux-build]
     if: "!cancelled() && needs.changes.outputs.packaging == 'true' && contains(fromJSON('[\"success\",\"skipped\"]'), needs.linux-build.result)"
     uses: ./.github/workflows/package-contracts.yml
@@ -506,7 +560,7 @@ jobs:
       head_repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       linux_enabled: ${{ needs.changes.outputs.linux_build == 'true' }}
   linux-build:
-    name: linux-build
+    name: Linux bundle / build
     needs: [changes, distribution-number]
     if: "!cancelled() && needs.changes.outputs.linux_build == 'true' && (inputs.tier != 'release' || needs.distribution-number.result == 'success')"
     runs-on: ubuntu-24.04
@@ -676,7 +730,7 @@ jobs:
       id: complete
       run: echo 'complete=true' >> "$GITHUB_OUTPUT"
   linux-test:
-    name: linux-test
+    name: Linux bundle / integration
     needs: linux-build
     if: "!cancelled() && needs.linux-build.result == 'success' && needs.linux-build.outputs.complete == 'true' && needs.linux-build.outputs.handoff_id != ''"
     outputs:
@@ -918,6 +972,7 @@ jobs:
         path: build/acceptance-models
         key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
   acceptance-cpu:
+    name: Linux acceptance / CPU models
     needs: [changes, linux-build]
     if: ${{ !cancelled() && needs.linux-build.result == 'success' }}
     runs-on: ubuntu-24.04
@@ -994,6 +1049,7 @@ jobs:
         if-no-files-found: warn
         retention-days: 30
   acceptance-audio:
+    name: Linux acceptance / virtual audio
     needs: [changes, linux-build]
     if: ${{ !cancelled() && needs.linux-build.result == 'success' }}
     runs-on: ubuntu-24.04
@@ -1084,6 +1140,7 @@ jobs:
         if-no-files-found: warn
         retention-days: 30
   acceptance-deb:
+    name: Linux acceptance / deb installer
     needs: [changes, linux-build]
     if: ${{ !cancelled() && needs.linux-build.result == 'success' }}
     runs-on: ubuntu-24.04

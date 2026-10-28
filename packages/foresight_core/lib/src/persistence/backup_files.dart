@@ -329,7 +329,15 @@ final class BackupDirectory {
     }
   }
 
-  BackupFile open(String name, {bool create = false, bool private = true}) {
+  BackupFile open(
+    String name, {
+    bool create = false,
+    bool private = true,
+    bool readOnly = false,
+  }) {
+    if (create && readOnly) {
+      throw ArgumentError('Read-only files cannot be created');
+    }
     if (_closed || p.basename(name) != name || name == '.' || name == '..') {
       _refuse();
     }
@@ -339,7 +347,7 @@ final class BackupDirectory {
         (name) => _openAt(
           _fd,
           name,
-          2 |
+          (readOnly ? 0 : 2) |
               _nonBlocking |
               _noFollow |
               _cloexec |
@@ -483,6 +491,31 @@ final class BackupDirectory {
     return result;
   }
 
+  /// Descriptor-relative existence without enumerating an unbounded directory.
+  /// A symlink or other entry exists; callers still use metadata() to require a
+  /// safe regular file. Only ENOENT means absence, never a permission/I/O error.
+  bool entryExists(String name) {
+    if (_closed || p.basename(name) != name || name == '.' || name == '..') {
+      _refuse();
+    }
+    final buffer = calloc<Uint8>(256);
+    try {
+      final result = _name(
+        name,
+        (path) => Platform.isLinux
+            ? _statx!(_fd, path, 0x100, 0x7ff, buffer)
+            : _fstatat!(_fd, path, buffer, 0x20),
+      );
+      if (result == 0) return true;
+      if (_errno().value == 2) {
+        return false; // ENOENT on both supported platforms.
+      }
+      _refuse();
+    } finally {
+      calloc.free(buffer);
+    }
+  }
+
   bool containsEntry(String expected) {
     var found = false;
     visitEntries((name) {
@@ -545,7 +578,7 @@ final class BackupDirectory {
     }
     verifyAnchor();
     final source = metadata(temporary);
-    if (containsEntry(complete)) metadata(complete);
+    if (entryExists(complete)) metadata(complete);
     if (_name(
           temporary,
           (from) => _name(complete, (to) => _rename(_fd, from, _fd, to)),
@@ -627,10 +660,82 @@ final class BackupDirectory {
     target.verifyAnchor();
   }
 
-  void remove(String name) {
-    // Validate immediately before unlink; unlinkat never follows the entry.
-    metadata(name);
+  void remove(String name, {bool private = true, String? expectedIdentity}) {
+    // The caller owns an anchored private staging directory with no other
+    // legitimate writers. This is not an atomic inode-conditional unlink.
+    // Arbitrary same-UID mutations inside that staging area are out of scope.
+    final actual = metadata(name, private: private);
+    if (expectedIdentity != null && actual.identity != expectedIdentity) {
+      _refuse();
+    }
     if (_name(name, (name) => _unlink(_fd, name, 0)) != 0) _refuse();
+  }
+
+  /// Only an owned private immediate child may be removed, and only empty.
+  /// unlinkat(AT_REMOVEDIR) never follows a swapped symlink or recursively
+  /// deletes contents. No other legitimate writer owns this random staging name.
+  void removeEmptyChild(BackupDirectory child) {
+    if (_closed ||
+        child._closed ||
+        !child._private ||
+        p.dirname(child.path) != path) {
+      _refuse();
+    }
+    verifyAnchor();
+    child.verifyAnchor();
+    final probe = BackupDirectory(child.path, create: false);
+    try {
+      if (probe.identity != child.identity) _refuse();
+    } finally {
+      probe.close();
+    }
+    if (_name(
+          p.basename(child.path),
+          (name) => _unlink(_fd, name, Platform.isMacOS ? 0x80 : 0x200),
+        ) !=
+        0) {
+      _refuse();
+    }
+    sync();
+    verifyAnchor();
+  }
+
+  /// Publish a completed private immediate child at an absent sibling name.
+  /// The atomic no-replace operation never overwrites an existing profile or
+  /// backup. A post-rename identity conflict preserves directories for recovery.
+  BackupDirectory publishChild(BackupDirectory child, String name) {
+    if (_closed ||
+        child._closed ||
+        !child._private ||
+        p.dirname(child.path) != path ||
+        p.basename(name) != name ||
+        name == '.' ||
+        name == '..' ||
+        name == p.basename(child.path)) {
+      _refuse();
+    }
+    verifyAnchor();
+    child.verifyAnchor();
+    final identity = child.identity;
+    if (_name(
+          p.basename(child.path),
+          (from) => _name(
+            name,
+            (to) =>
+                _renameNoReplace(_fd, from, _fd, to, Platform.isMacOS ? 4 : 1),
+          ),
+        ) !=
+        0) {
+      _refuse();
+    }
+    sync();
+    verifyAnchor();
+    final published = this.child(name, create: false);
+    if (published.identity != identity) {
+      published.close();
+      _refuse();
+    }
+    return published;
   }
 
   void sync() {
@@ -710,6 +815,19 @@ final class BackupFile {
   ScopedLocalFileSystem get localFileSystem => _localFileSystem(_fd);
 
   bool tryExclusiveLease() => _flock(_fd, 2 | 4) == 0;
+
+  /// Distinguish actual kernel contention from a broken descriptor/operation.
+  /// Media acquisition may wait for the former; it must never retry the latter.
+  bool tryExclusiveLeaseChecked() {
+    if (_closed) _refuse();
+    if (_flock(_fd, 2 | 4) == 0) return true;
+    final code = _errno().value;
+    if (code == (Platform.isMacOS ? 35 : 11)) {
+      return false; // EWOULDBLOCK/EAGAIN
+    }
+    _refuse();
+  }
+
   static String? inspectDescriptorIdentity(int descriptor) {
     try {
       return _metadata(descriptor).identity;

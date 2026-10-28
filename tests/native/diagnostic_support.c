@@ -255,14 +255,29 @@ static void run_case(const char *launcher, const char *self, const char *mode) {
                                                                 : 100;
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)
-  // TSan's existing default exit instrumentation sleeps 1000ms
-  // with another live thread, after the real watcher calls _exit.
-  if (strcmp(mode, "hold") == 0 || strcmp(mode, "bootstrap") == 0 ||
-      bootstrap_idle || preinit_deadline)
-    polls += 100;
+  // Every mode starts a watcher thread. TSan's default exit instrumentation
+  // can sleep 1000ms while it remains live, including after RETIRED is sent.
+  // Allow that instrumentation delay without changing the runtime's default.
+  polls += 100;
 #endif
+#endif
+#ifdef __APPLE__
+  int actual = 0, actual_reaped = 0;
 #endif
   for (int i = 0; i != polls; ++i) {
+#ifdef __APPLE__
+    if (unbound_case) {
+      // An unbound child cannot authorize NOT_LIVE through parent_poll.
+      // Observe its actual exit instead of sleeping the entire poll budget
+      // after it is already gone. Keep the same exit-status assertions below.
+      pid_t exited = waitpid(-1, &actual, WNOHANG);
+      assert(exited >= 0);
+      if (exited > 0) {
+        actual_reaped = 1;
+        break;
+      }
+    }
+#endif
     status = fs_diag_parent_poll(1);
     assert(status >= 0);
     if (status & FS_DIAG_SUPPORT_NOT_LIVE)
@@ -279,8 +294,8 @@ static void run_case(const char *launcher, const char *self, const char *mode) {
   if (strcmp(mode, "wrong-identity") != 0 && strcmp(mode, "bootstrap") != 0)
     assert(status & FS_DIAG_SUPPORT_NOT_LIVE);
   assert(!(status & FS_DIAG_SUPPORT_REAPED));
-  int actual;
-  assert(wait(&actual) > 0);
+  if (!actual_reaped)
+    assert(wait(&actual) > 0);
   assert(WIFEXITED(actual));
   int expected = strcmp(mode, "bootstrap") == 0 || bootstrap_idle ? 65
                  : strcmp(mode, "hold") == 0 || strcmp(mode, "deadline") == 0 ||

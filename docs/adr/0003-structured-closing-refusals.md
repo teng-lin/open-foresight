@@ -4,7 +4,7 @@
 |---|---|
 | Status | Accepted 2026-10-19; implemented in fix plan steps 3 and 5 |
 | Deciders | Repository owner |
-| Source | [Service lifecycle fix plan](../plans/2026-10-19-service-lifecycle-fix-plan.md), decision D3, findings SL-3, SL-4, SL-6, SL-9 |
+| Source | [Service lifecycle fix plan](https://github.com/teng-lin/open-foresight/blob/52bdd39778f31d632d434ada3fca7b165b9c6336/docs/plans/2026-10-19-service-lifecycle-fix-plan.md), decision D3, findings SL-3, SL-4, SL-6, SL-9 |
 
 ## Context
 
@@ -28,6 +28,6 @@ Rejected: declare EOF the protocol and drop the closing-reply special case. Call
 ## Consequences
 
 - The closing text stays byte-identical, because v0.1.0 to v0.1.2 clients match on it; an `unavailable` error without `reason` whose message matches either legacy text is treated as `closing`.
-- Idempotency keys ([fix plan 5.2](../plans/2026-10-19-service-lifecycle-fix-plan.md)) become the recovery path for `outcomeUnknown`.
+- Idempotency keys ([fix plan 5.2](https://github.com/teng-lin/open-foresight/blob/52bdd39778f31d632d434ada3fca7b165b9c6336/docs/plans/2026-10-19-service-lifecycle-fix-plan.md)) become the recovery path for `outcomeUnknown`.
 - Startup and stop mechanics that landed with this decision, recorded here as implementation detail: a launcher writes a startup status file (`failed`, `contended` when the child lost the lock race, or a launch lease) that the launch loop reads instead of waiting out the deadline; a launcher makes a single lock attempt per launch and at most three launches; the status probe is capped at 30 s; and `--stop` reports success only after the profile lock is released, up to 30 s after the connection closes, so callers should allow at least 60 s plus recording finalization.
 - [ADR 0007](0007-service-lifetime-and-desktop-agent-boundary.md) depends on these reasons to let the service exit under an idle agent safely.

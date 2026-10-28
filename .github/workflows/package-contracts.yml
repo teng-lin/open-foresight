@@ -1,4 +1,4 @@
-name: Package recipe contracts
+name: Linux packaging contracts
 on:
   workflow_call:
     inputs:
@@ -31,7 +31,7 @@ permissions:
   actions: read
 jobs:
   linux:
-    name: linux-${{ matrix.format }}
+    name: ${{ matrix.format }} contracts
     if: inputs.linux_enabled
     strategy:
       fail-fast: false

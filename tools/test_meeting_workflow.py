@@ -207,11 +207,12 @@ def main():
             bundled_runner = helper_bundle / "bin/foresight-model"
             if bundled_runner.is_file():
                 env["FORESIGHT_LITERT_RUNNER"] = str(bundled_runner)
+            # The manifest selects the initial speech runner. A global runtime
+            # override would bypass the workflow's registered speech gate.
             for setting in (
                 "FORESIGHT_LITERT_BACKEND",
                 "FORESIGHT_WHISPER_BACKEND",
                 "FORESIGHT_WHISPER_DEVICE",
-                "FORESIGHT_WHISPER_RUNTIME",
             ):
                 if setting in os.environ:
                     env[setting] = os.environ[setting]

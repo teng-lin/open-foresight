@@ -710,6 +710,8 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
                         "package.py",
                         "--build",
                         str(build),
+                        "--media-worker-build",
+                        str(build / "media-worker"),
                         "--flutter-bundle",
                         str(flutter),
                         "--output",

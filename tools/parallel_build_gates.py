@@ -2,6 +2,7 @@
 """Overlap independent core/desktop gates, retaining logs and every exit status."""
 
 import argparse
+import codecs
 import os
 from pathlib import Path
 import signal
@@ -13,6 +14,44 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 WAIT_TIMEOUT_SECONDS = 3600
 PROGRESS_INTERVAL_SECONDS = 30
+LOG_POLL_INTERVAL_SECONDS = 0.25
+
+
+class GateLog:
+    """Stream bounded, labeled text while keeping the original bytes on disk."""
+
+    def __init__(self, name, path):
+        self.name = name
+        self.reader = path.open("rb")
+        self.decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self.pending = ""
+
+    def emit(self, *, final=False):
+        # Limit each live turn so a noisy gate cannot starve its siblings.
+        data = self.reader.read(65536)
+        self.pending += self.decoder.decode(data, final=final and not data)
+        self.pending = self.pending.replace("\r", "\n")
+        while self.pending:
+            newline = self.pending.find("\n", 0, 8192)
+            if newline >= 0:
+                line, self.pending = (
+                    self.pending[:newline], self.pending[newline + 1 :]
+                )
+            elif len(self.pending) >= 8192:
+                line, self.pending = self.pending[:8192], self.pending[8192:]
+            elif final and not data:
+                line, self.pending = self.pending, ""
+            else:
+                break
+            print(f"[{self.name}] {line}", flush=True)
+        return bool(data)
+
+    def finish(self):
+        while self.emit(final=True):
+            pass
+
+    def close(self):
+        self.reader.close()
 
 
 def signal_owned_group(process, sig):
@@ -43,6 +82,7 @@ def run_gates(tasks, log_directory, *, outcomes=None):
     log_directory.mkdir(parents=True, exist_ok=True)
     running = []
     streams = []
+    logs = {}
     completed = False
     started = time.monotonic()
     try:
@@ -54,6 +94,7 @@ def run_gates(tasks, log_directory, *, outcomes=None):
                 command, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True
             )
             running.append((name, process, path))
+            logs[process.pid] = GateLog(name, path)
             print(f"Started {name} gate; log: {path}", flush=True)
         failed = False
         reported = set()
@@ -68,11 +109,9 @@ def run_gates(tasks, log_directory, *, outcomes=None):
                 failed |= code != 0
                 if outcomes is not None:
                     outcomes[name] = code
+                logs[process.pid].finish()
                 print(f"::group::{name} gate (exit {code})", flush=True)
-                with path.open("rb") as stream:
-                    while data := stream.read(65536):
-                        sys.stdout.buffer.write(data)
-                sys.stdout.flush()
+                print(f"Raw log: {path}", flush=True)
                 print("::endgroup::", flush=True)
 
         def report_progress():
@@ -89,6 +128,7 @@ def run_gates(tasks, log_directory, *, outcomes=None):
                 flush=True,
             )
 
+        next_progress = time.monotonic() + PROGRESS_INTERVAL_SECONDS
         for _, process, _ in running:
             # Preserve the original per-wait budget. Heartbeats must not renew it.
             deadline = time.monotonic() + WAIT_TIMEOUT_SECONDS
@@ -97,11 +137,26 @@ def run_gates(tasks, log_directory, *, outcomes=None):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(process.args, WAIT_TIMEOUT_SECONDS)
-                try:
-                    process.wait(timeout=min(PROGRESS_INTERVAL_SECONDS, remaining))
-                except subprocess.TimeoutExpired:
-                    report_finished()
+                for _, owner, _ in running:
+                    if owner.pid not in reported:
+                        logs[owner.pid].emit()
+                report_finished()
+                if time.monotonic() >= next_progress:
                     report_progress()
+                    next_progress = time.monotonic() + PROGRESS_INTERVAL_SECONDS
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(process.args, WAIT_TIMEOUT_SECONDS)
+                try:
+                    process.wait(
+                        timeout=min(
+                            LOG_POLL_INTERVAL_SECONDS,
+                            PROGRESS_INTERVAL_SECONDS,
+                            remaining,
+                        )
+                    )
+                except subprocess.TimeoutExpired:
+                    pass
             report_finished()
         completed = True
         print(
@@ -152,6 +207,8 @@ def run_gates(tasks, log_directory, *, outcomes=None):
                         )
                     raise cleanup_errors[0]
         finally:
+            for log in logs.values():
+                log.close()
             for stream in streams:
                 stream.close()
 

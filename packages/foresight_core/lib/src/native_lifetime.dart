@@ -185,17 +185,43 @@ final class NativeLifetime {
             : StateError('Native operation was not admitted'),
       );
     }
-    return _pending.putIfAbsent(token, () {
-      final future = _watch(token, name.endsWith('_retire') ? owner : null);
-      // A synchronous close request must not produce an unhandled background
-      // error before its owner reaches the awaitable completion. Keep the same
-      // error visible to every caller joining this future.
-      unawaited(
-        future.then<void>((_) {}, onError: (Object _, StackTrace _) {}),
-      );
-      return future;
-    });
+    return _observe(token, name.endsWith('_retire') ? owner : null);
   }
+
+  /// Observe an operation created by an additive, typed native entry point.
+  /// The token must come from this pinned mapping, never from an RPC client.
+  /// Status 2 reports an acknowledged operation failure; ownership uncertainty
+  /// still quarantines the mapping exactly as for the original request suite.
+  Future<int> observeOperation(int token) {
+    if (token == 0) {
+      return Future.error(StateError('Native operation was not admitted'));
+    }
+    return _observe(token, null);
+  }
+
+  /// Observe retirement from an additive typed ABI. Releasing only the token
+  /// would leak the owner registry entry; release the owner after its actual
+  /// destruction acknowledgement, using the same pinned mapping.
+  Future<void> observeRetirement(int token, int owner) async {
+    if (token == 0 || owner == 0) {
+      throw _unconfirmedError('Native retirement was not admitted');
+    }
+    if (await _observe(token, owner) != 1) {
+      throw _unconfirmedError('Native retirement did not complete');
+    }
+  }
+
+  Future<int> _observe(
+    int token,
+    int? retiringOwner,
+  ) => _pending.putIfAbsent(token, () {
+    final future = _watch(token, retiringOwner);
+    // A synchronous close request must not produce an unhandled background
+    // error before its owner reaches the awaitable completion. Keep the same
+    // error visible to every caller joining this future.
+    unawaited(future.then<void>((_) {}, onError: (Object _, StackTrace _) {}));
+    return future;
+  });
 
   Future<int> _watch(int token, int? retiringOwner) async {
     // Install the future in _pending before a previously completed native job

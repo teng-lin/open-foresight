@@ -79,6 +79,48 @@ def driver(tmp_path):
         """,
     )
     write_script(tools / "build.sh", "set -eu\nprintf '%s\\n' \"$@\" > build-args\n")
+    # Keep codec compilation at this fixture boundary while exercising its real
+    # build-driver arguments and the package consumer's exact selected output.
+    write_script(
+        tools / "build_media_worker.py",
+        """
+        import argparse
+        import hashlib
+        import json
+        import os
+        from pathlib import Path
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--cache', type=Path, required=True)
+        parser.add_argument('--output', type=Path, required=True)
+        parser.add_argument('--fetch', action='store_true')
+        parser.add_argument('--jobs', type=int, required=True)
+        args = parser.parse_args()
+        assert args.cache.is_absolute() and args.cache.name == 'media-worker-cache'
+        assert args.cache.is_dir() and args.cache.stat().st_mode & 0o077 == 0
+        assert args.output == Path('build/media-worker')
+        assert args.fetch and args.jobs == 2
+        archive = args.cache / 'fixture-source.sha256'
+        pinned = hashlib.sha256(b'fixture codec source archive').hexdigest()
+        if archive.exists():
+            assert archive.read_text() == pinned
+        else:
+            archive.write_text(pinned)
+        revision = os.environ['SOURCE_REVISION']
+        binary = ('fixture-media-worker:' + revision).encode()
+        receipt = {
+            'fixture': True,
+            'input_revision': revision,
+            'build_id': hashlib.sha256(('fixture recipe:' + revision).encode()).hexdigest(),
+            'binary_sha256': hashlib.sha256(binary).hexdigest(),
+            'binary_bytes': len(binary),
+        }
+        args.output.mkdir(parents=True, exist_ok=True)
+        (args.output / 'foresight-media-worker').write_bytes(binary)
+        (args.output / 'media-worker-build.json').write_text(json.dumps(receipt))
+        with (args.cache / 'fixture-calls.jsonl').open('a') as calls:
+            calls.write(json.dumps({'revision': revision, 'fetch': args.fetch, 'jobs': args.jobs}) + '\\n')
+        """,
+    )
     # Package installation is covered by the bootstrap contract and actual
     # locked-runtime proof; this namespace fixture has no dependency downloads.
     write_script(
@@ -112,14 +154,29 @@ def driver(tmp_path):
     write_script(
         tools / "package.py",
         """
+        import hashlib
         import json
+        import os
         from pathlib import Path
         import sys
+        selected = Path(sys.argv[sys.argv.index('--media-worker-build') + 1])
+        assert selected == Path('build/media-worker')
+        worker = (selected / 'foresight-media-worker').read_bytes()
+        receipt = json.loads((selected / 'media-worker-build.json').read_text())
+        assert receipt['fixture'] is True
+        assert receipt['input_revision'] == os.environ['SOURCE_REVISION']
+        assert receipt['binary_sha256'] == hashlib.sha256(worker).hexdigest()
+        assert receipt['binary_bytes'] == len(worker)
+        assert receipt['build_id'] == hashlib.sha256(('fixture recipe:' + receipt['input_revision']).encode()).hexdigest()
         output = Path(sys.argv[sys.argv.index('--output') + 1])
         output.mkdir(parents=True, exist_ok=True)
         for name, value in json.loads(Path('payload.json').read_text()).items():
             (output / name).write_text(value)
         (output / 'revision').write_text(sys.argv[sys.argv.index('--revision') + 1])
+        (output / 'bin').mkdir()
+        (output / 'bin/foresight-media-worker').write_bytes(worker)
+        (output / 'share/open-foresight').mkdir(parents=True)
+        (output / 'share/open-foresight/media-worker.json').write_text(json.dumps(receipt))
         """,
     )
     write_script(
@@ -209,6 +266,10 @@ def driver(tmp_path):
 
     def run(payload, revision, mode, *, test_failure=False):
         (checkout / "payload.json").write_text(json.dumps(payload))
+        cache = output / "media-worker-cache"
+        cached = cache / "fixture-source.sha256"
+        calls = cache / "fixture-calls.jsonl"
+        before = calls.read_bytes() if calls.exists() else b""
         environment = {
             **os.environ,
             "PATH": str(docker.parent) + os.pathsep + os.environ["PATH"],
@@ -245,6 +306,15 @@ def driver(tmp_path):
         transcript = result.stdout + result.stderr
         (tmp_path / "last-driver.log").write_text(transcript)
         assert result.returncode == (17 if test_failure else 0), transcript
+        assert cached.read_text() == hashlib.sha256(
+            b"fixture codec source archive"
+        ).hexdigest()
+        if "--test-only" in mode:
+            assert calls.read_bytes() == before
+        else:
+            records = [json.loads(line) for line in calls.read_text().splitlines()]
+            assert records[-1] == {"revision": revision, "fetch": True, "jobs": 2}
+            assert len(records) == len(before.splitlines()) + 1
         if test_failure:
             assert "fixture runner failed before writing service results" in transcript
         return output
@@ -262,6 +332,18 @@ def assert_current_package(output):
         assert archive.extractfile("open-foresight/current").read() == b"second"
         assert archive.extractfile("open-foresight/revision").read() == b"b" * 40
         assert "open-foresight/removed" not in archive.getnames()
+        worker = archive.extractfile("open-foresight/bin/foresight-media-worker").read()
+        receipt = json.load(
+            archive.extractfile("open-foresight/share/open-foresight/media-worker.json")
+        )
+        assert worker == ("fixture-media-worker:" + "b" * 40).encode()
+        assert receipt["fixture"] is True
+        assert receipt["input_revision"] == "b" * 40
+        assert receipt["binary_sha256"] == hashlib.sha256(worker).hexdigest()
+        assert receipt["binary_bytes"] == len(worker)
+        assert receipt["build_id"] == hashlib.sha256(
+            ("fixture recipe:" + "b" * 40).encode()
+        ).hexdigest()
 
 
 def test_repeated_build_replaces_owned_packages(driver):

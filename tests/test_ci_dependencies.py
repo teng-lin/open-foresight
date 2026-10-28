@@ -525,7 +525,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_docs_and_explicit_maintenance_skip_platforms(self):
         self.assert_selection([], [])
-        self.assert_selection(["README.md", "docs/platforms/ci-performance.md"], [])
+        self.assert_selection(["README.md", "docs/testing.md"], [])
         self.assert_selection(list(changes.MAINTENANCE), [])
 
     def test_platform_specific_paths_select_only_affected_platform(self):

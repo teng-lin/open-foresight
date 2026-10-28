@@ -4,6 +4,44 @@ import 'rpc_error.dart';
 
 /// The single wire operation registry. Dispatch is exhaustive over this enum.
 enum Operation {
+  recordingsRead('recordings.read', contracts.recordingsReadDescriptor),
+  recordingsTranscriptTarget(
+    'recordings.transcript_target',
+    contracts.recordingsTranscriptTargetDescriptor,
+  ),
+  recordingsPlay('recordings.play', contracts.recordingsPlayDescriptor),
+  recordingsPauseAudio(
+    'recordings.pause_audio',
+    contracts.recordingsPauseAudioDescriptor,
+  ),
+  recordingsSeek('recordings.seek', contracts.recordingsSeekDescriptor),
+  recordingsSeekTranscript(
+    'recordings.seek_transcript',
+    contracts.recordingsSeekTranscriptDescriptor,
+  ),
+  recordingsAuthorizeExportDestination(
+    'recordings.authorize_export_destination',
+    contracts.recordingsAuthorizeExportDestinationDescriptor,
+  ),
+  recordingsExport('recordings.export', contracts.recordingsExportDescriptor),
+  recordingsCancelExport(
+    'recordings.cancel_export',
+    contracts.recordingsCancelExportDescriptor,
+  ),
+  recordingsRetryTranscription(
+    'recordings.retry_transcription',
+    contracts.recordingsRetryTranscriptionDescriptor,
+  ),
+  recordingsRetryCompression(
+    'recordings.retry_compression',
+    contracts.recordingsRetryCompressionDescriptor,
+  ),
+  recordingsDelete('recordings.delete', contracts.recordingsDeleteDescriptor),
+  recordingsSetRetainLossless(
+    'recordings.set_retain_lossless',
+    contracts.recordingsSetRetainLosslessDescriptor,
+  ),
+
   notificationsCapabilities(
     'notifications.capabilities',
     contracts.notificationsCapabilitiesDescriptor,

@@ -5,8 +5,12 @@ import 'dart:io';
 /// One adapter child at a time. A timeout owns actual termination and reaping;
 /// repeated refreshes share the in-flight enumeration instead of adding children.
 final class AudioDeviceProcessRunner {
-  AudioDeviceProcessRunner({this.timeout = const Duration(seconds: 10)});
+  AudioDeviceProcessRunner({
+    this.timeout = const Duration(seconds: 10),
+    this.startProcess = Process.start,
+  });
   final Duration timeout;
+  final Future<Process> Function(String, List<String>) startProcess;
   Future<ProcessResult>? _active;
   bool _restartRequired = false;
 
@@ -25,7 +29,7 @@ final class AudioDeviceProcessRunner {
   }
 
   Future<ProcessResult> _run(String executable, List<String> arguments) async {
-    final process = await Process.start(executable, arguments);
+    final process = await startProcess(executable, arguments);
     Stream<List<int>> bounded(Stream<List<int>> stream, int maximum) {
       var received = 0;
       return stream.map((chunk) {

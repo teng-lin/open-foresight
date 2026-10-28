@@ -1,4 +1,4 @@
-name: Independent Linux application stages
+name: Linux checks
 on:
   workflow_call:
     inputs:
@@ -28,7 +28,7 @@ env:
   FORESIGHT_REQUIRE_NATIVE_UI_TEST: '1'
 jobs:
   native-linux:
-    name: native-linux
+    name: native
     runs-on: ubuntu-24.04
     container: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
     timeout-minutes: 90
@@ -105,7 +105,7 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
   core-linux:
-    name: core-linux
+    name: core
     needs: [native-linux]
     runs-on: ubuntu-24.04
     container: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
@@ -171,7 +171,7 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
   desktop-linux:
-    name: desktop-linux
+    name: desktop
     needs: [native-linux]
     runs-on: ubuntu-24.04
     container: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
@@ -239,7 +239,7 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
   service-linux:
-    name: service-linux
+    name: service
     # The stage compiles its own current-source hosts from this qualified Native
     # input; unrelated Core/Desktop test outcomes cannot suppress service tests.
     needs: [native-linux]

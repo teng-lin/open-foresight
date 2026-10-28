@@ -39,7 +39,7 @@ def test_integration_inventory_requires_executable_or_documented_validation(
     }
     probes = {"schema": 1, "entries": [entry]}
     skips = {"schema": 1, "entries": []}
-    docs = tmp_path / "docs/validation/integration-gates.md"
+    docs = tmp_path / "docs/testing.md"
     docs.parent.mkdir(parents=True)
     docs.write_text("`tools/accept_fixture.py`")
     if failure == "schema":
@@ -126,14 +126,27 @@ def test_mac_bundle_environment_resolves_only_current_packaged_products(tmp_path
     (resources / "lib").mkdir()
     (resources / "lib/libforesight_sql_support.dylib").write_bytes(b"packaged SQL")
     config = {}
-    for key in ("FORESIGHT_NATIVE", "FORESIGHT_HELPER", "FORESIGHT_LITERT_RUNNER"):
+    for key in (
+        "FORESIGHT_NATIVE",
+        "FORESIGHT_HELPER",
+        "FORESIGHT_LITERT_RUNNER",
+        "FORESIGHT_SQLITE_LIBRARY",
+    ):
         (resources / key).write_bytes(b"packaged binary")
         config[key] = key
     (resources / "runtime.json").write_text(json.dumps(config))
     env = gates.bundle_environment(
-        app, {"PATH": "/usr/bin", "FORESIGHT_HELPER": "stale"}
+        app,
+        {
+            "PATH": "/usr/bin",
+            "FORESIGHT_HELPER": "stale",
+            "FORESIGHT_SQLITE_LIBRARY": "/host/stale-sqlite",
+        },
     )
     assert env["FORESIGHT_HELPER"] == str(resources / "FORESIGHT_HELPER")
+    assert env["FORESIGHT_SQLITE_LIBRARY"] == str(
+        resources / "FORESIGHT_SQLITE_LIBRARY"
+    )
     assert env["FORESIGHT_TEST_SQL_SUPPORT_LIBRARY"] == str(
         resources / "lib/libforesight_sql_support.dylib"
     )

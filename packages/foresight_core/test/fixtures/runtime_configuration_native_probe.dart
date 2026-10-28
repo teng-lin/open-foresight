@@ -65,9 +65,21 @@ Future<Map<String, Object?>> _nativeProfileSelection(
 }) async {
   final missing = '$directory/missing-legacy-native.so';
   installRuntimeConfiguration(
-    RuntimeConfiguration({'FORESIGHT_NATIVE': missing}),
+    RuntimeConfiguration({
+      'FORESIGHT_NATIVE': missing,
+      // The entrypoint SQLite loader is process-owned and initialized before
+      // individual owner scopes; only native selection is under test here.
+      if (Platform.environment['FORESIGHT_SQLITE_LIBRARY'] case final sqlite?)
+        'FORESIGHT_SQLITE_LIBRARY': sqlite,
+    }),
   );
-  final owned = RuntimeConfiguration({'FORESIGHT_NATIVE': nativeLibrary});
+  final owned = RuntimeConfiguration({
+    'FORESIGHT_NATIVE': nativeLibrary,
+    // A scoped service now opens its durable media store during startup.
+    // Select the actual SQLite image in that immutable scope as well.
+    if (Platform.environment['FORESIGHT_SQLITE_LIBRARY'] case final sqlite?)
+      'FORESIGHT_SQLITE_LIBRARY': sqlite,
+  });
   final profile = ProfilePaths('$directory/data', '$directory/run');
   Future<void> start() async {
     if (service) {
@@ -99,6 +111,7 @@ Future<Map<String, Object?>> _nativeProfileSelection(
   } on StateError catch (error) {
     return {
       'ok': false,
+      'error': '$error',
       'sealedRefusal': '$error'.contains('Cannot configure native runtime'),
     };
   }

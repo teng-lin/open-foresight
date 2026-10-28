@@ -1,4 +1,4 @@
-name: Native address and undefined behavior sanitizers
+name: Linux sanitizer checks
 on:
   schedule:
     - cron: '41 5 * * *'
@@ -93,6 +93,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   native-sanitizers:
+    name: address and undefined behavior
     runs-on: ubuntu-24.04
     container: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
     timeout-minutes: 120
@@ -172,6 +173,8 @@ jobs:
           retention-days: 30
           if-no-files-found: error
           compression-level: 0
+      - name: Install application-only PipeWire development files
+        run: pacman -S --needed --noconfirm pkgconf pipewire
       # Leak detection stays off only for build-time tools; every test and
       # probe below gets LeakSanitizer from tools/sanitizer_settings.py.
       - name: Configure and build instrumented native code and tests
@@ -201,6 +204,7 @@ jobs:
             build/sanitizers/Testing/
           if-no-files-found: warn
   thread-policy:
+    name: thread policy
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -216,6 +220,7 @@ jobs:
               print('probation=' + str(probation).lower(), file=output)
           PY
   native-thread-sanitizer:
+    name: thread
     needs: thread-policy
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -248,6 +253,13 @@ jobs:
           echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
           python3 -m venv .venv
           .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+      # Keep the original SDK install recipe unchanged. New hosted images may
+      # already contain newer zlib packages that unversioned apt will not lower.
+      - name: Restore the preserved TSan zlib ABI on newer runners
+        run: |
+          sudo apt-get install -y --allow-downgrades \
+            zlib1g=1:1.3.dfsg-3.1ubuntu2.2 \
+            zlib1g-dev=1:1.3.dfsg-3.1ubuntu2.2
       - name: Identify the TSan compiler and runtime
         id: compiler
         run: |
@@ -301,6 +313,8 @@ jobs:
           retention-days: 30
           if-no-files-found: error
           compression-level: 0
+      - name: Install application-only PipeWire development files
+        run: sudo apt-get install -y --no-install-recommends pkg-config libpipewire-0.3-dev
       - name: Configure and build native and helper TSan tests
         run: |
           cmake -S . -B build/thread -G Ninja -DCMAKE_BUILD_TYPE=Debug \

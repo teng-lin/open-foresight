@@ -77,6 +77,7 @@ class MeetingWorkspacePanel extends StatelessWidget {
     super.key,
     required this.header,
     this.speechProblem,
+    this.audio,
     required this.sidecarVisible,
     required this.assistantFallback,
     required this.sidecarWidth,
@@ -90,6 +91,7 @@ class MeetingWorkspacePanel extends StatelessWidget {
     required this.assistantBuilder,
   });
   final Widget header;
+  final Widget? audio;
   final String? speechProblem;
   final bool sidecarVisible, assistantFallback;
   final double sidecarWidth, assistantMinWidth;
@@ -106,94 +108,125 @@ class MeetingWorkspacePanel extends StatelessWidget {
         final wide = constraints.maxWidth >= assistantMinWidth;
         onAssistantWidth(wide);
         final showAssistant = sidecarVisible && (wide || assistantFallback);
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            header,
-            if (speechProblem != null)
-              ListTile(
-                dense: true,
-                leading: const Icon(Icons.info_outline),
-                title: Text(speechProblem!),
-                trailing: TextButton(
-                  onPressed: onSetupSpeech,
-                  child: const Text('Set up speech'),
-                ),
-              ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: LayoutBuilder(
-                builder: (_, size) {
-                  final showSidecar = showAssistant && wide;
-                  final sideWidth = sidecarWidth
-                      .clamp(280.0, math.max(280.0, size.maxWidth / 2))
-                      .toDouble();
-                  final notesWidth = showSidecar
-                      ? size.maxWidth - sideWidth - 16
-                      : size.maxWidth;
-                  final editor = notesBuilder(
-                    notesWidth >= 640,
-                    SizedBox(
-                      width: 40,
-                      child: IconButton(
-                        key: const ValueKey('meeting-assistant-toggle'),
-                        tooltip: showAssistant
-                            ? 'Hide assistant'
-                            : 'Open assistant',
-                        isSelected: showAssistant,
-                        style: IconButton.styleFrom(
-                          backgroundColor: showAssistant ? workspaceBlue : null,
-                          foregroundColor: workspaceInk,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                        onPressed: showAssistant
-                            ? onHideAssistant
-                            : () => onOpenAssistant(workspaceContext),
-                        icon: const Icon(Icons.view_sidebar_outlined),
+        return CustomScrollView(
+          slivers: [
+            SliverToBoxAdapter(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  header,
+                  if (audio != null)
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: constraints.maxHeight * .4,
+                      ),
+                      child: SingleChildScrollView(child: audio!),
+                    ),
+                  if (speechProblem != null)
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.info_outline),
+                      title: Text(speechProblem!),
+                      trailing: TextButton(
+                        onPressed: onSetupSpeech,
+                        child: const Text('Set up speech'),
                       ),
                     ),
-                  );
-                  if (showAssistant && !wide) return assistantBuilder();
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Expanded(flex: 7, child: editor),
-                      if (showSidecar) ...[
-                        MouseRegion(
-                          cursor: SystemMouseCursors.resizeColumn,
-                          child: GestureDetector(
-                            key: const ValueKey('meeting-sidecar-resize'),
-                            behavior: HitTestBehavior.opaque,
-                            onHorizontalDragUpdate: (drag) => onSidecarWidth(
-                              (sideWidth - drag.delta.dx)
-                                  .clamp(
-                                    280.0,
-                                    math.max(280.0, size.maxWidth / 2),
-                                  )
-                                  .toDouble(),
+                  const SizedBox(height: 16),
+                ],
+              ),
+            ),
+            SliverLayoutBuilder(
+              builder: (_, viewport) => SliverToBoxAdapter(
+                // Audio and wrapped toolbars must not consume the editor's
+                // entire viewport. Short windows scroll the workspace instead
+                // of giving its fixed note controls a negative body height.
+                child: SizedBox(
+                  height: math.max(
+                    320,
+                    viewport.viewportMainAxisExtent -
+                        viewport.precedingScrollExtent,
+                  ),
+                  child: LayoutBuilder(
+                    builder: (_, size) {
+                      final showSidecar = showAssistant && wide;
+                      final sideWidth = sidecarWidth
+                          .clamp(280.0, math.max(280.0, size.maxWidth / 2))
+                          .toDouble();
+                      final notesWidth = showSidecar
+                          ? size.maxWidth - sideWidth - 16
+                          : size.maxWidth;
+                      final editor = notesBuilder(
+                        notesWidth >= 640,
+                        SizedBox(
+                          width: 40,
+                          child: IconButton(
+                            key: const ValueKey('meeting-assistant-toggle'),
+                            tooltip: showAssistant
+                                ? 'Hide assistant'
+                                : 'Open assistant',
+                            isSelected: showAssistant,
+                            style: IconButton.styleFrom(
+                              backgroundColor: showAssistant
+                                  ? workspaceBlue
+                                  : null,
+                              foregroundColor: workspaceInk,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
                             ),
-                            child: SizedBox(
-                              width: 16,
-                              child: Center(
-                                child: Container(
-                                  width: 4,
-                                  height: 48,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xffd6dae1),
-                                    borderRadius: BorderRadius.circular(2),
+                            onPressed: showAssistant
+                                ? onHideAssistant
+                                : () => onOpenAssistant(workspaceContext),
+                            icon: const Icon(Icons.view_sidebar_outlined),
+                          ),
+                        ),
+                      );
+                      if (showAssistant && !wide) return assistantBuilder();
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(flex: 7, child: editor),
+                          if (showSidecar) ...[
+                            MouseRegion(
+                              cursor: SystemMouseCursors.resizeColumn,
+                              child: GestureDetector(
+                                key: const ValueKey('meeting-sidecar-resize'),
+                                behavior: HitTestBehavior.opaque,
+                                onHorizontalDragUpdate: (drag) =>
+                                    onSidecarWidth(
+                                      (sideWidth - drag.delta.dx)
+                                          .clamp(
+                                            280.0,
+                                            math.max(280.0, size.maxWidth / 2),
+                                          )
+                                          .toDouble(),
+                                    ),
+                                child: SizedBox(
+                                  width: 16,
+                                  child: Center(
+                                    child: Container(
+                                      width: 4,
+                                      height: 48,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xffd6dae1),
+                                        borderRadius: BorderRadius.circular(2),
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                        SizedBox(width: sideWidth, child: assistantBuilder()),
-                      ],
-                    ],
-                  );
-                },
+                            SizedBox(
+                              width: sideWidth,
+                              child: assistantBuilder(),
+                            ),
+                          ],
+                        ],
+                      );
+                    },
+                  ),
+                ),
               ),
             ),
           ],

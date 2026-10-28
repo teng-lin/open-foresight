@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <mach/mach_time.h>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -81,28 +82,64 @@ struct Ring {
   const std::shared_ptr<foresight::CallbackFence> callbacks;
   explicit Ring(std::shared_ptr<std::atomic<bool>> revoked = {})
       : callbacks(
-            std::make_shared<foresight::CallbackFence>(std::move(revoked))) {}
+            std::make_shared<foresight::CallbackFence>(std::move(revoked))) {
+    mach_timebase_info_data_t info{};
+    mach_timebase_info(&info);
+    host_num = info.numer;
+    host_den = info.denom;
+    auto before = std::chrono::steady_clock::now();
+    auto host = mach_absolute_time();
+    auto after = std::chrono::steady_clock::now();
+    auto before_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                         before.time_since_epoch())
+                         .count();
+    auto interval =
+        std::chrono::duration_cast<std::chrono::microseconds>(after - before)
+            .count();
+    mapping_uncertainty_us = static_cast<uint64_t>(interval + 1);
+    host_offset_us =
+        before_us + interval / 2 -
+        static_cast<int64_t>(
+            (static_cast<__uint128_t>(host) * host_num / host_den) / 1000);
+  }
   static constexpr size_t capacity = 384001;
   std::array<float, capacity> samples{};
+  std::array<int64_t, capacity> host_times{};
+  uint32_t host_num = 1, host_den = 1;
+  int64_t host_offset_us = 0;
+  uint64_t mapping_uncertainty_us = 0;
+  int64_t hostTimeUs(uint64_t host) const noexcept {
+    return static_cast<int64_t>(
+               (static_cast<__uint128_t>(host) * host_num / host_den) / 1000) +
+           host_offset_us;
+  }
   std::atomic<size_t> read{0}, write{0};
   std::atomic<uint64_t> dropped{0};
+  bool stopOnOverflow = false;
   std::atomic<uint64_t> convertedBuffers{0};
   std::atomic<bool> changed{false};
   std::atomic<uint64_t> configurationChanges{0};
-  void push(float value) {
+  void push(float value, int64_t host_us = -1) {
+    if (stopOnOverflow && dropped.load(std::memory_order_relaxed)) {
+      ++dropped;
+      return;
+    }
     auto w = write.load(std::memory_order_relaxed), next = (w + 1) % capacity;
     if (next == read.load(std::memory_order_acquire)) {
       ++dropped;
       return;
     }
     samples[w] = value;
+    host_times[w] = host_us;
     write.store(next, std::memory_order_release);
   }
-  bool pop(float &value) {
+  bool pop(float &value, int64_t *host_us = nullptr) {
     auto r = read.load(std::memory_order_relaxed);
     if (r == write.load(std::memory_order_acquire))
       return false;
     value = samples[r];
+    if (host_us)
+      *host_us = host_times[r];
     read.store((r + 1) % capacity, std::memory_order_release);
     return true;
   }
@@ -244,7 +281,8 @@ bool supportedPcm(const AudioStreamBasicDescription &format) {
                   format.mBitsPerChannel == 32)));
 }
 bool pushAudio(Ring &ring, const AudioStreamBasicDescription &format,
-               const AudioBufferList *data, bool firstChannel = false) {
+               const AudioBufferList *data, bool firstChannel = false,
+               int64_t host_start_us = -1) {
   if (!data || !data->mNumberBuffers)
     return false;
   if (!supportedPcm(format)) {
@@ -279,29 +317,37 @@ bool pushAudio(Ring &ring, const AudioStreamBasicDescription &format,
         ++channels;
       }
     }
-    ring.push(channels ? float(sum / channels) : 0.f);
+    ring.push(channels ? float(sum / channels) : 0.f,
+              host_start_us < 0
+                  ? -1
+                  : host_start_us + static_cast<int64_t>(frame * 1000000.0 /
+                                                         format.mSampleRate));
   }
   return true;
 }
 void pushMicrophoneAudio(Ring &ring, const AudioStreamBasicDescription &format,
-                         const AudioBufferList *data, double expectedRate) {
+                         const AudioBufferList *data, double expectedRate,
+                         int64_t host_start_us = -1) {
   if (format.mSampleRate != expectedRate) {
     ring.changed = true;
     return;
   }
   // The reference increments its watchdog count after successful PCM
   // conversion, rather than merely receiving an invalid callback format.
-  if (pushAudio(ring, format, data, true))
+  if (pushAudio(ring, format, data, true, host_start_us))
     ring.convertedBuffers.fetch_add(1, std::memory_order_relaxed);
 }
 OSStatus
 captureSystemAudio(const std::weak_ptr<Ring> &ring,
                    const std::shared_ptr<foresight::CallbackFence> &callbacks,
                    const AudioStreamBasicDescription &format, bool discard,
-                   const AudioBufferList *data) noexcept {
+                   const AudioBufferList *data,
+                   int64_t host_ticks = 0) noexcept {
   if (!discard)
-    captureCallback(ring, callbacks,
-                    [&](Ring &pcm) { pushAudio(pcm, format, data); });
+    captureCallback(ring, callbacks, [&](Ring &pcm) {
+      pushAudio(pcm, format, data, false,
+                host_ticks ? pcm.hostTimeUs(host_ticks) : -1);
+    });
   return noErr;
 }
 OSStatus startEngine(Session &s, AudioDeviceID device, bool processed) {
@@ -355,11 +401,14 @@ OSStatus startEngine(Session &s, AudioDeviceID device, bool processed) {
     [node installTapOnBus:0
                bufferSize:1024
                    format:nil
-                    block:^(AVAudioPCMBuffer *buffer, AVAudioTime *) {
+                    block:^(AVAudioPCMBuffer *buffer, AVAudioTime *when) {
                       captureCallback(weakRing, callbacks, [&](Ring &ring) {
                         const auto &actual = *buffer.format.streamDescription;
                         pushMicrophoneAudio(ring, actual,
-                                            buffer.audioBufferList, sampleRate);
+                                            buffer.audioBufferList, sampleRate,
+                                            when.isHostTimeValid
+                                                ? ring.hostTimeUs(when.hostTime)
+                                                : -1);
                       });
                     }];
     s.tapInstalled = true;
@@ -395,7 +444,9 @@ OSStatus start(Session &s, AudioDeviceID device, bool playback, int /*rate*/,
         [&] {
           if (s.resetEngine())
             throw std::runtime_error("Audio engine cleanup unconfirmed");
+          auto strict = s.ring->stopOnOverflow;
           s.ring = std::make_shared<Ring>(s.revoked);
+          s.ring->stopOnOverflow = strict;
         },
         [&](bool processed) { return startEngine(s, device, processed); });
     s.echoFallback = result.fallbackReason;
@@ -442,8 +493,13 @@ OSStatus start(Session &s, AudioDeviceID device, bool playback, int /*rate*/,
   status = AudioDeviceCreateIOProcIDWithBlock(
       &s.io, s.aggregate, nullptr,
       ^(const AudioTimeStamp *, const AudioBufferList *data,
-        const AudioTimeStamp *, AudioBufferList *, const AudioTimeStamp *) {
-        captureSystemAudio(weakRing, callbacks, format, discard, data);
+        const AudioTimeStamp *inputTime, AudioBufferList *,
+        const AudioTimeStamp *) {
+        captureSystemAudio(
+            weakRing, callbacks, format, discard, data,
+            inputTime && (inputTime->mFlags & kAudioTimeStampHostTimeValid)
+                ? inputTime->mHostTime
+                : 0);
       });
   return status ? status : AudioDeviceStart(s.aggregate, s.io);
 }
@@ -763,7 +819,9 @@ MacCaptureOutcome fs_macos_capture(
     std::atomic<bool> &cancel, const std::shared_ptr<MacCaptureOwner> &owner,
     const std::function<void(const std::vector<unsigned char> &)> &pcm,
     const std::function<void(const std::string &)> &emit,
-    std::atomic<bool> *echoCancellation) {
+    std::atomic<bool> *echoCancellation,
+    const std::function<void(const std::vector<unsigned char> &, int64_t)>
+        &timedPcm) {
   @autoreleasepool {
     if (!owner)
       throw std::invalid_argument("Missing native capture owner");
@@ -830,6 +888,7 @@ MacCaptureOutcome fs_macos_capture(
         owner->session.reset();
       }
       auto ownedSession = std::make_shared<Session>(owner->revoked);
+      ownedSession->ring->stopOnOverflow = bool(timedPcm);
       owner->session = ownedSession;
       const bool requested =
           !playback && echoCancellation && echoCancellation->load();
@@ -901,6 +960,17 @@ MacCaptureOutcome fs_macos_capture(
       // blocks.
       double phase = 0, position = 0;
       float previous = 0;
+      int64_t previousHost = -1, frameHost = -1;
+      bool frameClockValid = true;
+      auto flushFrame = [&] {
+        if (timedPcm)
+          timedPcm(frame, frameClockValid ? frameHost : -1);
+        else
+          pcm(frame);
+        frame.clear();
+        frameHost = -1;
+        frameClockValid = true;
+      };
       bool havePrevious = false;
       double initialDeviceRate = 0;
       get(device, kAudioDevicePropertyNominalSampleRate, initialDeviceRate);
@@ -923,12 +993,28 @@ MacCaptureOutcome fs_macos_capture(
               .stopInput(); // Join admitted callbacks before final PCM drain.
         }
         float value;
-        while (session.ring->pop(value)) {
+        int64_t hostTime = -1;
+        while (session.ring->pop(value, &hostTime)) {
           attempt = 0;
           if (!std::isfinite(value))
             value = 0;
+          if (havePrevious && hostTime >= 0 && previousHost >= 0) {
+            const auto expected = 1000000.0 / session.format.mSampleRate;
+            if (std::abs(double(hostTime - previousHost) - expected) > 23.0) {
+              // Do not interpolate across a source outage, even inside a40ms
+              // notification. Flush the valid prefix and anchor a new run.
+              if (!frame.empty())
+                flushFrame();
+              previous = value;
+              previousHost = hostTime;
+              phase = 0;
+              position = 0;
+              continue;
+            }
+          }
           if (!havePrevious) {
             previous = value;
+            previousHost = hostTime;
             havePrevious = true;
             continue;
           }
@@ -936,15 +1022,23 @@ MacCaptureOutcome fs_macos_capture(
             double sample = previous + (value - previous) * (phase - position);
             int16_t out =
                 int16_t(std::lround(std::clamp(sample, -1., 1.) * 32767.));
+            if (frame.empty())
+              frameHost = previousHost < 0 || hostTime < 0
+                              ? -1
+                              : previousHost + static_cast<int64_t>(
+                                                   (hostTime - previousHost) *
+                                                   (phase - position));
+            if (previousHost < 0 || hostTime < 0)
+              frameClockValid = false;
             frame.push_back(out & 255);
             frame.push_back((uint16_t(out) >> 8) & 255);
             phase += session.format.mSampleRate / rate;
             if (frame.size() >= size_t(rate * 2 * 40 / 1000)) {
-              pcm(frame);
-              frame.clear();
+              flushFrame();
             }
           }
           previous = value;
+          previousHost = hostTime;
           position += 1;
         }
         if (cancel)
@@ -1037,7 +1131,7 @@ MacCaptureOutcome fs_macos_capture(
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
       if (!frame.empty())
-        pcm(frame); // Drain buffered final audio before returning.
+        flushFrame(); // Drain buffered final audio before returning.
       if (fs_macos_capture_terminal(cancel.load(), terminalFailure) ==
           MacCaptureOutcome::failed) {
         return failed(terminalFailure == MacCaptureFailure::permission ? 7 : 9);

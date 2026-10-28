@@ -406,20 +406,29 @@ time.sleep(20)
       runtimeConfiguration.environment['FORESIGHT_SERVICE'] = worker.path;
       final processes = <Process>[];
       final exited = <Process>{};
+      late Completer<void> entered;
+      var phase = 'idle';
       Future<Process> startWorker(List<String> command) async {
         final marker = File('${worker.path}.stdin-closed');
         if (marker.existsSync()) {
           marker.deleteSync();
         }
+        phase = 'launching';
         final process = await Process.start(
           command.first,
           command.skip(1).toList(),
           includeParentEnvironment: false,
         );
+        phase = 'launched';
         processes.add(process);
-        process.exitCode.then((_) => exited.add(process)).ignore();
+        process.exitCode.then((_) {
+          phase = 'exited';
+          exited.add(process);
+        }).ignore();
         try {
           await reached(File('${worker.path}.stdin-closed'));
+          phase = 'stdin-closed';
+          entered.complete();
           return process;
         } catch (_) {
           if (!exited.contains(process)) {
@@ -455,8 +464,39 @@ time.sleep(20)
       ).toRpcError();
       try {
         for (final id in ['initial', 'replacement']) {
+          entered = Completer<void>();
+          phase = 'not-started';
+          final download = owner.download(request(id));
+          // Observe immediately, including failure before the fixture reaches
+          // its owned closed-stdin phase. A cold launch is setup, not evidence
+          // that broken-pipe retirement exceeded its separate five-second bound.
+          final outcome = download.then<Object?>(
+            (value) => value,
+            onError: (Object error) => error,
+          );
+          await Future.any<void>([
+            entered.future,
+            outcome.then<void>((value) {
+              if (!entered.isCompleted) {
+                throw TestFailure(
+                  'Closed-stdin setup settled early: '
+                  'attempt=$id phase=$phase outcome=${value.runtimeType}',
+                );
+              }
+            }),
+          ]).timeout(
+            const Duration(seconds: 5),
+            onTimeout: () => throw TestFailure(
+              'Closed-stdin setup timed out: attempt=$id phase=$phase',
+            ),
+          );
           await expectLater(
-            owner.download(request(id)).timeout(const Duration(seconds: 5)),
+            download.timeout(
+              const Duration(seconds: 5),
+              onTimeout: () => throw TestFailure(
+                'Broken-pipe retirement timed out: attempt=$id phase=$phase',
+              ),
+            ),
             throwsA(
               isA<RpcError>().having(
                 (e) => e.message,

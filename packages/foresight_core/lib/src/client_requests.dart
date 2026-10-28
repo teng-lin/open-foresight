@@ -6,3 +6,4 @@ export 'client_requests/meetings.dart';
 export 'client_requests/models.dart';
 export 'client_requests/security.dart';
 export 'client_requests/sources.dart';
+export 'client_requests/recordings.dart';

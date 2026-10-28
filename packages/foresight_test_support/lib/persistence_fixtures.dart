@@ -81,6 +81,7 @@ void preIncrementalIndexFixture(Database db) {
 /// This is a test-only downgrade; preserve values instead of pretending that a
 /// current schema is historical or making production CREATE statements tolerant.
 void prePreferenceEntitiesFixture(Database db) {
+  preRecordingAudioFixture(db);
   if (db
       .select(
         "SELECT 1 FROM sqlite_master WHERE name='answer_metadata' AND type='table'",
@@ -118,6 +119,45 @@ void prePreferenceEntitiesFixture(Database db) {
     'proactive_scopes',
     'answer_metadata',
     'legacy_preference_entities',
+  ]) {
+    db.execute('DROP TABLE $table');
+  }
+}
+
+/// Reconstruct the actual pre24 schema. These downgrade fixtures contain no
+/// retained media; refusing nonempty audio avoids silently discarding fixture
+/// content while manufacturing an older database version.
+void preRecordingAudioFixture(Database db) {
+  if (db
+      .select(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='recording_sessions'",
+      )
+      .isEmpty) {
+    return;
+  }
+  if (db.select('SELECT 1 FROM recording_sessions LIMIT 1').isNotEmpty) {
+    throw StateError(
+      'A historical migration fixture cannot contain recorded audio',
+    );
+  }
+  db.execute('DROP TRIGGER audio_session_reference_fence');
+  db.execute('DROP TRIGGER audio_session_erasure');
+  for (final table in [
+    'transcript_audio_links',
+    'audio_media_references',
+    'audio_transform_inputs',
+    'audio_transform_jobs',
+    'audio_asr_job_chunks',
+    'audio_asr_jobs',
+    'audio_segmentation_progress',
+    'audio_representations',
+    'audio_chunks',
+    'audio_chunk_publications',
+    'audio_source_clocks',
+    'recording_spans',
+    'recording_sessions',
+    'audio_erasure_intents',
+    'audio_storage_generation',
   ]) {
     db.execute('DROP TABLE $table');
   }

@@ -44,7 +44,7 @@ def image_diagnostics(destination):
             print(f"Diagnostic unavailable: {error}", file=sys.stderr, flush=True)
 
 
-def detach_created_image(destination, *, deadline=None):
+def _detach_created_image_once(destination, *, deadline):
     """Recover only the unique attachment of this invocation's new output."""
     timeout = 10 if deadline is None else min(10, deadline - time.monotonic())
     if timeout <= 0:
@@ -105,6 +105,48 @@ def detach_created_image(destination, *, deadline=None):
     print_output(detached.stdout, detached.stderr)
     detached.check_returncode()
     return True
+
+
+def detach_created_image(destination, *, deadline=None):
+    """Retry an owned device's busy refusal within the existing cleanup budget."""
+    # The previous default allowed ten seconds each for inventory and detach.
+    # Retries share that total; verification supplies its own existing deadline.
+    if deadline is None:
+        deadline = time.monotonic() + 20
+    original_digest = image_digest(destination)
+    while True:
+        if image_digest(destination) != original_digest:
+            raise ValueError("DMG bytes changed during attachment cleanup")
+        try:
+            detached = _detach_created_image_once(destination, deadline=deadline)
+            if image_digest(destination) != original_digest:
+                raise ValueError("DMG bytes changed during attachment cleanup")
+            return detached
+        except subprocess.CalledProcessError as error:
+            command = error.cmd
+            if (
+                error.returncode <= 0
+                or not isinstance(command, list)
+                or len(command) != 3
+                or command[:2] != ["hdiutil", "detach"]
+                or not re.fullmatch(r"/dev/disk[0-9]+", command[2])
+                or not isinstance(error.stderr, str)
+                or error.stderr.strip()
+                != f'hdiutil: couldn\'t eject "{Path(command[2]).name}" - Resource busy'
+            ):
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            delay = min(2, remaining)
+            print(
+                f"Owned disk image is busy; rechecking attachment after {delay:g}s",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(delay)
+            if time.monotonic() >= deadline:
+                raise
 
 
 def verify_image(destination, *, created_image=False):

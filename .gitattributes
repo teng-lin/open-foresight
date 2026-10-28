@@ -3,4 +3,4 @@
 *.patch -whitespace
 
 # Preserve the frozen collector CSV bytes while checking ordinary whitespace.
-docs/platforms/2026-10-20-ci-review-baseline.csv whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+tests/fixtures/doc-ci/2026-10-20-ci-review-baseline.csv whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

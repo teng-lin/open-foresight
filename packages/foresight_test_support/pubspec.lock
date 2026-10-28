@@ -87,7 +87,7 @@ packages:
       path: "../foresight_core"
       relative: true
     source: path
-    version: "0.1.3"
+    version: "0.1.4"
   google_cloud:
     dependency: transitive
     description:

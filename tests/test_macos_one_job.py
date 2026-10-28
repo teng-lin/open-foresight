@@ -115,11 +115,22 @@ def test_parallel_lanes_keep_each_suite_and_package_prerequisites_independent():
         "attempt": "${{ steps.macos-receipt.outputs.attempt }}",
     }
     for step in package["steps"]:
-        if step.get("id") in {"macos-inference", "macos-installed", "macos-smoke"}:
-            assert (
-                step["if"]
-                == "${{ !cancelled() && steps.macos-assembly.outcome == 'success' }}"
+        if step.get("id") in {
+            "macos-inference",
+            "macos-installed",
+            "macos-smoke",
+            "macos-speech-file",
+            "macos-cpu-models",
+            "macos-model-temp",
+        }:
+            expected = (
+                "${{ !cancelled() && steps.macos-assembly.outcome == 'success' }}"
             )
+            if step["id"] in {"macos-speech-file", "macos-cpu-models"}:
+                expected = (
+                    expected[:-3] + " && steps.macos-model-temp.outcome == 'success' }}"
+                )
+            assert step["if"] == expected
         if (
             step.get("id") in {"macos-receipt", "macos-candidate"}
             or "publish-receipt" in step.get("run", "")
@@ -144,6 +155,9 @@ def test_parallel_lanes_keep_each_suite_and_package_prerequisites_independent():
             "INFERENCE_RESULT",
             "INSTALLED_RESULT",
             "SMOKE_RESULT",
+            "SPEECH_FILE_RESULT",
+            "CPU_MODELS_RESULT",
+            "MODEL_CLEANUP_RESULT",
         )
         for outcome in ("failure", "cancelled", "skipped")
     ],
@@ -167,6 +181,132 @@ def test_real_mac_aggregate_requires_every_lane_and_package(failed_result, outco
     assert (result.returncode == 0) == (failed_result is None), (
         result.stdout + result.stderr
     )
+
+
+def test_macos_acceptance_reuses_its_app_and_restore_only_pinned_models():
+    steps = config()["jobs"]["macos"]["steps"]
+    named = {step.get("id"): step for step in steps if step.get("id")}
+    speech = named["macos-speech-file"]
+    models = named["macos-cpu-models"]
+    assert speech["name"] == "macOS acceptance / packaged CPU models and speech file"
+    assert models["name"] == "macOS acceptance / CPU models"
+    assert (
+        "tools/test_macos_release_models.py 'dist/Open Foresight.app'" in speech["run"]
+    )
+    assert "--models build/acceptance-models" in speech["run"]
+    assert "--output test-results/macos-acceptance/packaged-models" in speech["run"]
+    assert "tools/integration_gates.py --suite models" in models["run"]
+    assert "--bundle 'dist/Open Foresight.app'" in models["run"]
+    assert "--models build/acceptance-models" in models["run"]
+    assert "--output test-results/macos-acceptance/models" in models["run"]
+    for step in (speech, models):
+        assert step["if"] == "${{ !cancelled() && steps.macos-assembly.outcome == 'success' && steps.macos-model-temp.outcome == 'success' }}"
+        assert step["env"] == {
+            "TMPDIR": "${{ steps.macos-model-temp.outputs.root }}",
+            "FORESIGHT_TEST_TEMP_ROOT": "${{ steps.macos-model-temp.outputs.root }}",
+        }
+        assert not any(
+            token in step["run"]
+            for token in (
+                "build.sh",
+                "flutter build",
+                "ci_artifacts",
+                "--suite virtual-audio",
+            )
+        )
+    restore = next(
+        step
+        for step in steps
+        if step.get("name") == "Restore checksum-pinned acceptance models"
+    )
+    assert (
+        restore["uses"]
+        == "actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830"
+    )
+    assert restore["with"]["path"] == "build/acceptance-models"
+    linux_restore = next(
+        step
+        for step in config()["jobs"]["acceptance-cpu"]["steps"]
+        if step.get("with", {}).get("path") == "build/acceptance-models"
+    )
+    assert restore["with"] == linux_restore["with"]
+    assert "model_pins.dart" in restore["with"]["key"]
+    assert not any("cache/save@" in step.get("uses", "") for step in steps)
+    order = [step.get("id") for step in steps]
+    assert (
+        order.index("macos-assembly")
+        < order.index("macos-model-temp")
+        < order.index("macos-speech-file")
+        < order.index("macos-cpu-models")
+    )
+    evidence = next(
+        step
+        for step in steps
+        if step.get("name") == "Retain development package evidence"
+    )
+    assert evidence["if"] == "always()" and "test-results/" in evidence["with"]["path"]
+
+
+def test_macos_acceptance_scratch_is_canonical_owned_and_private(tmp_path):
+    step = next(
+        step
+        for step in config()["jobs"]["macos"]["steps"]
+        if step.get("id") == "macos-model-temp"
+    )
+    output = tmp_path / "outputs"
+    result = subprocess.run(
+        ["/bin/bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", step["run"]],
+        env=_shell_environment({**os.environ, "GITHUB_OUTPUT": str(output)}),
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    key, value = output.read_text().strip().split("=", 1)
+    root = Path(value)
+    try:
+        assert key == "root"
+        assert root == root.resolve() and root.parent == Path("/var/tmp").resolve()
+        assert root.stat().st_uid == os.getuid() and root.stat().st_mode & 0o077 == 0
+        cleanup = next(
+            step
+            for step in config()["jobs"]["macos"]["steps"]
+            if step.get("id") == "macos-model-cleanup"
+        )
+        assert (
+            cleanup["if"]
+            == "${{ always() && steps.macos-model-temp.outcome == 'success' }}"
+        )
+        unexpected = root / "retain-on-cleanup-error"
+        unexpected.write_bytes(b"retained proof")
+
+        def clean():
+            return subprocess.run(
+                [
+                    "/bin/bash",
+                    "--noprofile",
+                    "--norc",
+                    "-euo",
+                    "pipefail",
+                    "-c",
+                    cleanup["run"],
+                ],
+                env=_shell_environment({**os.environ, "MODEL_SCRATCH": str(root)}),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+        refused = clean()
+        assert refused.returncode != 0
+        assert unexpected.read_bytes() == b"retained proof"
+        unexpected.unlink()
+        removed = clean()
+        assert removed.returncode == 0, removed.stdout + removed.stderr
+        assert not root.exists()
+    finally:
+        if root.exists():
+            root.rmdir()
 
 
 @pytest.mark.parametrize("result", ["failure", "cancelled", "skipped"])

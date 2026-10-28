@@ -1,3 +1,7 @@
+import 'application_services/audio_application_port.dart';
+import 'application_services/meeting_audio_operations.dart';
+import 'persistence/audio_queries.dart';
+import 'durable_capture.dart';
 import 'application_services/audio_operations.dart';
 import 'application_services/model_asset_acquisition.dart';
 import 'operations.dart';
@@ -14,6 +18,10 @@ import 'application_services/answer_coordinator.dart';
 import 'application_services/automatic_answer_coordinator.dart';
 import 'application_services/meeting_questions.dart';
 import 'application_services/recording_controller.dart';
+import 'application_services/recording_audio_work.dart';
+import 'persistence/recording_media.dart';
+import 'audio_models.dart';
+import 'audio_presentation.dart';
 import 'application_services/meeting_indexer.dart';
 import 'application_services/note_enhancement_coordinator.dart';
 import 'application_services/capture_activity.dart';
@@ -39,6 +47,8 @@ import 'dedicated_query_runtime.dart';
 import 'store.dart';
 import 'google_auth.dart';
 import 'google_connections.dart';
+
+final _audioCallerIdentityKey = Object();
 
 /// Application operations shared by the desktop and external clients.
 /// This object, its database, and its capture/model handles belong to one owner.
@@ -72,6 +82,22 @@ class Application implements ModelGate, GenerationReservationGate {
   set recordingBegan(DateTime? value) =>
       _recordingController.recordingBegan = value;
   String get recordingState => _recordingController.recordingState;
+
+  /// The service supplies independently verified media ownership after startup
+  /// recovery. Tests may supply the same real storage owner with controlled
+  /// native capture capabilities; production never falls back to memory ASR.
+  void configureDurableAudio(
+    RecordingMedia media,
+    RecordingAudioWorkPort work, {
+    DurableCapturePlatform? capturePlatform,
+  }) => _recordingController.configureDurableAudio(
+    media,
+    work,
+    capturePlatform: capturePlatform,
+  );
+
+  void audioTranscriptCommitted(AudioResultCommit result) =>
+      _recordingController.audioTranscriptCommitted(result);
   @visibleForTesting
   set recordingState(String value) =>
       _recordingController.recordingState = value;
@@ -79,7 +105,8 @@ class Application implements ModelGate, GenerationReservationGate {
       _recordingController.provisionalTranscript;
   bool _closed = false;
   Future<void>? _closing;
-  bool get _clearingWorkspace => _workspace.clearing;
+  bool get _clearingWorkspace =>
+      _workspace.clearing || _workspaceOperations.clearing;
   late final GenerationCoordinator _generation = GenerationCoordinator(
     restoring: () => domain.restoring,
     generating: () => domain.generationBusy,
@@ -120,6 +147,38 @@ class Application implements ModelGate, GenerationReservationGate {
   final GoogleAuth? _auth;
   final AnswerGateway? _providedAnswers;
   final AudioOperations _audioOperations;
+  final AudioApplicationPort? _recordingAudioPort;
+  final AudioApplicationLifecycle? _audioLifecycle;
+  void audioCallerDisconnected(Object caller) =>
+      _audioLifecycle?.invalidateCaller(caller);
+  AudioCaptureActivity get audioCaptureActivity {
+    final owner = recording;
+    return AudioCaptureActivity(
+      activeSessionId: owner?.audioSessionId,
+      acquiredThroughUs: owner?.acquiredThroughUs,
+      state: owner == null || owner.lastError.isNotEmpty
+          ? MeetingAudioPhysicalState.idle
+          : owner.finishing
+          ? MeetingAudioPhysicalState.stopping
+          : owner.pausing
+          ? MeetingAudioPhysicalState.pausing
+          : owner.paused
+          ? MeetingAudioPhysicalState.paused
+          : owner.starting
+          ? MeetingAudioPhysicalState.starting
+          : owner.captureActive
+          ? MeetingAudioPhysicalState.recording
+          : MeetingAudioPhysicalState.idle,
+    );
+  }
+
+  late final RecordingAudioOperations _recordingAudioOperations =
+      RecordingAudioOperations(
+        port: _recordingAudioPort,
+        metadata: AudioQueries(store.audioStore),
+        callerIdentity: () => Zone.current[_audioCallerIdentityKey] ?? this,
+        workspaceEpoch: () => store.workspaceEpoch,
+      );
   late final ModelRegistry _models;
 
   Application(
@@ -128,7 +187,15 @@ class Application implements ModelGate, GenerationReservationGate {
     QueryCompletionRuntime? queryRuntime,
     AnswerGateway? answers,
     AudioOperations? audioOperations,
-  }) : _auth = auth,
+    AudioApplicationPort? recordingAudio,
+    AudioApplicationLifecycle? audioLifecycle,
+  }) : _recordingAudioPort = recordingAudio,
+       _audioLifecycle =
+           audioLifecycle ??
+           (recordingAudio is AudioApplicationLifecycle
+               ? recordingAudio as AudioApplicationLifecycle
+               : null),
+       _auth = auth,
        _providedAnswers = answers,
        _audioOperations =
            audioOperations ??
@@ -303,10 +370,12 @@ class Application implements ModelGate, GenerationReservationGate {
     workflow: _workflow,
     workspace: _workspace,
     accounts: _googleMaintenance,
+    clearAudio: _audioLifecycle?.clearWorkspace,
   );
   late final OperationRegistry _registry =
       OperationRegistry(OperationScope.application, [
         ..._runtime.handlers,
+        ..._recordingAudioOperations.handlers,
         ..._workspaceOperations.handlers,
         ..._meetingOperations.handlers,
         ..._sources.handlers,
@@ -333,6 +402,7 @@ class Application implements ModelGate, GenerationReservationGate {
   int get proactiveWork => _automaticAnswers.activeWork;
   int get transcriptComputing => _notes.computing;
   bool get backgroundBusy =>
+      (_audioLifecycle?.busy ?? false) ||
       _meetingIndexer.busy ||
       _generation.configuring ||
       domain.resumeInProgress ||
@@ -380,6 +450,12 @@ class Application implements ModelGate, GenerationReservationGate {
   void checkRequestWorkspaceEpoch(OperationRequest request) {
     try {
       final epoch = request.context.workspaceEpoch;
+      if (request is RecordingAudioRequest && epoch == null) {
+        throw RpcError(
+          RpcErrorCode.invalidArgument,
+          'Audio operations require a workspace epoch.',
+        );
+      }
       if (epoch == null || epoch == store.workspaceEpoch) return;
       throw RpcError(
         RpcErrorCode.notFound,
@@ -394,6 +470,7 @@ class Application implements ModelGate, GenerationReservationGate {
 
   Future<Object?> callRequest(
     OperationRequest request, {
+    Object? callerIdentity,
     bool Function()? current,
   }) async {
     try {
@@ -418,11 +495,27 @@ class Application implements ModelGate, GenerationReservationGate {
         }
       }
       final reservation = configuring ? _generation.configure() : null;
+      var audioSuspended = false;
       try {
-        return await _registry.dispatch(request, current: active);
+        if (configuring && _audioLifecycle != null) {
+          await _audioLifecycle.suspendForModelChange();
+          audioSuspended = true;
+          _checkOpen();
+          if (!active()) {
+            throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+          }
+        }
+        return await runZoned(
+          () => _registry.dispatch(request, current: active),
+          zoneValues: {_audioCallerIdentityKey: callerIdentity ?? this},
+        );
       } finally {
-        reservation?.settle();
-        if (request.operation.notifiesChanges) changed();
+        try {
+          if (audioSuspended) await _audioLifecycle!.resumeAfterModelChange();
+        } finally {
+          reservation?.settle();
+          if (request.operation.notifiesChanges) changed();
+        }
       }
     } on IncompatibleReadSchema catch (error) {
       throw error.rpcError;
@@ -594,6 +687,7 @@ class Application implements ModelGate, GenerationReservationGate {
     await join(_models.close);
     await join(_googleMaintenance.close);
     await join(() => recordingClose);
+    if (_audioLifecycle != null) await join(_audioLifecycle.close);
     await join(_meetingIndexer.close);
     await join(captureLevelChanges.close);
     await join(changes.close);

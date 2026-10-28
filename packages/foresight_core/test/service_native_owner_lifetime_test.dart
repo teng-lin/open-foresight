@@ -32,7 +32,14 @@ Future<bool> controlAlive(int child, String path) async {
 void main() {
   bootstrapSqlSupportFixture();
   final library = Platform.environment['FORESIGHT_NATIVE_LIBRARY'];
-  for (final mode in ['work_loss', 'ack_loss', 'clean', 'sql_loss']) {
+  for (final mode in [
+    'work_loss',
+    'ack_loss',
+    'clean',
+    'sql_loss',
+    'idle_media_loss',
+    'idle_media_clean',
+  ]) {
     test(
       'native frontend ownership $mode keeps replacement admission safe',
       () async {
@@ -105,7 +112,10 @@ for line in sys.stdin:
         final stdout = await output, stderr = await errors;
         expect(code, 0, reason: '$stdout\n$stderr');
         final report = jsonDecode(stdout.trim().split('\n').last) as Map;
-        final nativeLoss = mode == 'work_loss' || mode == 'ack_loss';
+        final nativeLoss =
+            mode == 'work_loss' ||
+            mode == 'ack_loss' ||
+            mode == 'idle_media_loss';
         expect(report['mode'], mode);
         expect(report['restart_required'], nativeLoss);
         expect(report['replacement_allowed'], !nativeLoss);
@@ -113,6 +123,22 @@ for line in sys.stdin:
           report['native_workers_before_replacement'],
           mode == 'work_loss' || mode == 'clean' ? 1 : 0,
         );
+        if (mode == 'idle_media_loss' || mode == 'idle_media_clean') {
+          if (mode == 'idle_media_loss') {
+            expect(report['media_lease_held'], true);
+          }
+          // The fixture VM has exited. A distinct OS process must now acquire
+          // the actual kernel lease, even after an unconfirmed graph loss.
+          final lease = await Process.run(
+            Platform.environment['FORESIGHT_PYTHON'] ?? 'python3',
+            [
+              '-c',
+              'import fcntl,os,sys; fd=os.open(sys.argv[1],os.O_RDWR|os.O_NOFOLLOW); fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB); os.close(fd)',
+              '${root.path}/data/recording-control/media-owner.lock',
+            ],
+          ).timeout(const Duration(seconds: 3));
+          expect(lease.exitCode, 0, reason: '${lease.stdout}\n${lease.stderr}');
+        }
         final starts = File('${worker.path}.starts');
         final children = starts.existsSync()
             ? starts.readAsLinesSync().map(int.parse).toList()

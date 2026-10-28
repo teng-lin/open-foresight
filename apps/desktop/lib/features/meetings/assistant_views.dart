@@ -85,6 +85,7 @@ extension _AssistantViews on MeetingsController {
                 () => _integrationCommands.importMeetingAttachments(id),
               ),
         onCopy: (text) => Clipboard.setData(ClipboardData(text: text)),
+        onListen: _audioTranscriptListener(id),
         onQuestion: (text) {
           _chatCommands.setQuestion(id, text);
           update(() => meetingPanel = 'Chat');

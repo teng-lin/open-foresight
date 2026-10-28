@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from tools import ci_release_candidates as candidates
+from tools.ci_producer_trust import evidence_job_name
 from tools.release_acceptance_report import require_coordinator
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -159,7 +160,14 @@ def test_release_producer_outputs_names_and_full_gates_match_the_verified_index(
     for gate in candidates.GATES:
         if gate.startswith("packaging / "):
             package = workflow("package-contracts.yml")["jobs"]
-            assert package["linux"]["name"] == "linux-${{ matrix.format }}"
+            assert package["linux"]["name"] == "${{ matrix.format }} contracts"
+            package_format = gate.rsplit("-", 1)[1]
+            actual = (
+                jobs["packaging"]["name"]
+                + " / "
+                + package["linux"]["name"].replace("${{ matrix.format }}", package_format)
+            )
+            assert evidence_job_name({"name": actual}) == gate
             assert gate.rsplit("-", 1)[1] in {
                 item["format"]
                 for item in package["linux"]["strategy"]["matrix"]["include"]

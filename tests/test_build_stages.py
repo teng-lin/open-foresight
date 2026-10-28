@@ -10,6 +10,19 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def install_media_prerequisite_fixture(root):
+    # Only shell sequencing is controlled here. The media prerequisite suite
+    # separately exercises its real receipt, signing and inherited selection.
+    (root / "tools/run_media_test_gate.py").write_text(
+        "import json,os,pathlib,sys\n"
+        "pathlib.Path(__file__).with_suffix('.arguments.json').write_text(json.dumps(sys.argv[1:]))\n"
+        "sys.exit(int(os.getenv('FAIL_MEDIA', '0'))) if os.getenv('FAIL_MEDIA', '0') != '0' else None\n"
+        "keys=('WORKER','BUILD_ID','SHA256','CDHASH')\n"
+        "path=pathlib.Path(sys.argv[sys.argv.index('--environment-output')+1])\n"
+        "path.write_bytes(b''.join(('FORESIGHT_TEST_MEDIA_'+key).encode()+b'\\0'+b'controlled-'+key.encode()+b'\\0' for key in keys))\n"
+    )
+
+
 @pytest.fixture
 def build_tree(tmp_path):
     root = tmp_path / "repo"
@@ -210,6 +223,7 @@ def dart_gate_tree(tmp_path):
     root = tmp_path / "repo"
     tools = root / "tools"
     tools.mkdir(parents=True)
+    install_media_prerequisite_fixture(root)
     for name in ("build_dart_gates.sh", "ci_timing.sh"):
         shutil.copy2(ROOT / "tools" / name, tools / name)
     (tools / "verify_toolchain_pins.py").write_text("raise SystemExit(0)\n")
@@ -239,6 +253,8 @@ foresight_diagnostic_worker() {
 args=sys.argv[1:]
 with open(os.environ['COMMAND_LOG'],'a') as f:f.write(json.dumps([pathlib.Path(sys.argv[0]).name,*args])+'\\n')
 kind=args[0] if args else ''
+if kind=='test':
+ with open(os.environ['COMMAND_LOG']+'.media','w') as f:f.write(json.dumps({key:os.environ.get('FORESIGHT_TEST_MEDIA_'+key) for key in ['WORKER','BUILD_ID','SHA256','CDHASH']}))
 if kind=='compile':
  name=pathlib.Path(args[args.index('-o')+1]).name
  code=int(os.environ.get('FAIL_'+name.replace('foresight-','').upper(),'0'))
@@ -283,6 +299,126 @@ def invoke_dart_gate(tree, gate, **failures):
         capture_output=True,
         timeout=10,
     )
+
+
+def test_gate_fails_when_live_log_writer_fails(dart_gate_tree):
+    _, environment = dart_gate_tree
+    tee = Path(environment["PATH"].split(":")[0]) / "tee"
+    tee.write_text("#!/bin/bash\ncat >/dev/null\nexit 9\n")
+    tee.chmod(0o700)
+    result = invoke_dart_gate(dart_gate_tree, "core")
+    assert result.returncode == 9, result.stdout + result.stderr
+    assert "Log streaming failed for core dependency resolution (exit 9)" in result.stderr
+
+
+def test_inner_gate_streams_output_before_command_exit(dart_gate_tree, tmp_path):
+    import sys
+    import time
+
+    root, environment = dart_gate_tree
+    dart = Path(environment["PATH"].split(":")[0]) / "dart"
+    release = tmp_path / "release"
+    dart.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib,sys,time\n"
+        "if sys.argv[1]=='analyze':\n"
+        " print('analysis still running',flush=True)\n"
+        " deadline=time.monotonic()+5\n"
+        f" while not pathlib.Path({str(release)!r}).exists():\n"
+        "  if time.monotonic()>deadline: raise RuntimeError('release missing')\n"
+        "  time.sleep(.01)\n"
+    )
+    output = tmp_path / "live.log"
+    with output.open("wb") as stream:
+        owner = subprocess.Popen(
+            ["/bin/bash", str(root / "tools/build_dart_gates.sh"), "core",
+             "linux", str(root / "build"), sys.executable],
+            env={**environment, "FORESIGHT_BUILD_MODE": "test-only"},
+            stdout=stream, stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 4
+            while b"analysis still running\n" not in output.read_bytes():
+                assert owner.poll() is None, output.read_text()
+                assert time.monotonic() < deadline, output.read_text()
+                time.sleep(.01)
+            assert owner.poll() is None
+            assert not release.exists()
+            release.touch()
+            assert owner.wait(timeout=5) == 0, output.read_text()
+        finally:
+            release.touch()
+            if owner.poll() is None:
+                owner.kill()
+                owner.wait(timeout=5)
+    assert output.read_text().count("analysis still running") == 1
+    logs = list((root / "test-results/linux/core").glob("checks.*/*.log"))
+    assert sum("analysis still running" in p.read_text() for p in logs) == 1
+
+
+def test_normal_core_tests_receive_verified_media_identity(dart_gate_tree):
+    import json
+
+    _, environment = dart_gate_tree
+    result = invoke_dart_gate(dart_gate_tree, "core")
+    assert result.returncode == 0, result.stdout + result.stderr
+    selected = json.loads(Path(environment["COMMAND_LOG"] + ".media").read_text())
+    assert selected == {
+        key: "controlled-" + key for key in ("WORKER", "BUILD_ID", "SHA256", "CDHASH")
+    }
+
+
+@pytest.mark.parametrize(
+    ("product", "inherited", "reuse_build"),
+    [
+        ("directory", {}, True),
+        ("dangling-link", {}, True),
+        ("absent", {}, False),
+        ("directory", {"FORESIGHT_TEST_MEDIA_WORKER": "/selected/worker"}, False),
+        ("directory", {"FORESIGHT_TEST_MEDIA_CDHASH": ""}, False),
+    ],
+)
+def test_core_selects_restored_build_only_without_inherited_identity(
+    dart_gate_tree, product, inherited, reuse_build
+):
+    import json
+
+    root, environment = dart_gate_tree
+    for key in ("WORKER", "BUILD_ID", "SHA256", "CDHASH"):
+        environment.pop("FORESIGHT_TEST_MEDIA_" + key, None)
+    existing = root / "build/media-worker"
+    if product == "directory":
+        existing.mkdir()
+    elif product == "dangling-link":
+        existing.symlink_to(root / "missing-product")
+    result = invoke_dart_gate(dart_gate_tree, "core", **inherited)
+    assert result.returncode == 0, result.stdout + result.stderr
+    arguments = json.loads(
+        (root / "tools/run_media_test_gate.arguments.json").read_text()
+    )
+    assert "--reuse-selected" in arguments
+    assert ("--existing-product" in arguments) is reuse_build
+    if reuse_build:
+        assert arguments[arguments.index("--existing-product") + 1] == str(existing)
+
+
+def test_media_prerequisite_failure_blocks_tests_but_not_failure_evidence(
+    dart_gate_tree,
+):
+    _, environment = dart_gate_tree
+    result = invoke_dart_gate(dart_gate_tree, "core", FAIL_MEDIA=19)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "media worker prerequisite (exit 19;" in result.stdout
+    assert "Blocked core suite: media worker prerequisite failed" in result.stderr
+    assert not Path(environment["COMMAND_LOG"] + ".media").exists()
+
+
+def test_build_only_does_not_provision_test_codec(dart_gate_tree):
+    result = invoke_dart_gate(
+        dart_gate_tree, "core", FORESIGHT_BUILD_MODE="build-only", FAIL_MEDIA=19
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "media worker prerequisite" not in result.stdout
 
 
 def test_fixture_modes_are_explicit_but_coverage_override_still_runs(dart_gate_tree):
@@ -352,6 +488,30 @@ def test_desktop_failures_do_not_hide_coverage_or_release_compile(dart_gate_tree
     ]:
         assert f"{label} (exit " in result.stdout
     assert "coverage evaluated" in result.stdout
+
+
+@pytest.mark.parametrize("mode", ["all", "build-only", "test-only"])
+def test_desktop_test_only_reuses_dependencies_without_implicit_pub_resolution(
+    dart_gate_tree, mode
+):
+    import json
+
+    result = invoke_dart_gate(dart_gate_tree, "desktop", FORESIGHT_BUILD_MODE=mode)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = [
+        json.loads(line)
+        for line in Path(dart_gate_tree[1]["COMMAND_LOG"]).read_text().splitlines()
+    ]
+    flutter = [call[1:] for call in calls if call[0] == "flutter"]
+    resolutions = [call for call in flutter if call[0] == "pub"]
+    assert resolutions == (
+        [] if mode == "test-only" else [["pub", "get", "--enforce-lockfile"]]
+    )
+    checks = [call for call in flutter if call[0] in ("analyze", "test")]
+    assert len(checks) == (0 if mode == "build-only" else 2)
+    for call in checks:
+        assert ("--no-pub" in call) == (mode == "test-only")
+    assert any(call[0] == "build" for call in flutter) == (mode != "test-only")
 
 
 @pytest.mark.parametrize("failure", ["FAIL_RECEIPT", "FAIL_DEPENDENCIES"])

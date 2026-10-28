@@ -14,7 +14,7 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 RUN for task_attempt in 1 2 3; do \
       if apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any --snapshot "$UBUNTU_SNAPSHOT" update && \
          apt-get -o Acquire::Retries=3 --snapshot "$UBUNTU_SNAPSHOT" install -y --no-install-recommends \
-           nlohmann-json3-dev libicu-dev xvfb xauth dbus-x11 libgl1-mesa-dri \
+           nlohmann-json3-dev libicu-dev libpipewire-0.3-dev xvfb xauth dbus-x11 libgl1-mesa-dri \
            mesa-vulkan-drivers poppler-utils unrtf bubblewrap gh; then \
         rm -rf /var/lib/apt/lists/*; break; \
       fi; \

@@ -1,4 +1,4 @@
-name: Apple DMG contracts
+name: macOS packaging contracts
 on:
   workflow_call:
     inputs:
@@ -9,6 +9,7 @@ permissions:
   contents: read
 jobs:
   dmg:
+    name: dmg contracts
     runs-on: macos-15
     timeout-minutes: 10
     steps:

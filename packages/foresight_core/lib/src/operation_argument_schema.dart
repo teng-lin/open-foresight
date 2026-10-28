@@ -2,6 +2,7 @@ import 'operation_requests/graph_inputs.dart';
 import 'rpc_error.dart';
 
 enum ArgumentKind {
+  boolean,
   string,
   integer,
   trueSwitch,
@@ -58,6 +59,9 @@ class ArgumentField {
     }
     final Object decoded;
     switch (kind) {
+      case ArgumentKind.boolean:
+        if (value is! bool) invalidArgument(name, 'must be a boolean');
+        decoded = value;
       case ArgumentKind.string:
         if (value is! String) invalidArgument(name, 'must be a string');
         if (minimumLength != null && value.length < minimumLength!) {
@@ -115,7 +119,9 @@ class ArgumentField {
   Map<String, dynamic> get schemaJson => {
     'type': switch (kind) {
       ArgumentKind.integer => 'integer',
-      ArgumentKind.trueSwitch || ArgumentKind.falseSwitch => 'boolean',
+      ArgumentKind.boolean ||
+      ArgumentKind.trueSwitch ||
+      ArgumentKind.falseSwitch => 'boolean',
       ArgumentKind.strings ||
       ArgumentKind.graphSources ||
       ArgumentKind.clusters => 'array',

@@ -20,6 +20,10 @@ import re
 import statistics
 import tokenize
 
+evidence_job_name = importlib.import_module(
+    "tools.ci_producer_trust" if __package__ else "ci_producer_trust"
+).evidence_job_name
+
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = {"python", "format", "contracts", "platform-checks", "acceptance-checks"}
 FAILURES = {"failure", "timed_out", "startup_failure", "action_required", "stale"}
@@ -96,7 +100,7 @@ def run_category(run):
         if Path(path).name == "linux-cache-publish.yml":
             publishers = []
             for job in run.get("jobs", []):
-                name = job.get("name", "").split(" / ")[-1].split(" (")[0]
+                name = evidence_job_name(job).split(" / ")[-1].split(" (")[0]
                 if not name.startswith("publish-") or job.get("conclusion") == "skipped":
                     continue
                 if name == "publish-linux-caches" and job.get("conclusion") == "success":

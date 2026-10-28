@@ -122,6 +122,14 @@ void main() {
         'FORESIGHT_RUNTIME': '${scratch.path}/a',
       });
       final kernel = File('${scratch.path}/service.dill');
+      // This fixture declares an installed runtime, so its audio image is
+      // required too. Test selection is not the service's runtime env key.
+      final nativeLibrary =
+          Platform.environment['FORESIGHT_NATIVE_LIBRARY'] ??
+          Platform.environment['FORESIGHT_NATIVE'] ??
+          File(
+            '${Platform.environment['FORESIGHT_BUILD_DIR'] ?? '../../build'}/native/libforesight_native.${Platform.isMacOS ? 'dylib' : 'so'}',
+          ).resolveSymbolicLinksSync();
       final compilation = await Process.run(Platform.resolvedExecutable, [
         'compile',
         'kernel',
@@ -157,7 +165,9 @@ void main() {
             'FORESIGHT_HELPER': '',
             'FORESIGHT_INSTALL_ROOT': installation.path,
             'FORESIGHT_RUNTIME_REVISION': 'integration-revision',
-            if (invalidNative) 'FORESIGHT_NATIVE': '/missing-native-library',
+            'FORESIGHT_NATIVE': invalidNative
+                ? '/missing-native-library'
+                : nativeLibrary,
           },
         );
         process.stdout.transform(utf8.decoder).listen(diagnostics.write);

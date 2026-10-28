@@ -8,6 +8,7 @@ import sys
 from unittest.mock import Mock
 
 import pytest
+from tests.media_package_fixture import media_product_patches
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import package_macos as package
@@ -104,6 +105,8 @@ def packaging(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(package, "prepare_worker", lambda root, actual_build: worker)
+    for owner, name, value in media_product_patches(package, "darwin-arm64"):
+        monkeypatch.setattr(owner, name, value)
     monkeypatch.setattr(package.sys, "platform", "darwin")
     monkeypatch.setattr(
         package,
@@ -165,7 +168,23 @@ def packaging(tmp_path, monkeypatch):
         diagnostic.write_bytes(diagnostic.read_bytes() + b"synthetic signing change")
         companion = app / "Contents/Resources/bin/foresight-diagnostic-worker"
         companion.write_bytes(companion.read_bytes() + b"synthetic signed AOT")
+        media_worker = app / "Contents/Resources/bin/foresight-media-worker"
+        raw_media = media_worker.read_bytes()
+        media_worker.write_bytes(raw_media + b"synthetic leaf signature")
         before_seal()
+        media_receipt = json.loads(
+            (app / "Contents/Resources/media-worker.json").read_text()
+        )
+        assert (
+            media_receipt["sha256"]
+            == hashlib.sha256(media_worker.read_bytes()).hexdigest()
+        )
+        assert media_receipt["sha256"] != hashlib.sha256(raw_media).hexdigest()
+        assert media_receipt["macos_cdhash"] == "c" * 40
+        assert media_receipt["capabilities"]["assembly_protocol"] == 0
+        assert (
+            app / "Contents/Resources/licenses/media/relink-materials.tar.gz"
+        ).is_file()
         worker_final = json.loads(
             (
                 app
@@ -207,6 +226,8 @@ def packaging(tmp_path, monkeypatch):
     args = [
         "--build",
         str(build),
+        "--media-worker-build",
+        str(build / "media-worker"),
         "--flutter-app",
         str(flutter),
         "--output",

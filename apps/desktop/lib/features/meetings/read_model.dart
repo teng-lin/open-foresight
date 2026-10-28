@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'audio_read_model.dart';
 
 import 'package:foresight_core/desktop.dart';
 
@@ -13,6 +14,10 @@ class MeetingReadModel {
     this.currentPreference,
   });
   final DesktopConnection Function() connection;
+  late final MeetingAudioReadModel audio = MeetingAudioReadModel(
+    connection: connection,
+    changed: _notify,
+  );
   final void Function() changed;
   final void Function(String key, String value)? currentPreference;
   static const defaults = {
@@ -80,7 +85,11 @@ class MeetingReadModel {
     _preview = preview;
     _bind();
     _changes = connection().changes.listen((_) {
-      if (!(_identity?.isCurrent(connection(), alive: true) ?? false)) _bind();
+      if (!(_identity?.isCurrent(connection(), alive: true) ?? false)) {
+        _bind();
+      } else {
+        unawaited(audio.refresh());
+      }
     });
   }
 
@@ -101,6 +110,7 @@ class MeetingReadModel {
   void _bind() {
     _generation++;
     _identity = null;
+    audio.bind(null);
     for (final slot in _slots.values) {
       unawaited(slot.subscription?.cancel());
     }
@@ -133,6 +143,7 @@ class MeetingReadModel {
         StoreReadQueries.preference(entry.key, entry.value),
     ];
     final id = _selected ?? _preview;
+    audio.select(id);
     if (id != null) {
       queries.addAll([
         StoreReadQueries.meeting(id),
@@ -255,6 +266,7 @@ class MeetingReadModel {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    audio.dispose();
     _generation++;
     final closing = <Future<void>>[
       if (_changes != null) _changes!.cancel(),

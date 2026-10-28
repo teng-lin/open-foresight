@@ -37,5 +37,8 @@ trap task_finish EXIT
   exit 2
 }
 chown "$OUT_UID:$OUT_GID" /src
-"$task_python" tools/run_ci_user.py --workspace /src --flutter-root /opt/flutter -- \
+# The SDK's tool graph still names the producer's private root pub cache.
+# Relocate only its verified public packages before dropping container root.
+"$task_python" tools/prepare_flutter_consumer.py --workspace /src --flutter-root /opt/flutter -- \
+  "$task_python" tools/run_ci_user.py --workspace /src --flutter-root /opt/flutter -- \
   bash tools/linux_container_runtime.sh

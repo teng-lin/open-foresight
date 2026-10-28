@@ -112,6 +112,42 @@ SYMBOL(fs_owned_capture_set_echo_cancellation)
   );
   const handle = 1;
   test(
+    'typed retirement releases the owner only after acknowledgement',
+    () async {
+      final lifetime = NativeLibrary(fixture).lifetime;
+      final retirement = lifetime.observeRetirement(42, handle);
+      await Future<void>.delayed(Duration.zero);
+      expect(ownersReleased(), 0);
+      expect(released(), 0);
+      status(1);
+      await retirement;
+      expect(ownersReleased(), 1);
+      expect(released(), 0);
+      expect(lifetime.restartRequired, isFalse);
+    },
+  );
+  test('typed failed retirement retains its owner and quarantines', () async {
+    final lifetime = NativeLibrary(fixture).lifetime;
+    status(2);
+    await expectLater(lifetime.observeRetirement(42, handle), throwsStateError);
+    expect(ownersReleased(), 0);
+    expect(released(), 0);
+    expect(lifetime.restartRequired, isTrue);
+  });
+  test('typed additive operation shares completion token ownership', () async {
+    final lifetime = NativeLibrary(fixture).lifetime;
+    final first = lifetime.observeOperation(42);
+    expect(lifetime.observeOperation(42), same(first));
+    expect(released(), 0);
+    status(2); // An acknowledged task failure still releases its token.
+    expect(await first, 2);
+    expect(released(), 1);
+    expect(ownersReleased(), 0);
+    expect(lifetime.restartRequired, isFalse);
+    await expectLater(lifetime.observeOperation(0), throwsStateError);
+    expect(released(), 1);
+  });
+  test(
     'coalesced native token remains pending and releases once after completion',
     () async {
       final lifetime = NativeLibrary(fixture).lifetime;

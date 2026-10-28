@@ -11,6 +11,10 @@ import sqlite3
 import struct
 import tempfile
 
+# Keep the standalone, Git-free migration entrypoint self-contained. A source
+# guard checks this limit against Dart's application schema authority.
+APPLICATION_SCHEMA_MAXIMUM = 24
+
 
 def identity(path):
     try:
@@ -214,7 +218,9 @@ def qualify_profile(source):
     """Return an identity gate; no live writable connection or new files."""
     source = Path(source)
     originals = profile_identities(source)
-    qualify_member(source / "application.db", 17, source, originals)
+    qualify_member(
+        source / "application.db", APPLICATION_SCHEMA_MAXIMUM, source, originals
+    )
     for member in ("agent_metadata.db", "linux_state.db", "rag_vector.db"):
         qualify_member(source / "helper" / member, 1, source, originals)
     verify_profile_unchanged(source, originals)

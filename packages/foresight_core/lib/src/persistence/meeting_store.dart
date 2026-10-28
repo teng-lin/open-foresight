@@ -80,10 +80,10 @@ class MeetingStore {
   /// recovery is scheduled; no helper work or await belongs to this operation.
   List<int> interruptActiveCaptures() {
     final interrupted = _rows(
-      "SELECT id FROM meetings WHERE state IN ('recording','transcribing','paused')",
+      "SELECT id FROM meetings WHERE state IN ('starting','recording','transcribing','paused')",
     ).map((row) => row['id'] as int).toList();
     db.execute(
-      "UPDATE meetings SET state='interrupted' WHERE state IN ('recording','transcribing','paused')",
+      "UPDATE meetings SET state='interrupted' WHERE state IN ('starting','recording','transcribing','paused')",
     );
     return interrupted;
   }

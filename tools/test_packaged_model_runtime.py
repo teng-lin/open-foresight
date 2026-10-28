@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import queue
 import subprocess
@@ -72,22 +73,40 @@ class Peer:
         self.timeout = timeout
         self.lines: queue.Queue[Any] = queue.Queue()
         self.log = log.open("wb")
-        self.process = subprocess.Popen(
-            command,
-            env=environment,
-            cwd=cwd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=self.log,
-            text=True,
-            bufsize=1,
-        )
+        try:
+            self.stdout_log = log.with_suffix(".stdout").open("wb")
+            try:
+                self.process = subprocess.Popen(
+                    command,
+                    env=environment,
+                    cwd=cwd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=self.log,
+                )
+            except BaseException:
+                self.stdout_log.close()
+                raise
+        except BaseException:
+            self.log.close()
+            raise
 
         def read():
             try:
-                for line in cast(IO[str], self.process.stdout):
-                    self.lines.put(line.rstrip("\n"))
+                for line in cast(IO[bytes], self.process.stdout):
+                    self.stdout_log.write(line)
+                    self.stdout_log.flush()
+                    try:
+                        self.lines.put(
+                            line.decode("utf-8").removesuffix("\n").removesuffix("\r")
+                        )
+                    except UnicodeDecodeError as error:
+                        self.lines.put(error)
+            except Exception as error:
+                self.lines.put(error)
             finally:
+                cast(IO[bytes], self.process.stdout).close()
+                self.stdout_log.close()
                 self.lines.put(None)
 
         self.reader = threading.Thread(target=read, daemon=True)
@@ -102,18 +121,20 @@ class Peer:
             ) from None
         if value is None:
             raise EOFError(f"Worker closed stdout (exit={self.process.poll()})")
+        if isinstance(value, Exception):
+            raise value
         return value
 
     def send(self, value):
-        cast(IO[str], self.process.stdin).write(value + "\n")
-        cast(IO[str], self.process.stdin).flush()
+        cast(IO[bytes], self.process.stdin).write((value + "\n").encode("utf-8"))
+        cast(IO[bytes], self.process.stdin).flush()
 
     def close(self, shutdown=None):
         try:
             if self.process.poll() is None:
                 if shutdown:
                     self.send(shutdown)
-                cast(IO[str], self.process.stdin).close()
+                cast(IO[bytes], self.process.stdin).close()
                 try:
                     self.process.wait(timeout=30)
                 except subprocess.TimeoutExpired:
@@ -126,11 +147,12 @@ class Peer:
             if self.process.poll() is None:
                 self.process.kill()
                 self.process.wait(timeout=30)
-            if not cast(IO[str], self.process.stdin).closed:
-                cast(IO[str], self.process.stdin).close()
+            if not cast(IO[bytes], self.process.stdin).closed:
+                cast(IO[bytes], self.process.stdin).close()
             self.reader.join(timeout=2)
-            cast(IO[str], self.process.stdout).close()
             self.log.close()
+            if self.reader.is_alive():
+                raise RuntimeError("Worker stdout reader did not finish")
             trailing = []
             while not self.lines.empty():
                 value = self.lines.get_nowait()
@@ -159,19 +181,22 @@ def finish_peer(peer, output, name, primary_error, shutdown=None):
 
 def generation_probe(runner, model, backend, environment, cwd, output, timeout):
     base = [str(runner), "--model", str(model), "--backend", backend]
-    with (output / f"{backend}-capabilities.stderr").open("wb") as log:
+    captured = output / f"{backend}-capabilities.stdout"
+    with (
+        (output / f"{backend}-capabilities.stderr").open("wb") as log,
+        captured.open("wb") as stdout,
+    ):
         result = subprocess.run(
             [*base, "--probe"],
             cwd=cwd,
             env=environment,
-            stdout=subprocess.PIPE,
+            stdout=stdout,
             stderr=log,
-            text=True,
             timeout=timeout,
         )
     if result.returncode:
         raise RuntimeError("Packaged production model capability probe failed")
-    capabilities = json.loads(result.stdout)
+    capabilities = json.loads(captured.read_text())
     if capabilities.get("native_stop_token_sequences") is not True:
         raise RuntimeError(
             "Packaged runtime lacks the native stop sequences required by note enhancement"
@@ -325,9 +350,12 @@ def main():
             raise RuntimeError("Production models differ from the pinned setup catalog")
         report["stage"] = "package_path_resolution"
         runner, worker, config = packaged_paths(args.bundle)
-        with tempfile.TemporaryDirectory(
-            prefix="of-production-", dir="/tmp"
-        ) as temporary:
+        parent = Path(
+            os.environ.get("FORESIGHT_TEST_TEMP_ROOT")
+            or os.environ.get("TMPDIR")
+            or "/var/tmp"
+        ).resolve(strict=True)
+        with tempfile.TemporaryDirectory(prefix="of-model-", dir=parent) as temporary:
             root = Path(temporary)
             home, poisoned = root / "home", root / "untrusted working directory"
             home.mkdir()
@@ -340,6 +368,7 @@ def main():
                 "PATH": "/usr/bin:/bin",
                 "HOME": str(home),
                 "TMPDIR": str(root),
+                "FORESIGHT_TEST_TEMP_ROOT": str(root),
                 "PYTHONPATH": str(poisoned),
                 "FORESIGHT_LITERT_CACHE": str(root / "cache"),
                 **config,

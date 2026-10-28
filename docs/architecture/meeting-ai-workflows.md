@@ -1,6 +1,6 @@
 # Meeting AI workflows
 
-This change implements five work packages on top of the separate meeting Summary change: structured Action Items, Enhanced Notes reliability, Live Q&A deployment/scheduling, attachment preparation, and Chat/knowledge integration. The [reference investigation](../research/foresight-ai-workflows.md) and [parity plan](../plans/2026-10-20-foresight-ai-parity-plan.md) distinguish recovered behavior from product choices. Summary remains a separate pipeline and artifact.
+Meeting generation provides structured Action Items, Enhanced Notes, Live Q&A, attachment preparation and scoped Chat. [Meeting Summary](meeting-summary.md) has its own pipeline and artifact.
 
 ## Action Items
 
@@ -65,4 +65,4 @@ Accepted summary, enhanced-note, task and preparation artifacts have stable deri
 
 ## Validation boundaries
 
-The accompanying tests cover deterministic prompts/checksums, evidence and Unicode handling, migrations, rollback, cache invalidation, manual edit retention, stale/cancelled commits, source-scope privacy, foreground preemption, desktop controls, and compiled service/MCP ownership. The [validation record](../validation/2026-10-20-meeting-ai-workflows.md) records this worktree's runs and remaining platform gates. Controlled workers test protocol and persistence, not natural-language quality. Original Foresight feature execution, real detector/model quality, isolated desktop/service integration, and Linux runtime behavior must not be inferred from static recovery or mocked widget tests.
+The accompanying tests cover deterministic prompts/checksums, evidence and Unicode handling, migrations, rollback, cache invalidation, manual edit retention, stale/cancelled commits, source-scope privacy, foreground preemption, desktop controls, and compiled service/MCP ownership. The [validation record](../testing.md) records this worktree's runs and remaining platform gates. Controlled workers test protocol and persistence, not natural-language quality. Original Foresight feature execution, real detector/model quality, isolated desktop/service integration, and Linux runtime behavior must not be inferred from static recovery or mocked widget tests.

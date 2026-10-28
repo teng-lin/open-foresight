@@ -451,10 +451,13 @@ RuntimeConfiguration profileServiceConfiguration(
     : configuration;
 
 /// One non-waiting profile lock attempt, before worker resources are opened.
+/// Administration that uses no model runtime may leave [configureNativeRuntime]
+/// false and must check its own selected native admission before opening media.
 Future<RandomAccessFile> acquireServiceProfileLock(
   ProfilePaths profile, {
   required bool Function() launchWithdrawn,
   RuntimeConfiguration? configuration,
+  bool configureNativeRuntime = true,
 }) async {
   RandomAccessFile? lock;
   var locked = false;
@@ -463,7 +466,8 @@ Future<RandomAccessFile> acquireServiceProfileLock(
     // Configure native state only when a native installation is present. Tests
     // and administration may use the storage-only service without model workers.
     // Without a snapshot the legacy boundary receives the profile defaults.
-    if (runtimeSnapshot(configuration)['FORESIGHT_NATIVE'] != null) {
+    if (configureNativeRuntime &&
+        runtimeSnapshot(configuration)['FORESIGHT_NATIVE'] != null) {
       configureProfileRuntime(profile.data, configuration: configuration);
     }
     privateRuntime(profile);

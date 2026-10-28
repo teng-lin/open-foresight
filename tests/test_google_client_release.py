@@ -91,7 +91,13 @@ class GoogleClientReleaseTest(unittest.TestCase):
         root = Path(__file__).resolve().parents[1] / "tools"
         for script in ("package.py", "package_macos.py"):
             result = subprocess.run(
-                [sys.executable, str(root / script), "--require-google-client"]
+                [
+                    sys.executable,
+                    str(root / script),
+                    "--require-google-client",
+                    "--media-worker-build",
+                    "/nonexistent/media-worker",
+                ]
                 + (
                     ["--litert-extensions-manifest", "/nonexistent/fixture.json"]
                     if script == "package_macos.py"

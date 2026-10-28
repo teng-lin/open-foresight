@@ -18,7 +18,7 @@ from tools import ci_artifacts as artifacts  # noqa: E402
 from tools import integration_application as application  # noqa: E402
 from tools import ci_linux_acceptance as acceptance  # noqa: E402
 from tools.ci_nightly import pages, jobs  # noqa: E402
-from tools.ci_producer_trust import PRODUCERS  # noqa: E402
+from tools.ci_producer_trust import PRODUCERS, evidence_job_name  # noqa: E402
 
 
 # Each latest API job is checked independently; an old green aggregate cannot
@@ -62,7 +62,7 @@ def green_closure(rows, run, source):
         )
 
     for name in NIGHTLY_REQUIRED:
-        matching = [job for job in rows if job.get("name") == name]
+        matching = [job for job in rows if evidence_job_name(job) == name]
         if len(matching) != 1 or not complete(matching[0], ("success",)):
             return False
     return all(

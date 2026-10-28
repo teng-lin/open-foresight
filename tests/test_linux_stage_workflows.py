@@ -11,6 +11,7 @@ import pytest
 import yaml
 
 from tools.ci_stage_cache import STAGES, fingerprint
+from tools.ci_producer_trust import evidence_job_name
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,7 +33,11 @@ def test_linux_native_core_desktop_and_service_are_independent_jobs():
     assert "if" not in jobs["service-linux"], "A failed Native producer remains fatal"
     for stage in STAGES:
         job = jobs[stage + "-linux"]
-        assert job["name"] == stage + "-linux"
+        assert job["name"] == stage
+        caller = workflow("macos.yml")["jobs"]["linux-native"]["name"]
+        assert evidence_job_name({"name": caller + " / " + job["name"]}) == (
+            "linux-native / " + stage + "-linux"
+        )
         assert job["container"].startswith("archlinux:base-devel@sha256:")
         assert job["runs-on"] == "ubuntu-24.04"
         assert any(
@@ -738,9 +743,9 @@ def test_service_setup_contains_the_core_source_build_prerequisites():
     named = {step.get("name"): step for step in steps}
     packages = named["Install Linux application toolchain"]
     assert "if" not in packages
-    assert {"cmake", "ninja", "gcc", "python", "python-pip", "uv", "pkgconf"} <= set(
-        packages["run"].split()
-    )
+    assert {
+        "cmake", "ninja", "gcc", "python", "python-pip", "uv", "pkgconf", "pipewire"
+    } <= set(packages["run"].split())
     python = named["Install locked Python development dependencies"]
     assert "if" not in python
     assert "--require-hashes -r requirements-dev.lock" in python["run"]

@@ -46,14 +46,20 @@ task_run() {
   shift
   task_check_index=$((task_check_index + 1))
   local task_log="$task_checks/$task_check_index.log"
-  if ci_timed "$task_label" "$@" > "$task_log" 2>&1; then
-    task_code=0
+  local task_pipe_status=()
+  printf 'Starting %s; log %s\n' "$task_label" "$task_log"
+  if ci_timed "$task_label" "$@" 2>&1 | tee "$task_log"; then
+    task_pipe_status=("${PIPESTATUS[@]}")
   else
-    task_code=$?
-    task_failed=1
+    task_pipe_status=("${PIPESTATUS[@]}")
   fi
+  task_code=${task_pipe_status[0]}
+  if [[ "${task_pipe_status[1]}" != 0 ]]; then
+    printf 'Log streaming failed for %s (exit %s)\n' "$task_label" "${task_pipe_status[1]}" >&2
+    if [[ "$task_code" == 0 ]]; then task_code=${task_pipe_status[1]}; fi
+  fi
+  if [[ "$task_code" != 0 ]]; then task_failed=1; fi
   printf '::group::%s (exit %s; log %s)\n' "$task_label" "$task_code" "$task_log"
-  cat "$task_log"
   printf '::endgroup::\n'
   printf '%s\t%s\t%s\n' "$task_code" "$task_label" "$task_log" >> "$task_checks/summary.tsv"
   return "$task_code"
@@ -116,6 +122,40 @@ case "$task_gate" in
       fi
     fi
     if [[ "$task_mode" != build-only ]]; then
+      task_blocked_worker=diagnostic
+      if [[ "$task_worker_ready" == 1 ]]; then
+        task_blocked_worker=media
+        task_media_environment="$task_checks/media-environment"
+        task_media_args=(--fetch --reuse-selected)
+        # The restored producer already owns a complete pinned worker build.
+        # Verify that exact product offline; never rebuild after a refusal.
+        # Any inherited selection (including a partial one) keeps its existing
+        # strict identity validation instead of being silently replaced.
+        if [[ -z ${FORESIGHT_TEST_MEDIA_WORKER+x}${FORESIGHT_TEST_MEDIA_BUILD_ID+x}${FORESIGHT_TEST_MEDIA_SHA256+x}${FORESIGHT_TEST_MEDIA_CDHASH+x} &&
+              ( -e "$task_source_build/media-worker" || -L "$task_source_build/media-worker" ) ]]; then
+          task_media_args+=(--existing-product "$task_source_build/media-worker")
+        fi
+        if task_run "media worker prerequisite" "$task_python" "$task_root/tools/run_media_test_gate.py" \
+          --cache "$task_build/media-test-cache" --output "$task_checks/media-worker" \
+          "${task_media_args[@]}" --environment-output "$task_media_environment"; then
+          task_media_count=0
+          while IFS= read -r -d '' task_media_key && IFS= read -r -d '' task_media_value; do
+            case "$task_media_key" in
+              FORESIGHT_TEST_MEDIA_WORKER|FORESIGHT_TEST_MEDIA_BUILD_ID|FORESIGHT_TEST_MEDIA_SHA256|FORESIGHT_TEST_MEDIA_CDHASH)
+                export "$task_media_key=$task_media_value"
+                task_media_count=$((task_media_count + 1)) ;;
+              *) echo 'Invalid media test environment key' >&2; exit 2 ;;
+            esac
+          done < "$task_media_environment"
+          if [[ "$task_media_count" != 4 ]]; then
+            echo 'Incomplete media test environment' >&2
+            task_failed=1
+            task_worker_ready=0
+          fi
+        else
+          task_worker_ready=0
+        fi
+      fi
       if [[ "$task_worker_ready" == 1 ]]; then
     if [[ "${FORESIGHT_CORE_COVERAGE_BENCHMARK:-0}" == 1 ]]; then
       # Compare the full suite on the same host/native binaries. Keep coverage
@@ -144,7 +184,7 @@ case "$task_gate" in
       task_check "core tests" "$task_root/tools/run_core_tests.sh" --file-reporter="json:$task_reports/core.events.jsonl"
     fi
       else
-        echo 'Blocked core suite: diagnostic worker prerequisite failed' >&2
+        echo "Blocked core suite: $task_blocked_worker worker prerequisite failed" >&2
       fi
       task_check "core enabled-hook regression" dart -DFORESIGHT_ENABLE_TEST_HOOKS=true test --compiler=source test/platform_services_test.dart --name 'crash and delay hooks'
     fi
@@ -155,7 +195,12 @@ case "$task_gate" in
       task_require "desktop dependency resolution" flutter pub get --enforce-lockfile
     fi
     if [[ "$task_mode" != build-only ]]; then
-      task_check "desktop analysis" flutter analyze
+      # Test-only consumes the exact verified producer dependency graph. Pub's
+      # timestamp freshness check can otherwise rerun online resolution after
+      # restore even when both the lock and package configuration are valid.
+      task_flutter_pub=()
+      if [[ "$task_mode" == test-only ]]; then task_flutter_pub=(--no-pub); fi
+      task_check "desktop analysis" flutter analyze ${task_flutter_pub[@]+"${task_flutter_pub[@]}"}
       task_check "desktop format" dart format --output=none --set-exit-if-changed .
       task_coverage=()
       if [[ "$task_platform" == linux || "${FORESIGHT_COVERAGE:-0}" == 1 || "${FORESIGHT_DESKTOP_COVERAGE_REPORT:-0}" == 1 ]]; then
@@ -164,7 +209,7 @@ case "$task_gate" in
       if [[ -n ${task_coverage[*]-} && -f coverage/lcov.info ]]; then
         mv -- coverage/lcov.info "$task_checks/previous-lcov.raw"
       fi
-      task_check "desktop tests and coverage" flutter test --dart-define=FORESIGHT_ENABLE_TEST_HOOKS=true ${task_coverage[@]+"${task_coverage[@]}"} --file-reporter="json:$task_reports/desktop.events.jsonl"
+      task_check "desktop tests and coverage" flutter test ${task_flutter_pub[@]+"${task_flutter_pub[@]}"} --dart-define=FORESIGHT_ENABLE_TEST_HOOKS=true ${task_coverage[@]+"${task_coverage[@]}"} --file-reporter="json:$task_reports/desktop.events.jsonl"
       if [[ "$task_platform" == linux ]]; then
         task_check "desktop coverage floor" "$task_python" "$task_root/tools/check_coverage.py" coverage/lcov.info --label Desktop --minimum 90
       fi

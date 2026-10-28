@@ -79,6 +79,35 @@ void main() {
         'idempotency_key': false,
         'tools': <Object?>[],
       };
+      // Retained audio controls are desktop-only; none adds an MCP tool.
+      // Keep the historical fixture immutable and list each new policy here.
+      for (final method in [
+        'recordings.read',
+        'recordings.transcript_target',
+        'recordings.play',
+        'recordings.pause_audio',
+        'recordings.seek',
+        'recordings.seek_transcript',
+        'recordings.authorize_export_destination',
+        'recordings.export',
+        'recordings.cancel_export',
+        'recordings.retry_transcription',
+        'recordings.retry_compression',
+        'recordings.delete',
+        'recordings.set_retain_lossless',
+      ]) {
+        expected[method] = {
+          'requires_helper': false,
+          'approval': false,
+          'approval_web_search': false,
+          'notifies_changes':
+              method != 'recordings.read' &&
+              method != 'recordings.transcript_target',
+          'workspace_epoch': true,
+          'idempotency_key': false,
+          'tools': <Object?>[],
+        };
+      }
       final actual = <String, Object?>{};
       for (final operation in Operation.values) {
         actual[operation.wire] = {

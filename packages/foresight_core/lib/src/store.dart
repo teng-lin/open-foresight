@@ -1,4 +1,5 @@
 import 'persistence/preference_entities.dart';
+import 'persistence/audio_store.dart';
 import 'persistence/application_schema.dart';
 import 'persistence/sqlite_snapshot_source.dart';
 import 'label_organization.dart';
@@ -38,6 +39,7 @@ class Store implements SqliteSnapshotSource {
   @override
   final String path;
   static const schemaVersion = applicationSchemaVersion;
+  AudioStore get audioStore => AudioStore.forStore(this);
   ContentHistory get contentHistory =>
       ContentHistory(db, supportedVersion: schemaVersion);
 

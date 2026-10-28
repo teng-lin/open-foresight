@@ -168,8 +168,8 @@ gh attestation verify /path/to/installer --repo "$GH_REPO" \
 ```
 
 Install through the normal user flow and follow the
-[desktop and hardware acceptance procedure](docs/validation/release-acceptance.md#real-desktop-and-hardware-acceptance).
-Use its [manual results template](docs/validation/release-acceptance-manual.json)
+[desktop and hardware acceptance procedure](docs/release-acceptance.md#real-desktop-and-hardware-acceptance).
+Use its [manual results template](packaging/release-acceptance-manual.json)
 to record setup, model workflows, persistence, microphone/system audio, recovery,
 desktop integration, and upgrade results. The macOS DMG currently has an ad-hoc
 signature; record actual Gatekeeper behavior and the remaining signing limits.
@@ -310,5 +310,5 @@ of replacement publication authority.
 - [Release preparation and candidate selection](tools/prepare_release.py)
 - [Linux packaging](docs/platforms/linux-packaging.md)
 - [macOS packaging and release gates](docs/platforms/macos-support.md)
-- [Installer acceptance and hardware requirements](docs/validation/release-acceptance.md)
-- [Dependency reuse and CI promotion](docs/platforms/ci-performance.md)
+- [Installer acceptance and hardware requirements](docs/release-acceptance.md)
+- [Dependency reuse and CI promotion](docs/ci.md)

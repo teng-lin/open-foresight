@@ -198,11 +198,13 @@ void main() {
     () {
       final ids = <String, int>{};
       for (final state in [
+        'starting',
         'recording',
         'transcribing',
         'paused',
         'idle',
         'completed',
+        'empty',
         'interrupted',
       ]) {
         final id = store.meeting(state);
@@ -210,6 +212,7 @@ void main() {
         store.db.execute('UPDATE meetings SET state=? WHERE id=?', [state, id]);
       }
       expect(store.meetingStore.interruptActiveCaptures(), [
+        ids['starting'],
         ids['recording'],
         ids['transcribing'],
         ids['paused'],
@@ -222,8 +225,10 @@ void main() {
         'interrupted',
         'interrupted',
         'interrupted',
+        'interrupted',
         'idle',
         'completed',
+        'empty',
         'interrupted',
       ]);
       expect(rows.map((row) => row['revision']).toSet(), {0});

@@ -13,38 +13,13 @@
 
 ## What is Open Foresight?
 
-Open Foresight is a meeting companion and personal knowledge base with local transcription, retrieval, and generation. It is an open-source, cross-platform reconstruction of Google's **AI Edge Foresight**, an experimental offline meeting-notes app for the Mac that Google announced in October 2026.
+Open Foresight records and transcribes meetings, keeps your notes and recordings locally, and answers questions from your documents with checked citations. It runs on Linux and Apple Silicon Macs.
 
-**In meetings**, it transcribes your microphone and system audio, so it works with any meeting app and with in-person conversations. You jot down short notes as you go, and Open Foresight expands them into fuller notes using the live transcript. A side panel lets you ask questions about the meeting as it happens, and produces a summary and a list of action items afterwards.
+**In meetings**, it records your microphone and system audio, so it works with any meeting app and with in-person conversations. Pause and resume recording as needed; saved audio stays alongside the transcript, and transcription can catch up after the meeting or an app restart. You jot down short notes as you go, and Open Foresight expands them into fuller notes using the live transcript. A side panel lets you ask questions about the meeting as it happens, and produces a summary and a list of action items afterwards.
 
 **Between meetings**, it is a searchable library of your own documents: local files, web pages, and Google Drive content. Ask it a question and it answers from those sources, with citations checked against them, so you can find a detail without rereading everything.
 
 **Local inference by default.** Gemma writes answers and notes, EmbeddingGemma powers source search, and Whisper transcribes speech on your machine. Audio, transcripts, notes, and documents are kept in a local profile. Network access is used for model downloads, imported web pages, and optional Google Drive/Calendar sync. Optional web-enabled Ask and meeting Chat send search queries to Google and use a remote Foresight website-summary RPC backed by Gemini; they require distribution credentials and are off by default. Ordinary generation remains local.
-
-Google's app runs only on the Mac. Open Foresight runs on Linux and on Apple Silicon Macs, adds an MCP server so AI agents can use the same library and recorder, and is MIT-licensed.
-
-## How this project started
-
-Open Foresight began as an experiment: **how far can an AI agent equipped with [REA](https://github.com/morluto/rea) (Reverse Engineer Anything) go in replicating a shipped Mac application, and porting it to Linux?**
-
-The reference was Google's macOS **AI Edge Foresight** app (`com.google.AIEdgeForesight`), a Flutter app with local Gemma models, source search, a source graph, and meeting transcription. The experiment used two hosts:
-
-- **Linux with REA**: static analysis of a copied `.app` bundle. This covered its plists, resources, protobuf schemas and model configuration, plus the arm64 Mach-O decompiled through REA's IDA provider. In the Flutter AOT code, recovered strings and pseudocode exposed contracts even though the original Dart source could not be recovered.
-- **A Mac through herdr**: the installed app was run and observed directly, to establish what it actually does at runtime. Static analysis alone cannot show that.
-
-The work went one feature at a time. Each round identified the feature's contract and inspected the relevant code, observed the same workflow on the Mac, built it here, and compared the two with identical inputs. Parity meant matching state changes, persistence, errors and cancellation, not just matching screenshots. Where the original depended on Mac-only pieces, the port used open replacements: PipeWire instead of Core Audio, public LiteRT model artifacts instead of encrypted model packages, and Linux window and shortcut integration in place of the Mac's.
-
-The detailed method notes are kept in git history rather than the current documentation.
-
-## From port to cross-platform app
-
-Once the Linux reconstruction worked, the project stopped being only a copy and became an application of its own:
-
-1. **Reconstruct.** A Flutter interface, a C++ gRPC retrieval helper, SQLite persistence, and native model and capture workers rebuilt the reference's main workflows on Linux.
-2. **Own the stack.** Python inference was replaced with native C++ LiteRT workers. Business logic moved into a Flutter-independent application service, which both the desktop and a new MCP server share. Linux gained `.deb`, `.rpm` and Arch packages.
-3. **Return to the Mac.** With the platform-specific parts behind small interfaces, macOS became a target again. Apple Silicon support now includes native Core Audio capture, a Mac runner, bundle tooling, and an ad-hoc development DMG workflow, all from the same codebase. The CI DMG includes its inference and Whisper runtimes.
-
-The repository has a fresh history. Reference screenshots, reverse-engineering reports, evaluation results, machine-specific environments, downloaded models, application profiles and credentials are all excluded. Runtime fonts and images are kept because the interface uses them.
 
 ## Features
 
@@ -59,6 +34,14 @@ The repository has a fresh history. Reference screenshots, reverse-engineering r
   Live Q&A can detect questions in finalized speech and queue grounded answers automatically using the local model. Its Automatic answers switch pauses processing while retaining queued questions; failed answers can be retried.
 
   Recording can be paused and resumed, and stops itself after a period of inactivity that you choose. Double-click its waveform to open the immersive meeting workspace. Generated notes, summaries, action items and answers render as formatted, selectable Markdown, with original Markdown retained for editing and copying. You can export your meeting notes as Markdown. Original notes and raw transcripts are never overwritten by generated text.
+
+  Meeting audio is saved locally alongside the transcript. Transcription can
+  catch up after capture stops or the app restarts. Saved recordings offer
+  playback, listening from linked transcript sections, and MP3 or Opus
+  export. Background Opus compression saves space. You can keep remaining
+  original audio, delete a recording while preserving its transcript, or back up
+  audio and transcripts together. Paused time is excluded; capture gaps remain
+  visible. Capture, transcription and audio-saving errors are shown separately.
 - **Notes.** Write personal notes, and start a new one with Ctrl+N (⌘N on the Mac).
 - **Stats.** A dashboard of sources added, meetings transcribed, answers given, and weekly local output tokens.
 - **MCP server.** Agents can import, search, ask, take notes, and record through the same application service the desktop uses.
@@ -103,7 +86,7 @@ The remaining macOS release gates are listed in [macOS development and release](
 
 ## Install
 
-Download a package for your distribution, or the macOS DMG, from the [releases page](https://github.com/teng-lin/open-foresight/releases). Each installer is built and tested in CI before a release is published. Nightly and manual [preview installers](docs/platforms/ci-performance.md#preview-installers) run their own installed-package validation. See [Linux packaging](docs/platforms/linux-packaging.md) and [macOS release CI](docs/platforms/macos-support.md#release-ci-disk-image) for details.
+Download a package for your distribution, or the macOS DMG, from the [releases page](https://github.com/teng-lin/open-foresight/releases). Each installer is built and tested in CI before a release is published. Nightly and manual [preview installers](docs/ci.md#preview-installers) run their own installed-package validation. See [Linux packaging](docs/platforms/linux-packaging.md) and [macOS release CI](docs/platforms/macos-support.md#release-ci-disk-image) for details.
 
 The macOS CI DMG includes its inference and speech runtimes; users install model weights separately through setup. Runtime bundling is complete, and signed distribution is blocked on Developer ID signing and notarization. The artifact remains ad-hoc signed. See [Mac runtime packaging](docs/platforms/macos-support.md#local-assembly-and-signed-distribution) and the per-release [acceptance gates](docs/platforms/macos-support.md#release-gates).
 
@@ -219,7 +202,11 @@ runtimes, build or reuse the vendor libraries and package the app:
 ```sh
 .venv/bin/python tools/build_macos_vendor.py
 .venv/bin/python tools/build_macos_runtimes.py
+install -d -m 700 /var/tmp/foresight-media-cache
+.venv/bin/python tools/build_media_worker.py --cache /var/tmp/foresight-media-cache \
+  --output build/media-worker --fetch --jobs 2
 .venv/bin/python tools/package_macos.py \
+  --media-worker-build build/media-worker \
   --sdk "$PWD/build/macos-sdk" \
   --litert-extensions-manifest "$PWD/build/macos-runtimes/litert-extensions/build-manifest.json" \
   --whisper-runtime "$PWD/build/macos-runtimes/whisper/whisper-cli" \
@@ -269,7 +256,7 @@ To build directly on the host instead, install:
 
 - a C++20 compiler and CMake
 - protobuf and gRPC development packages, including a `protoc` supporting Edition 2024
-- SQLite3, nlohmann-json, OpenSSL, and ICU
+- SQLite3, nlohmann-json, OpenSSL, ICU, and PipeWire 1.0.5 or newer development headers (including SPA)
 - Python 3.13, for build and test tooling
 - Flutter 3.35.7 (Dart 3.9.2), with Clang, Ninja, pkg-config, and the GTK3 Linux development dependencies
 
@@ -280,7 +267,10 @@ python3.13 -m venv .venv
 .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
 .venv/bin/python tools/prepare_litert.py build/lib/liblitert-lm.so
 FORESIGHT_REQUIRE_DART_GATES=1 tools/build.sh --platform linux
-.venv/bin/python tools/package.py
+install -d -m 700 /var/tmp/foresight-media-cache
+.venv/bin/python tools/build_media_worker.py --cache /var/tmp/foresight-media-cache \
+  --output build/media-worker --fetch --jobs 2
+.venv/bin/python tools/package.py --media-worker-build build/media-worker
 ./tools/run_desktop.sh
 ```
 
@@ -325,19 +315,19 @@ Linux and macOS use the same native C++ LiteRT-LM worker for generation and embe
 
 ```sh
 # Package Gemma GPU generation into a separate, unused output directory
-.venv/bin/python tools/package.py --output dist/open-foresight-gemma --generation-backend gpu
+.venv/bin/python tools/package.py --media-worker-build build/media-worker --output dist/open-foresight-gemma --generation-backend gpu
 # Optional EmbeddingGemma fixture and CPU generation/speech runtimes
 .venv/bin/python tools/download_embedding_fixture.py models/local
 .venv/bin/python native/setup_models.py --directory models/local/native
 ```
 
-For Whisper GPU packaging, use `--whisper-gpu-runtime` and `--whisper-gpu-device`, and check device indices on the target machine. PDF and RTF import uses `pdftotext` and `unrtf`. Recording needs PipeWire and `pw-record`.
+For Whisper GPU packaging, use `--whisper-gpu-runtime` and `--whisper-gpu-device`, and check device indices on the target machine. PDF and RTF import uses `pdftotext` and `unrtf`. Saved recording and playback require the direct PipeWire backend (1.0.5 or newer). `pw-record` supports legacy capture and diagnostics.
 
 To build reproducible distro packages inside containers, see [Linux packaging](docs/platforms/linux-packaging.md).
 
 ## Profiles and data
 
-The profile is stored in `$XDG_DATA_HOME/open-foresight`, which is normally `~/.local/share/open-foresight`. Its sockets are in `$XDG_RUNTIME_DIR/open-foresight/<profile>`, where `<profile>` is 12 hexadecimal digits derived from the profile path, so each profile has its own. Set both `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` to use an isolated profile. Legacy profiles are never selected automatically.
+On Linux, the profile is stored in `$XDG_DATA_HOME/open-foresight`, normally `~/.local/share/open-foresight`. On macOS, it is stored in `~/Library/Application Support/Open Foresight`. Linux sockets are in `$XDG_RUNTIME_DIR/open-foresight/<profile>`; macOS uses `of-<profile>` under its private `$TMPDIR`. Here `<profile>` is 12 hexadecimal digits derived from the profile path, so each profile has its own runtime. Set both `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` to use an isolated profile. Legacy profiles are never selected automatically.
 
 To migrate a profile from the earlier `foresight-linux-desktop` build, stop its app and helper, then run from this repository root:
 
@@ -349,6 +339,28 @@ python3.13 -m tools.migrate_profile ~/.local/share/foresight-linux-desktop \
 ```
 
 Migration refuses to run while the old profile has an active owner, an unfinished recording, or an existing destination. It keeps a private backup, checks SQLite integrity, and updates the model and file paths it owns. Backups contain private data, so keep them out of Git.
+
+Meeting recordings initially use lossless WAV chunks. After capture, background
+compression retains compact Opus audio; originals are removed only after their
+transcription and reader dependencies finish and the compressed copy is
+validated. **Keep remaining originals** preserves originals still on disk.
+**Delete recording** removes managed audio while keeping transcript text.
+Exported files and explicit backups are separate user-owned copies and remain
+until you delete them. Saved-audio playback requires capture to finish first.
+
+Database migration snapshots contain metadata only. To back up recordings too,
+stop the service and use an absent destination outside the profile, installation
+and runtime caches:
+
+```sh
+foresight-service --audio-backup-create=/absolute/path/new-backup
+foresight-service --audio-backup-inspect=/absolute/path/new-backup
+foresight-service --audio-backup-restore=/absolute/path/new-backup --new-profile=/absolute/path/new-profile
+```
+
+Restore creates a new profile. Select it explicitly with `FORESIGHT_DATA`; the
+[backup contract](docs/architecture/audio-backups.md) describes
+validation, missing audio and interrupted copies.
 
 ## Use it from an MCP client
 
@@ -401,7 +413,7 @@ Tests that use real models, real capture, or the desktop integration are opt-in.
 
 ## Versioning and releases
 
-For installable builds before an official release, see [nightly and manual preview packages](docs/platforms/ci-performance.md#preview-installers).
+For installable builds before an official release, see [nightly and manual preview packages](docs/ci.md#preview-installers).
 
 The version is written in one place, `apps/desktop/pubspec.yaml`, as `version: X.Y.Z+N`. `X.Y.Z` is the release version, following [SemVer](https://semver.org). `N` is the local build number and the lower bound for CI builds. Main distribution candidates and nightly previews reserve higher numbers from the shared `ci/build-sequence` counter before compilation, so official installers remain newer than earlier previews on macOS. CMake, the helper's build ID, the packaging scripts, the MCP server, and the app all read this value. The app shows it under **Settings → Version**.
 
@@ -426,17 +438,16 @@ Browse the [documentation index](docs/README.md).
 
 | Topic | Document |
 | --- | --- |
-| How this project started | [How this project started](#how-this-project-started) |
 | Schema migrations | [schema-migrations.md](docs/architecture/schema-migrations.md) |
 | Credentials at rest | [credentials-at-rest.md](docs/architecture/credentials-at-rest.md) |
 | Application service and MCP | [application-service.md](docs/architecture/application-service.md) |
 | Native inference | [services/inference](services/inference/README.md) |
 | Speech models | [speech-models.md](docs/models/speech-models.md) |
 | LiteRT patches, GPU runtime, stop tokens | [third_party/litert_lm](third_party/litert_lm/README.md) |
-| Linux packages and CI | [linux-packaging.md](docs/platforms/linux-packaging.md) · [CI promotion and previews](docs/platforms/ci-performance.md) |
+| Linux packages and CI | [linux-packaging.md](docs/platforms/linux-packaging.md) · [CI promotion and previews](docs/ci.md) |
 | macOS | [build, bundle, and release gates](docs/platforms/macos-support.md) |
-| Integration gates | [integration-gates.md](docs/validation/integration-gates.md) |
-| Published installer acceptance | [release-acceptance.md](docs/validation/release-acceptance.md) |
+| Integration gates | [testing.md](docs/testing.md) |
+| Published installer acceptance | [release-acceptance.md](docs/release-acceptance.md) |
 | Release history | [CHANGELOG.md](CHANGELOG.md) |
 
 ## License

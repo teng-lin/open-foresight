@@ -619,7 +619,11 @@ class _LocalModelBlobDownloader {
       }
 
       Future<T> bounded<T>(Future<T> future, Duration phase) async {
+        // The caller already started this operation. Admission or an expired
+        // deadline may throw before it can be awaited; cleanup can then fail it.
+        future.ignore();
         final cancelled = Completer<T>();
+        cancelled.future.ignore();
         final subscription = _closeEvents.stream.listen((_) {
           if (!cancelled.isCompleted) {
             cancelled.completeError(StateError('Model downloader is closed.'));
@@ -627,8 +631,9 @@ class _LocalModelBlobDownloader {
         });
         try {
           if (_closed) throw StateError('Model downloader is closed.');
+          final timeout = remaining(phase);
           return await Future.any<T>([future, cancelled.future]).timeout(
-            remaining(phase),
+            timeout,
             onTimeout: () {
               request?.abort();
               if (stream != null) unawaited(stream.cancel());

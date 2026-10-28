@@ -51,7 +51,7 @@ def verify_probes(root=ROOT):
         if entry.get("mode") == "manual":
             if (
                 f"`{path}`"
-                not in (root / "docs/validation/integration-gates.md").read_text()
+                not in (root / "docs/testing.md").read_text()
             ):
                 raise ValueError("Manual probe is absent from its index: " + path)
         elif entry.get("mode") == "automated":

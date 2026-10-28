@@ -220,6 +220,12 @@ def bundle_environment(bundle, inherited):
         if not key.startswith("FORESIGHT_")
     }
     bundle = bundle.resolve(strict=True)
+    required = [
+        "FORESIGHT_NATIVE",
+        "FORESIGHT_HELPER",
+        "FORESIGHT_LITERT_RUNNER",
+        "FORESIGHT_TEST_SQL_SUPPORT_LIBRARY",
+    ]
     if bundle.suffix == ".app":
         resources = bundle / "Contents/Resources"
         config = json.loads((resources / "runtime.json").read_text())
@@ -234,10 +240,15 @@ def bundle_environment(bundle, inherited):
             "FORESIGHT_LITERT_LIBRARY",
             "FORESIGHT_QUERY_RUNTIME",
             "FORESIGHT_QUERY_WORKER",
+            "FORESIGHT_SQLITE_LIBRARY",
         ]
         for key in keys:
             if key in config:
                 env[key] = str((resources / config[key]).resolve(strict=True))
+        sqlite = env.get("FORESIGHT_SQLITE_LIBRARY")
+        if sqlite is None or not Path(sqlite).is_relative_to(bundle):
+            raise ValueError("Missing bundle runtime: FORESIGHT_SQLITE_LIBRARY")
+        required.append("FORESIGHT_SQLITE_LIBRARY")
     else:
         env.update(
             FORESIGHT_NATIVE=str(bundle / "lib/libforesight_native.so"),
@@ -256,12 +267,7 @@ def bundle_environment(bundle, inherited):
             # Loading the packaged release engine here prevents VM startup.
             LD_LIBRARY_PATH=str(bundle / "lib"),
         )
-    for key in [
-        "FORESIGHT_NATIVE",
-        "FORESIGHT_HELPER",
-        "FORESIGHT_LITERT_RUNNER",
-        "FORESIGHT_TEST_SQL_SUPPORT_LIBRARY",
-    ]:
+    for key in required:
         if not Path(env[key]).is_file():
             raise ValueError(f"Missing bundle runtime: {key}")
     env.update(FORESIGHT_LITERT_BACKEND="cpu", FORESIGHT_GENERATION_BACKEND="litert_lm")
@@ -517,6 +523,10 @@ def meeting_environment(args, env, private):
         + "\n"
     )
     meeting = dict(private)
+    # The meeting registers a bounded speech wrapper to observe pending ASR.
+    # Its initial manifest still names the pinned real runtime; a process-wide
+    # override would silently bypass subsequent model runtime registrations.
+    meeting.pop("FORESIGHT_WHISPER_RUNTIME", None)
     meeting.update(
         FORESIGHT_PLAYBACK_TARGET=private["FORESIGHT_LIVE_SINK"],
         FORESIGHT_DATA=str(data),
@@ -802,13 +812,18 @@ def main():
             parser.error("--models is required")
         if args.suite != "fast" and args.bundle is None:
             parser.error("--bundle is required")
-        with tempfile.TemporaryDirectory(prefix="of-ci-", dir="/tmp") as directory:
+        parent = Path(
+            os.environ.get("FORESIGHT_TEST_TEMP_ROOT")
+            or os.environ.get("TMPDIR")
+            or "/var/tmp"  # noqa: S108 - mkdtemp creates an owned private child.
+        ).resolve(strict=True)
+        with tempfile.TemporaryDirectory(prefix="of-ci-", dir=parent) as directory:
             env = (
                 dict(os.environ)
                 if args.suite == "fast"
                 else bundle_environment(args.bundle, os.environ)
             )
-            env["TMPDIR"] = directory
+            env.update(TMPDIR=directory, FORESIGHT_TEST_TEMP_ROOT=directory)
             # Model fixtures are mounted read-only; compilation caches are disposable.
             env["FORESIGHT_LITERT_CACHE"] = str(Path(directory) / "litert-cache")
             if args.suite == "fast":

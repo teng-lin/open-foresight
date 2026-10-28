@@ -2,13 +2,17 @@
 // Internal resource addresses stay in this mapping. Only the separately
 // negotiated owned API exposes non-reused integer identities to new callers.
 using NativeOperation = foresight::OwnedOperation;
+#if FORESIGHT_ENABLE_TEST_HOOKS
+// Mapping-local controlled backend capability; no environment or public export.
+foresight::PcmOutput::BackendFactory pcm_output_factory_for_testing = nullptr;
+#endif
 // Mapping-local, constant initialized and allocation-free. It survives every
 // Dart isolate that opens this same image and is never reset by cleanup.
 std::atomic<bool> &native_quarantine_state() noexcept {
   static std::atomic<bool> value{false};
   return value;
 }
-enum class NativeKind { engine, conversation, speech, capture };
+enum class NativeKind { engine, conversation, speech, capture, media, output };
 struct NativeControl {
   NativeKind kind;
   std::shared_ptr<void> object;
@@ -52,7 +56,8 @@ void finalize_legacy_threads(NativeHandles &state) noexcept {
     for (const auto &[address, control] : state.handles) {
       if (control->identity || control->private_operations ||
           control->closing || control->kind == NativeKind::engine ||
-          !control->object)
+          control->kind == NativeKind::output ||
+          control->kind == NativeKind::media || !control->object)
         continue;
       std::unique_lock users(control->users_mutex, std::try_to_lock);
       if (!users.owns_lock() || control->users)
@@ -177,7 +182,9 @@ struct NativeOwnerUse {
     const auto found = registry.owners.find(identity);
     if (found != registry.owners.end() &&
         (found->second->kind == kind ||
-         (any_event && found->second->kind != NativeKind::engine)) &&
+         (any_event && found->second->kind != NativeKind::engine &&
+          found->second->kind != NativeKind::media &&
+          found->second->kind != NativeKind::output)) &&
         !found->second->closing && found->second->object) {
       control = found->second;
       std::lock_guard users(control->users_mutex);
@@ -210,14 +217,49 @@ NativeOperation::Result native_probe(NativeOperation &operation) {
              ? NativeOperation::Result::succeeded
              : NativeOperation::Result::failed;
 }
+NativeOperation::Result native_media_execute(NativeOperation &operation) {
+  auto &control = *static_cast<NativeControl *>(operation.context);
+  return static_cast<foresight::MediaOwner *>(control.object.get())->execute();
+}
 NativeOperation::Result native_finish(NativeOperation &operation) {
   auto &capture = *static_cast<Capture *>(
       static_cast<NativeControl *>(operation.context)->object.get());
-  capture.stop();
+  if (!capture.recording_recovery)
+    capture.stop();
   capture.join();
+  capture.finish_recording();
 #ifdef __APPLE__
   fs_macos_capture_close(capture.macos);
 #endif
+  return NativeOperation::Result::succeeded;
+}
+struct CaptureReservationRequest {
+  std::shared_ptr<NativeControl> control;
+  std::vector<foresight::RecordingWriter::Identity> identities;
+};
+NativeOperation::Result native_capture_reserve(NativeOperation &operation) {
+  auto &request = *static_cast<CaptureReservationRequest *>(operation.context);
+  auto &control = *request.control;
+  if (control.closing || !control.object)
+    return NativeOperation::Result::failed;
+  auto &capture = *static_cast<Capture *>(control.object.get());
+  std::shared_ptr<foresight::RecordingWriter> writer;
+  {
+    std::unique_lock lock(capture.recording_mutex);
+    while (!capture.recording_prepared && !capture.cancel && !control.closing)
+      capture.recording_changed.wait_for(lock, std::chrono::milliseconds(50));
+    if (capture.cancel || control.closing)
+      return NativeOperation::Result::failed;
+    writer = capture.recording_writer;
+  }
+  if (!writer || request.identities.size() >
+                     foresight::RecordingWriter::reservation_limit -
+                         writer->pressure().outstanding_chunks)
+    return NativeOperation::Result::failed;
+  for (const auto &id : request.identities) {
+    if (capture.cancel || control.closing || !writer->reserve(id))
+      return NativeOperation::Result::failed;
+  }
   return NativeOperation::Result::succeeded;
 }
 NativeOperation::Result native_speech_join(NativeOperation &operation) {
@@ -232,10 +274,47 @@ NativeOperation::Result native_speech_join(NativeOperation &operation) {
   control.speech_joined = true;
   return NativeOperation::Result::succeeded;
 }
+NativeOperation::Result native_output_start(NativeOperation &operation) {
+  auto &control = *static_cast<NativeControl *>(operation.context);
+  return static_cast<foresight::PcmOutput *>(control.object.get())->start()
+             ? NativeOperation::Result::succeeded
+             : NativeOperation::Result::failed;
+}
+NativeOperation::Result native_output_finish(NativeOperation &operation) {
+  auto &control = *static_cast<NativeControl *>(operation.context);
+  return static_cast<foresight::PcmOutput *>(control.object.get())->finish()
+             ? NativeOperation::Result::succeeded
+             : NativeOperation::Result::unsettled;
+}
+struct PcmOutputRequest {
+  std::shared_ptr<NativeControl> control;
+  uint64_t generation = 0;
+  bool flush = false;
+};
+NativeOperation::Result native_output_control(NativeOperation &operation) {
+  auto &request = *static_cast<PcmOutputRequest *>(operation.context);
+  auto &control = *request.control;
+  if (control.closing || !control.object)
+    return NativeOperation::Result::failed;
+  auto &output = *static_cast<foresight::PcmOutput *>(control.object.get());
+  try {
+    const bool success = request.flush ? output.pause_flush(request.generation)
+                                       : output.resume(request.generation);
+    return success ? NativeOperation::Result::succeeded
+                   : NativeOperation::Result::failed;
+  } catch (...) {
+    output.fail(foresight::PcmOutput::Error::backend_failure);
+    throw;
+  }
+}
 void discard_idle_operations(const std::shared_ptr<NativeControl> &control);
 void revoke_native(const std::shared_ptr<NativeControl> &control) {
   control->closing = true;
-  if (control->kind != NativeKind::engine && control->object) {
+  if (control->kind == NativeKind::output && control->object) {
+    static_cast<foresight::PcmOutput *>(control->object.get())->revoke();
+  } else if (control->kind == NativeKind::media && control->object) {
+    static_cast<foresight::MediaOwner *>(control->object.get())->cancel = true;
+  } else if (control->kind != NativeKind::engine && control->object) {
     auto *worker = control->kind == NativeKind::conversation
                        ? static_cast<Worker *>(
                              static_cast<Conversation *>(control->object.get()))
@@ -291,6 +370,14 @@ NativeOperation::Result cleanup_native(NativeControl &control) {
         return NativeOperation::Result::unsettled;
     }
     shutdown_persistent(engine);
+  } else if (control.object && control.kind == NativeKind::output) {
+    if (!static_cast<foresight::PcmOutput *>(control.object.get())->finish())
+      return NativeOperation::Result::unsettled;
+  } else if (control.object && control.kind == NativeKind::media) {
+    auto &media = *static_cast<foresight::MediaOwner *>(control.object.get());
+    media.cancel = true;
+    if (!media.ready_to_destroy())
+      return NativeOperation::Result::unsettled;
   } else if (control.object) {
     auto *object = control.object.get();
     auto &worker = *static_cast<Worker *>(
@@ -303,6 +390,8 @@ NativeOperation::Result cleanup_native(NativeControl &control) {
     retire_events(&worker);
     worker.stop();
     worker.join();
+    if (control.kind == NativeKind::capture)
+      static_cast<Capture *>(object)->finish_recording();
 #ifdef __APPLE__
     if (control.kind == NativeKind::capture)
       fs_macos_capture_close(static_cast<Capture *>(object)->macos);
@@ -425,6 +514,21 @@ T *publish_native(std::unique_ptr<T> resource, NativeKind kind,
     operation->releases_group = true;
     operation->automatic_release = control->private_operations != nullptr;
     control->retire = operation->token;
+    if (kind == NativeKind::output) {
+      control->probe = operations
+                           .create(native_output_start, control.get(),
+                                   control->group, control->operation_owner)
+                           ->token;
+      control->finish = operations
+                            .create(native_output_finish, control.get(),
+                                    control->group, control->operation_owner)
+                            ->token;
+    }
+    if (kind == NativeKind::media)
+      control->finish = operations
+                            .create(native_media_execute, control.get(),
+                                    control->group, control->operation_owner)
+                            ->token;
     if (kind == NativeKind::capture)
       control->finish = operations
                             .create(native_finish, control.get(),
@@ -605,7 +709,8 @@ bool prepare_native_speech_join(const std::shared_ptr<NativeControl> &control) {
   control->speech_joined = false;
   return true;
 }
-uint64_t request_native_work(uint64_t identity, NativeKind kind, bool probe) {
+uint64_t request_native_work(uint64_t identity, NativeKind kind, bool probe,
+                             bool cancel_capture = true) {
   if (probe && native_quarantine_state().load(std::memory_order_acquire))
     return 0;
   auto &registry = native_handles();
@@ -627,17 +732,17 @@ uint64_t request_native_work(uint64_t identity, NativeKind kind, bool probe) {
   auto operation = registry.operations.find(token);
   if (!operation)
     return 0;
-  const auto state = operation->state.load(std::memory_order_acquire);
-  if (state == NativeOperation::State::queued ||
-      state == NativeOperation::State::running || operation->terminal())
-    return token;
-  if (!probe && kind == NativeKind::capture) {
+  if (!probe && kind == NativeKind::capture && cancel_capture) {
     auto &capture = *static_cast<Capture *>(control->object.get());
     capture.cancel = true;
 #ifdef __APPLE__
     fs_macos_capture_revoke(capture.macos);
 #endif
   }
+  const auto state = operation->state.load(std::memory_order_acquire);
+  if (state == NativeOperation::State::queued ||
+      state == NativeOperation::State::running || operation->terminal())
+    return token;
   return registry.operations.submit(operation, control) ? token : 0;
 }
 uint64_t native_identity(void *handle) {

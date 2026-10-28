@@ -55,7 +55,7 @@ def test_suite_entry_points_are_audited_individually(phase):
 def test_mixed_changes_union_their_dependencies():
     report = selection.plan(
         [
-            "docs/platforms/ci-performance.md",
+            "docs/testing.md",
             "apps/desktop/test/live_recording_test.dart",
             "tools/accept_software_gpu.py",
         ]

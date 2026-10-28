@@ -955,7 +955,16 @@ void main() {
         expect(recording.paused, false);
         final paused =
             await app.call(Operation.meetingsPause.wire, {'id': id}) as Map;
-        expect(paused['active'], true);
+        expect(
+          paused['active'],
+          true,
+          reason: 'paused session retains ownership',
+        );
+        expect(
+          paused['capture_active'],
+          false,
+          reason: 'paused devices are released',
+        );
         expect(paused['paused'], true);
         now = now.add(const Duration(seconds: 20));
         expect(app.captureState['elapsed_ms'], paused['elapsed_ms']);
@@ -988,6 +997,7 @@ void main() {
           expect(app.recordingMeeting, id);
           expect(app.recordingBegan, DateTime.utc(2026));
           expect(app.captureState['active'], true);
+          expect(app.captureState['capture_active'], false);
           expect(app.captureState['paused'], true);
           expect(app.captureState['meeting_id'], id);
           expect(recording.captures, isEmpty);

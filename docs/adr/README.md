@@ -1,6 +1,6 @@
 # Architecture decision records
 
-One file per decision, numbered in the order they were proposed. A record is never edited after it is accepted, except to change its status; a later record supersedes it. ADRs 0001–0006 restate decisions D1–D6 from the [service lifecycle fix plan](../plans/2026-10-19-service-lifecycle-fix-plan.md), whose decisions table remains the authoritative text until that plan's PR merges; the ADR number equals the decision number.
+One file per decision, numbered in proposal order. Accepted decisions retain their text; a later record supersedes an earlier one. Source links point to the archived context in Git history.
 
 | ADR | Title | Status |
 |---|---|---|
@@ -12,7 +12,7 @@ One file per decision, numbered in the order they were proposed. A record is nev
 | [0006](0006-stop-recording-on-host-disconnect.md) | Stop recording when the host desktop disconnects (D6) | Accepted |
 | [0007](0007-service-lifetime-and-desktop-agent-boundary.md) | Service lifetime and the desktop/agent boundary (D7) | Accepted and implemented |
 
-Decisions 1–8 of the CI restructuring live in [its plan](../plans/2026-10-19-ci-restructure-plan.md#8-owner-decisions). Move them here only if they need to change.
+Decisions 1–8 of the CI restructuring live in [its plan](https://github.com/teng-lin/open-foresight/blob/52bdd39778f31d632d434ada3fca7b165b9c6336/docs/plans/2026-10-19-ci-restructure-plan.md#8-owner-decisions). Move them here only if they need to change.
 
 ## Template
 
@@ -34,5 +34,3 @@ The rule chosen, in a few sentences. Alternatives considered, each with the reas
 ## Consequences
 What becomes easier, what becomes harder, what is deliberately out of scope.
 ```
-
-Plans in `docs/plans/` say how a decision is carried out; an ADR says what was decided and why.

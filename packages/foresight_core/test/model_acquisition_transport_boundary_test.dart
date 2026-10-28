@@ -25,6 +25,113 @@ void _observeSocketOutput(Socket socket) {
   );
 }
 
+// Close and join the actual worker before an entry failure can escape. An
+// outstanding expectLater would otherwise prevent the teardown that closes it.
+Future<void> _assertHandshakeCancellation(
+  ModelBlobDownloader downloader,
+  Future<Object?> pending,
+  Future<void> entered,
+  Future<void> ended,
+) async {
+  final failed = expectLater(pending, throwsStateError);
+  Future<void>? retirement;
+  Future<void> closeAndJoin() {
+    downloader.close();
+    return retirement ??= failed.timeout(const Duration(seconds: 3));
+  }
+
+  Object? primary;
+  StackTrace? primaryStack;
+  try {
+    await entered.timeout(const Duration(seconds: 5));
+    await closeAndJoin();
+    await ended.timeout(const Duration(seconds: 2));
+  } catch (error, stack) {
+    primary = error;
+    primaryStack = stack;
+  } finally {
+    try {
+      await closeAndJoin();
+    } catch (error, stack) {
+      if (primary == null) {
+        primary = error;
+        primaryStack = stack;
+      } else if (!identical(primary, error)) {
+        print('TLS cleanup secondary error: ${error.runtimeType}');
+      }
+    }
+  }
+  if (primary != null) Error.throwWithStackTrace(primary, primaryStack!);
+}
+
+// Hold the caller after the real response future exists, before its deadline
+// wrapper can install an observer. This models a descheduled isolate without
+// depending on a loopback connection happening inside a narrow wall budget.
+class _PreparedRequestClient implements HttpClient {
+  _PreparedRequestClient(this.inner, {this.closeStall = Duration.zero});
+  final HttpClient inner;
+  final Duration closeStall;
+  HttpClientRequest? _prepared;
+  var closeCalls = 0;
+
+  Future<void> prepare(Uri uri) async => _prepared = await inner.getUrl(uri);
+
+  @override
+  set connectionTimeout(Duration? value) => inner.connectionTimeout = value;
+  @override
+  Duration? get connectionTimeout => inner.connectionTimeout;
+  @override
+  Future<HttpClientRequest> getUrl(Uri url) {
+    final request = _prepared;
+    if (request == null || request.uri != url) {
+      throw StateError('Expected the one pre-established fixture request');
+    }
+    _prepared = null;
+    return Future.value(
+      _HeldCloseRequest(request, closeStall, () => closeCalls++),
+    );
+  }
+
+  @override
+  void close({bool force = false}) {
+    // A request not transferred to the downloader still belongs to this owner.
+    _prepared?.abort();
+    _prepared?.close().ignore();
+    _prepared = null;
+    inner.close(force: force);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName}');
+}
+
+class _HeldCloseRequest implements HttpClientRequest {
+  _HeldCloseRequest(this.inner, this.closeStall, this.onClose);
+  final HttpClientRequest inner;
+  final Duration closeStall;
+  final void Function() onClose;
+
+  @override
+  HttpHeaders get headers => inner.headers;
+  @override
+  Future<HttpClientResponse> close() {
+    final response = inner.close();
+    onClose();
+    if (closeStall > Duration.zero) sleep(closeStall);
+    return response;
+  }
+
+  @override
+  void abort([Object? exception, StackTrace? stackTrace]) =>
+      inner.abort(exception, stackTrace);
+  @override
+  Future<HttpClientResponse> get done => inner.done;
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName}');
+}
+
 void main() {
   late String transportService;
   setUpAll(() async {
@@ -287,11 +394,12 @@ void main() {
         await server.close();
       });
       final pending = downloader.download(blobId: 'fixture', size: 4);
-      final failed = expectLater(pending, throwsStateError);
-      await entered.future.timeout(const Duration(seconds: 5));
-      downloader.close();
-      await failed.timeout(const Duration(seconds: 3));
-      await ended.future.timeout(const Duration(seconds: 2));
+      await _assertHandshakeCancellation(
+        downloader,
+        pending,
+        entered.future,
+        ended.future,
+      );
     },
   );
 
@@ -428,6 +536,68 @@ void main() {
   );
 
   test(
+    'expired deadline observes the response future before aborting its request',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((request) {
+        request.response.statusCode = 503;
+        // Client cancellation can also fail the server's response sink. Its
+        // expected network error must not masquerade as the client-side leak.
+        unawaited(
+          request.response.close().then<void>(
+            (_) {},
+            onError: (Object error) {
+              expect(
+                error,
+                anyOf(isA<HttpException>(), isA<SocketException>()),
+              );
+            },
+          ),
+        );
+      });
+      final client = _PreparedRequestClient(
+        HttpClient(),
+        closeStall: const Duration(milliseconds: 300),
+      );
+      final downloader = ModelBlobDownloader(
+        client: client,
+        apiKey: 'local',
+        parallelCount: 1,
+        origin: Uri.parse('http://127.0.0.1:${server.port}'),
+        deadlines: const ModelTransportDeadlines(
+          total: Duration(milliseconds: 250),
+        ),
+      );
+      addTearDown(() async {
+        downloader.close();
+        client.close(force: true);
+        await server.close(force: true);
+      });
+      final settled = Completer<Object?>();
+      final unhandled = <Object>[];
+      unawaited(
+        runZonedGuarded(() async {
+          try {
+            await client
+                .prepare(downloader.downloadUri('fixture'))
+                .timeout(const Duration(seconds: 3));
+            await downloader.download(blobId: 'fixture', size: 4);
+            settled.complete(null);
+          } catch (error) {
+            settled.complete(error);
+          }
+        }, (error, _) => unhandled.add(error)),
+      );
+      expect(
+        await settled.future.timeout(const Duration(seconds: 3)),
+        isA<ModelTransportException>(),
+      );
+      expect(client.closeCalls, 1);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(unhandled, isEmpty);
+    },
+  );
+  test(
     'total budget bounds retry delay after the failed request is aborted',
     () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -437,7 +607,8 @@ void main() {
         request.response.statusCode = 503;
         unawaited(request.response.close());
       });
-      final client = HttpClient();
+      final client = _PreparedRequestClient(HttpClient());
+      var retryDelays = 0;
       addTearDown(() => client.close(force: true));
       final downloader = ModelBlobDownloader(
         client: client,
@@ -446,7 +617,10 @@ void main() {
         origin: Uri.parse('http://127.0.0.1:${server.port}'),
         retryPolicy: ModelDownloadRetryPolicy(
           maxAttempts: 5,
-          delay: (_) => const Duration(seconds: 30),
+          delay: (_) {
+            retryDelays++;
+            return const Duration(seconds: 30);
+          },
         ),
         deadlines: const ModelTransportDeadlines(
           total: Duration(milliseconds: 250),
@@ -456,11 +630,24 @@ void main() {
         downloader.close();
         await server.close(force: true);
       });
+      // Establish the actual connection before measuring the retry budget;
+      // cold connect scheduling is qualified by the separate transport tests.
+      await client
+          .prepare(downloader.downloadUri('fixture'))
+          .timeout(const Duration(seconds: 3));
       await expectLater(
         downloader.download(blobId: 'fixture', size: 4),
-        throwsA(isA<ModelTransportException>()),
+        throwsA(
+          isA<ModelTransportException>().having(
+            (error) => error.failureType,
+            'deadline during retry delay',
+            'TimeoutException',
+          ),
+        ),
       ).timeout(const Duration(seconds: 3));
       expect(requests, 1);
+      expect(client.closeCalls, 1);
+      expect(retryDelays, 1);
     },
   );
 
@@ -506,6 +693,7 @@ void main() {
           );
         }
         sockets.add(socket);
+        _observeSocketOutput(socket);
         final done = Completer<void>();
         closed.add(done);
         var answered = false;
@@ -523,7 +711,7 @@ void main() {
           },
           onDone: () {
             socket.destroy();
-            done.complete();
+            if (!done.isCompleted) done.complete();
           },
           onError: (Object _) {
             socket.destroy();
@@ -575,12 +763,13 @@ void main() {
       Socket? active;
       server.listen((socket) {
         active = socket;
+        _observeSocketOutput(socket);
         entered.complete();
         socket.listen(
           (_) {},
           onDone: () {
             socket.destroy();
-            ended.complete();
+            if (!ended.isCompleted) ended.complete();
           },
           onError: (Object _) {
             socket.destroy();
@@ -599,11 +788,64 @@ void main() {
         await server.close();
       });
       final pending = downloader.download(blobId: 'fixture', size: 4);
-      final failed = expectLater(pending, throwsStateError);
-      await entered.future.timeout(const Duration(seconds: 5));
-      downloader.close();
-      await failed.timeout(const Duration(seconds: 3));
-      await ended.future.timeout(const Duration(seconds: 2));
+      await _assertHandshakeCancellation(
+        downloader,
+        pending,
+        entered.future,
+        ended.future,
+      );
+    },
+  );
+
+  test(
+    'handshake entry failure joins the compiled worker before escaping',
+    () async {
+      // Keep the real TCP backlog without accepting a peer. Entry must fail at
+      // its original five-second bound; retirement must precede that failure.
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final downloader = ModelBlobDownloader(
+        apiKey: 'private-handshake-cleanup',
+        parallelCount: 1,
+        origin: Uri.parse('https://127.0.0.1:${server.port}'),
+      );
+      addTearDown(() async {
+        downloader.close();
+        await server.close();
+      });
+      final pending = downloader.download(blobId: 'fixture', size: 4);
+      var settled = false;
+      Object? terminalError;
+      final observed = pending.then<void>(
+        (_) {
+          settled = true;
+        },
+        onError: (Object error) {
+          settled = true;
+          terminalError = error;
+        },
+      );
+      await expectLater(
+        _assertHandshakeCancellation(
+          downloader,
+          pending,
+          Completer<void>().future,
+          Completer<void>().future,
+        ),
+        throwsA(
+          isA<TimeoutException>().having(
+            (error) => error.duration,
+            'original entry budget',
+            const Duration(seconds: 5),
+          ),
+        ),
+      );
+      expect(
+        settled,
+        isTrue,
+        reason: 'Worker retirement must precede entry failure',
+      );
+      expect(terminalError, isA<StateError>());
+      await observed;
     },
   );
 
@@ -614,6 +856,7 @@ void main() {
     final sockets = <Socket>[];
     server.listen((socket) {
       sockets.add(socket);
+      _observeSocketOutput(socket);
       var replied = false;
       Timer? timer;
       socket.listen(
@@ -634,7 +877,7 @@ void main() {
         onDone: () {
           timer?.cancel();
           socket.destroy();
-          ended.complete();
+          if (!ended.isCompleted) ended.complete();
         },
         onError: (Object _) {
           timer?.cancel();
@@ -685,7 +928,8 @@ void main() {
         request.response.statusCode = 503;
         unawaited(request.response.close());
       });
-      final client = HttpClient();
+      final client = _PreparedRequestClient(HttpClient());
+      var retryDelays = 0;
       addTearDown(() => client.close(force: true));
       final downloader = ModelBlobDownloader(
         client: client,
@@ -694,7 +938,10 @@ void main() {
         origin: Uri.parse('http://127.0.0.1:${server.port}'),
         retryPolicy: ModelDownloadRetryPolicy(
           maxAttempts: 5,
-          delay: (_) => const Duration(seconds: 30),
+          delay: (_) {
+            retryDelays++;
+            return const Duration(seconds: 30);
+          },
         ),
         deadlines: const ModelTransportDeadlines(
           total: Duration(milliseconds: 250),
@@ -704,11 +951,24 @@ void main() {
         downloader.close();
         await server.close(force: true);
       });
+      // Establish the actual connection before measuring the retry budget;
+      // cold connect scheduling is qualified by the separate transport tests.
+      await client
+          .prepare(downloader.downloadUri('fixture'))
+          .timeout(const Duration(seconds: 3));
       await expectLater(
         downloader.download(blobId: 'fixture', size: 4),
-        throwsA(isA<ModelTransportException>()),
+        throwsA(
+          isA<ModelTransportException>().having(
+            (error) => error.failureType,
+            'deadline during retry delay',
+            'TimeoutException',
+          ),
+        ),
       ).timeout(const Duration(seconds: 3));
       expect(requests, 1);
+      expect(client.closeCalls, 1);
+      expect(retryDelays, 1);
     },
   );
 

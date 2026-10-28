@@ -19,6 +19,78 @@ spec.loader.exec_module(gates)
 
 
 class ParallelBuildGatesTest(unittest.TestCase):
+    def test_live_log_arrives_before_the_owner_is_released(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = root / "release"
+            child = (
+                "from pathlib import Path; import time; "
+                "print('actual test is running', flush=True); "
+                "end=time.monotonic()+5\n"
+                f"while not Path({str(release)!r}).exists():\n"
+                " if time.monotonic()>end: raise RuntimeError('release missing')\n"
+                " time.sleep(.01)\n"
+                "print('final unterminated tail',end='',flush=True)\n"
+            )
+            program = (
+                "import importlib.util; from pathlib import Path; "
+                f"s=importlib.util.spec_from_file_location('g',{gates.__file__!r}); "
+                "g=importlib.util.module_from_spec(s); s.loader.exec_module(g); "
+                f"raise SystemExit(g.run_gates({[('core', [sys.executable, '-c', child])]!r},Path({str(root / 'logs')!r})))"
+            )
+            output = root / "combined.log"
+            with output.open("wb") as stream:
+                owner = subprocess.Popen(
+                    [sys.executable, "-c", program], stdout=stream,
+                    stderr=subprocess.STDOUT,
+                )
+                try:
+                    deadline = time.monotonic() + 4
+                    while b"[core] actual test is running\n" not in output.read_bytes():
+                        self.assertIsNone(owner.poll(), output.read_text())
+                        self.assertLess(time.monotonic(), deadline, output.read_text())
+                        time.sleep(.01)
+                    self.assertIsNone(owner.poll())
+                    self.assertFalse(release.exists())
+                    release.touch()
+                    self.assertEqual(owner.wait(timeout=5), 0)
+                finally:
+                    release.touch()
+                    if owner.poll() is None:
+                        owner.kill()
+                        owner.wait(timeout=5)
+            self.assertEqual(output.read_text().count("actual test is running"), 1)
+            self.assertEqual(output.read_text().count("final unterminated tail"), 1)
+            self.assertEqual(
+                (root / "logs/core.log").read_bytes(),
+                b"actual test is running\nfinal unterminated tail",
+            )
+
+    def test_log_decoder_preserves_split_utf8_and_bounds_partial_lines(self):
+        import contextlib
+        import io
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "raw.log"
+            path.write_bytes(b"caf\xc3")
+            log = gates.GateLog("core", path)
+            output = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(output):
+                    log.emit()
+                    self.assertEqual(output.getvalue(), "")
+                    with path.open("ab") as writer:
+                        writer.write(b"\xa9\r" + b"x" * 20000 + b"\xff")
+                    log.emit()
+                    self.assertLess(len(log.pending), 8192)
+                    log.finish()
+                self.assertTrue(output.getvalue().startswith("[core] café\n"))
+                self.assertEqual(output.getvalue().count("x"), 20000)
+                self.assertTrue(output.getvalue().endswith("\ufffd\n"))
+                self.assertEqual(path.read_bytes(), b"caf\xc3\xa9\r" + b"x" * 20000 + b"\xff")
+            finally:
+                log.close()
+
     def test_later_failure_is_printed_once_before_held_gate_releases(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

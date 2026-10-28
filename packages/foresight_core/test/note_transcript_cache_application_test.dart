@@ -8,6 +8,9 @@ import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:io';
+import 'dart:ffi';
+import 'package:foresight_core/src/audio_models.dart';
+import 'fixtures/durable_speech.dart';
 
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
@@ -505,11 +508,23 @@ void main() {
         final id = store.meeting('Live meeting');
         store.saveMeetingNotes(id, 'Raw note');
         store.transcript(id, 'First evidence', true, 0, 20, 'microphone');
+        final capture = DurableSpeechFixture(
+          app,
+          store,
+          DynamicLibrary.open(library),
+          text: 'Second evidence',
+        );
         try {
           await app.startRecording(id);
           await embeddings.embeddingEntered.future;
-          // This is the actual final-transcript callback installed by Application.
-          app.recording!.transcript('Second evidence', 20, 40, 'playback');
+          // Real saved-WAV segmentation and ASR commit reach Application's
+          // durable notification; no direct transcript callback is injected.
+          capture.voice(AudioSource.playback);
+          await eventually(
+            () => store
+                .rows("SELECT 1 FROM transcript WHERE text='Second evidence'")
+                .isNotEmpty,
+          );
           await app.enhanceNotes(id, isLive: true);
           expect(embeddings.texts.first, 'Microphone: First evidence');
           expect(
@@ -527,6 +542,7 @@ void main() {
             contains('First evidence\n\nSecond evidence'),
           );
         } finally {
+          await capture.close();
           if (previous == null) {
             runtimeConfiguration.environment.remove('FORESIGHT_NATIVE');
           } else {

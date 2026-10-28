@@ -51,6 +51,7 @@ NATIVE_RUNTIME_PATHS = (
     "build/native/diagnostic-sql-inputs.json",
     "build/native/runtime-support-build.json",
     "build/native/foresight-audio",
+    "build/native/native_recording_capture_test",
     "build/services/helper/ForesightHelper",
     "build/services/helper/ForesightHelperTest",
     "build/services/helper/model_worker_fixture",

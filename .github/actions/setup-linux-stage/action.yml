@@ -23,7 +23,7 @@ runs:
         git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel
     - name: Install Linux application toolchain
       shell: bash
-      run: pacman -S --needed --noconfirm cmake ninja gcc grpc protobuf nlohmann-json sqlite python python-pip uv clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which github-cli
+      run: pacman -S --needed --noconfirm cmake ninja gcc grpc protobuf nlohmann-json sqlite python python-pip uv clang gtk3 pkgconf pipewire unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which github-cli
     # Descriptor audits use the reviewed compiler. C++ bindings still use the
     # protobuf::protoc imported target paired with Arch's Protobuf library.
     - name: Install pinned descriptor compiler

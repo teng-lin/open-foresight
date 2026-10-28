@@ -17,6 +17,7 @@ from tests.test_integration_application import (
 )
 from tools import ci_preview_audit as audit
 from tools import ci_artifacts as artifacts
+from tools.ci_producer_trust import evidence_job_name
 
 LABEL = "nightly.20261019.3"
 MONDAY = datetime(2026, 10, 19, tzinfo=timezone.utc)
@@ -42,7 +43,7 @@ def test_audit_build_job_names_resolve_to_actual_reusable_workflow_graph():
 
     build = preview["jobs"]["build"]
     actual = names(yaml.safe_load((root / build["uses"].removeprefix("./")).read_text()), "build / ")
-    assert {name for name in audit.NIGHTLY_REQUIRED if name.startswith("build / ")} <= actual
+    assert {name for name in audit.NIGHTLY_REQUIRED if name.startswith("build / ")} <= {evidence_job_name({"name": name}) for name in actual}
 
 
 @pytest.fixture

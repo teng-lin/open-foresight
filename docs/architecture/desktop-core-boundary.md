@@ -102,5 +102,6 @@ Keep the workaround until an upstream fix has been verified with
 `helper_channel_test.dart` and `helper_transport_test.dart`, including peer EOF
 before queued writes, synchronous and asynchronous sink failures, reentrant
 cleanup, cancellation, headers/compression and normal half-close responses.
-The local [upstream report draft](../upstream/grpc-helper-eof-report-draft.md)
-records the search and reproduction scope. No upstream message has been sent.
+The regression coverage is in
+[`helper_channel_test.dart`](../../packages/foresight_core/test/helper_channel_test.dart)
+and [`helper_transport_test.dart`](../../packages/foresight_core/test/helper_transport_test.dart).

@@ -33,7 +33,9 @@ Map<String, dynamic> minimal(Operation operation) {
       ],
       ArgumentKind.vectors || ArgumentKind.points => <String, dynamic>{},
       ArgumentKind.clusters => <Object?>[],
-      ArgumentKind.trueSwitch || ArgumentKind.falseSwitch => true,
+      ArgumentKind.boolean ||
+      ArgumentKind.trueSwitch ||
+      ArgumentKind.falseSwitch => true,
     };
   }
   if (operation == Operation.googleConfigure) result['path'] = 'credentials';
@@ -92,6 +94,22 @@ void main() {
       'idempotency_key': false,
       'tools': <Object?>[],
     };
+    for (final operation in Operation.values.where(
+      (v) => v.wire.startsWith('recordings.'),
+    )) {
+      baseline[operation.wire] = {
+        'requires_helper': false,
+        'approval': false,
+        'approval_web_search': false,
+        'notifies_changes': !const [
+          'recordings.read',
+          'recordings.transcript_target',
+        ].contains(operation.wire),
+        'workspace_epoch': true,
+        'idempotency_key': false,
+        'tools': <Object?>[],
+      };
+    }
     expect(
       Operation.values.map((operation) => operation.wire).toSet(),
       baseline.keys.toSet(),

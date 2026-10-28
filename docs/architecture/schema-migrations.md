@@ -65,8 +65,9 @@ the schema.
 | 21 | Ordinary deletion routes history erasure to `internal.backupErasurePending`; legacy privacy markers keep their full-cleanup meaning |
 | 22 | Meeting transcript index outbox: source mapping, progress, changes, segments, deletes, batches, triggers, `source_contents` view and lookup indexes |
 | 23 | Typed answer metadata, conversation and proactive scopes, and ordered source selections with foreign keys; malformed and orphan legacy values use a bounded compatibility quarantine |
+| 24 | Durable recording sessions/spans, preallocated chunk publication identities, representations, segmentation cursors, ASR leases/jobs, transcript audio links, reader references and media deletion/generation fences |
 
-`ApplicationMigrations.run` defines steps 1–23 and throws for any other
+`ApplicationMigrations.run` defines steps 1–24 and throws for any other
 version. `Store.schemaVersion` aliases `applicationSchemaVersion` from
 `persistence/application_schema.dart`; `tools/check_architecture_facts.py`
 checks this table against the defined steps.

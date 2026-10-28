@@ -20,6 +20,10 @@ import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 import 'package:foresight_core/src/remote_domain.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/service.dart';
+import 'package:foresight_core/src/application_services/recording_audio_work.dart';
+import 'package:foresight_core/src/audio_models.dart';
+import 'package:foresight_core/src/persistence/recording_media.dart';
+import 'package:foresight_core/src/persistence/audio_store.dart';
 import 'package:foresight_core/src/store_read_queries.dart';
 import 'package:foresight_test_support/helper_adoption.dart';
 import 'package:foresight_test_support/native_fixture.dart';
@@ -27,6 +31,38 @@ import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
+import 'fixtures/durable_capture_routes.dart';
+
+// This fixture exercises status delivery, with actual durable SQL preparation
+// and controlled retained silence. It starts no background speech jobs.
+final class _StatusCaptureWork implements RecordingAudioWorkPort {
+  _StatusCaptureWork(this.media);
+  final RecordingMedia media;
+  @override
+  void prepareSpan(
+    AudioSpan span, {
+    required String modelRevision,
+    required Map<AudioSource, int> sourceStarts,
+  }) {
+    for (final entry in sourceStarts.entries) {
+      media.audio.initializeSegmentation(
+        sessionId: span.sessionId,
+        spanId: span.id,
+        source: entry.key,
+        settingsRevision: 'status-fixture-v1',
+        modelRevision: modelRevision,
+        initialSample: entry.value,
+      );
+    }
+  }
+
+  @override
+  void published(AudioChunk chunk) {}
+  @override
+  void spanSealed(AudioSpan span) {}
+  @override
+  void captureStopped(AudioSession session) {}
+}
 
 class _HeldTimer implements Timer {
   _HeldTimer(this.delay, this.callback);
@@ -272,6 +308,31 @@ void main() {
       );
       runtimeConfiguration.environment['FORESIGHT_NATIVE'] = library;
       final store = service.domain.store;
+      final media = RecordingMedia.open(
+        store,
+        ownerGeneration: AudioStore.newIdentity(),
+      );
+      final platform = CapturePlatformFixture(
+        media,
+        onCreated: (route) {
+          // Accepted silence proves acquisition before pause is available.
+          route.audio(
+            media.audio
+                .spans(route.reservations.first.sessionId)
+                .singleWhere((s) => s.id == route.reservations.first.spanId)
+                .captureStartUs,
+          );
+        },
+      );
+      service.application.configureDurableAudio(
+        media,
+        _StatusCaptureWork(media),
+        capturePlatform: platform,
+      );
+      addTearDown(() async {
+        await service.close();
+        media.close();
+      });
       store.setPreference('liveEnhance', 'false');
       final model = File('${root.path}/speech')
         ..writeAsStringSync('ABI fixture');
@@ -283,6 +344,7 @@ void main() {
         ('meetings.resume', true, false),
         ('meetings.stop', false, false),
       ]) {
+        platform.clock += 1000000;
         snapshots.clear();
         service.application.changed();
         await Future<void>.delayed(Duration.zero);
@@ -666,6 +728,36 @@ void main() {
             'INSERT INTO meeting_index_deletes(meeting_id,segment_id,channel,created) VALUES(1,2,0,1)',
         'meeting_index_batches':
             "INSERT INTO meeting_index_batches(meeting_id,workspace_epoch,metadata,created) VALUES(1,'fixture','{}',1)",
+        'audio_storage_generation':
+            "UPDATE audio_storage_generation SET generation='audio-generation' WHERE singleton=1",
+        'audio_erasure_intents':
+            "INSERT INTO audio_erasure_intents VALUES('deleted-session','old-generation',1)",
+        'recording_sessions':
+            "INSERT INTO recording_sessions(id,meeting_id,workspace_epoch,storage_generation,started_wall_ms,capture_state) VALUES('audio-session',1,'fixture','audio-generation',1,'recording')",
+        'recording_spans':
+            "INSERT INTO recording_spans(id,session_id,ordinal,capture_start_us,playback_start_us,wall_anchor_ms) VALUES('audio-span','audio-session',0,0,0,1)",
+        'audio_source_clocks':
+            "INSERT INTO audio_source_clocks VALUES('audio-span','microphone',0,'unavailable',NULL,NULL)",
+        'audio_chunk_publications':
+            "INSERT INTO audio_chunk_publications VALUES('audio-chunk','audio-session','audio-span','microphone',0,'fixture.wav','publication-token','audio-generation')",
+        'audio_chunks':
+            "INSERT INTO audio_chunks(id,session_id,span_id,source,sequence,relative_path,publication_token,storage_generation,sample_start,sample_count,sample_rate,channels,capture_start_us,capture_end_us,state) VALUES('audio-chunk','audio-session','audio-span','microphone',0,'fixture.wav','publication-token','audio-generation',0,48000,48000,1,0,1000000,'published')",
+        'audio_representations':
+            "INSERT INTO audio_representations(id,chunk_id,codec,container,settings_revision,relative_path,byte_length,sha256,decoded_samples,state,validated) VALUES('audio-raw','audio-chunk','pcm_s16le','wav','recording-wav-v1','fixture.wav',96196,'digest',48000,'published',1)",
+        'audio_segmentation_progress':
+            "INSERT INTO audio_segmentation_progress(session_id,source,span_id,settings_revision,model_revision,cursor_sample,retain_from_sample) VALUES('audio-session','microphone','audio-span','vad-v1','model-v1',48000,0)",
+        'audio_asr_jobs':
+            "INSERT INTO audio_asr_jobs(id,session_id,span_id,source,sample_start,sample_end,owned_start,owned_end,model_revision,settings_revision,state) VALUES('audio-asr','audio-session','audio-span','microphone',0,48000,0,48000,'model-v1','vad-v1','pending')",
+        'audio_asr_job_chunks':
+            "INSERT INTO audio_asr_job_chunks VALUES('audio-asr','audio-chunk')",
+        'audio_transform_jobs':
+            "INSERT INTO audio_transform_jobs(id,session_id,kind,input_identity,codec,container,settings_revision,settings,state) VALUES('audio-transform','audio-session','compression','input-fingerprint','opus','ogg','opus-v1','{}','pending')",
+        'audio_transform_inputs':
+            "INSERT INTO audio_transform_inputs(job_id,position,representation_id) VALUES('audio-transform',0,'audio-raw')",
+        'transcript_audio_links':
+            "INSERT INTO transcript_audio_links VALUES(1,'audio-asr',0,0,'microphone',0,48000)",
+        'audio_media_references':
+            "INSERT INTO audio_media_references VALUES('audio-reader','audio-raw','reader-generation','playback')",
       };
       final tables = store
           .rows(

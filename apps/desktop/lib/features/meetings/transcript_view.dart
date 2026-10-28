@@ -16,6 +16,7 @@ class MeetingTranscriptPanel extends StatelessWidget {
     required this.onImportAttachments,
     required this.onCopy,
     required this.onQuestion,
+    this.onListen,
   }) : rows = List.unmodifiable(rows),
        provisional = Map.unmodifiable(provisional);
   final int id;
@@ -23,6 +24,7 @@ class MeetingTranscriptPanel extends StatelessWidget {
   final Map<String, String> provisional;
   final bool questions, showProvisional, hasAttachments, canAnswer;
   final VoidCallback? onImportTranscript, onImportAttachments;
+  final ValueChanged<int>? onListen;
   final ValueChanged<String> onCopy, onQuestion;
 
   Widget _header(BuildContext context) => Padding(
@@ -107,6 +109,29 @@ class MeetingTranscriptPanel extends StatelessWidget {
                           ],
                         ),
                         style: Theme.of(context).textTheme.bodyLarge,
+                        contextMenuBuilder: (context, state) {
+                          final selection = state.textEditingValue.selection;
+                          final row = _selectedTranscript(
+                            rows,
+                            selection.start,
+                          );
+                          return AdaptiveTextSelectionToolbar.buttonItems(
+                            anchors: state.contextMenuAnchors,
+                            buttonItems: [
+                              ...state.contextMenuButtonItems,
+                              if (onListen != null &&
+                                  row != null &&
+                                  !selection.isCollapsed)
+                                ContextMenuButtonItem(
+                                  label: 'Listen to this section',
+                                  onPressed: () {
+                                    ContextMenuController.removeAny();
+                                    onListen!(row);
+                                  },
+                                ),
+                            ],
+                          );
+                        },
                       ),
                     if (questions)
                       for (final t in displayed)
@@ -146,4 +171,17 @@ class MeetingTranscriptPanel extends StatelessWidget {
       ],
     );
   }
+}
+
+// The selected text chooses a transcript identity only. The service resolves
+// that identity's immutable audio link; UI text offsets never become timestamps.
+int? _selectedTranscript(List<TranscriptSegment> rows, int offset) {
+  if (offset < 0) return null;
+  var position = 0;
+  for (final row in rows) {
+    position += MeetingSpeaker.fromSource(row.source).label.length + 1;
+    if (offset < position + row.text.length) return row.id;
+    position += row.text.length + 2;
+  }
+  return null;
 }

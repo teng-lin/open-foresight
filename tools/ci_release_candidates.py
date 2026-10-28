@@ -14,7 +14,7 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import ci_artifacts as artifacts  # noqa: E402
 from tools.app_version import PUBSPEC, SOURCE  # noqa: E402
-from tools.ci_producer_trust import PRODUCERS  # noqa: E402
+from tools.ci_producer_trust import PRODUCERS, evidence_job_name  # noqa: E402
 from tools.github_job_attempts import canonical_jobs  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -121,7 +121,7 @@ def original_jobs(repository, run):
 
 
 def latest(jobs, name):
-    matches = [job for job in jobs if job.get("name") == name]
+    matches = [job for job in jobs if evidence_job_name(job) == name]
     if not matches or any(not positive(job.get("run_attempt")) for job in matches):
         raise ValueError(f"Missing original job/attempt: {name}")
     attempt = max(job["run_attempt"] for job in matches)

@@ -10,6 +10,10 @@ import 'package:foresight_core/src/service.dart';
 import 'package:foresight_core/src/service_diagnostics.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/persistence/restore_command.dart';
+import 'package:foresight_core/src/persistence/audio_backup_command.dart';
+import 'package:foresight_core/src/persistence/audio_backup_owner.dart';
+import 'package:foresight_core/src/persistence/audio_backup_policy.dart';
+import 'package:foresight_core/src/persistence/audio_profile_backups.dart';
 import 'package:foresight_core/src/service_compatibility.dart';
 import 'package:foresight_core/src/service_socket.dart' show probeSocketPath;
 
@@ -46,6 +50,10 @@ Future<void> main(List<String> args) async {
       return;
     }
     await runModelTransportWorker();
+    return;
+  }
+  if (isAudioBackupInvocation(args)) {
+    await _runAudioBackupUtility(args);
     return;
   }
   if (isRestoreInvocation(args)) {
@@ -242,6 +250,60 @@ Future<void> main(List<String> args) async {
     await service?.close();
     final result = await diagnostics?.close();
     if (result?.requiresExplicitExit == true) exit(exitCode);
+  }
+}
+
+Future<void> _runAudioBackupUtility(List<String> args) async {
+  final command = AudioBackupCommand.parse(args, stderr);
+  if (command == null) {
+    exitCode = 64;
+    return;
+  }
+  LoggingSession? diagnostics;
+  var explicitExit = false;
+  try {
+    final runtime = ApplicationRuntimeBootstrap.prepare(DiagnosticHost.service);
+    diagnostics = await runtime.startDiagnostics(transient: true);
+    final configuration = runtimeConfiguration.snapshot();
+    final profile = ProfilePaths.resolve(configuration.environment);
+    diagnostics.selectProfile(profile.data);
+    exitCode = await runAudioBackupCommand(
+      command,
+      backups: AudioProfileBackups(
+        forbiddenRoots: audioBackupForbiddenRoots(
+          configuration: configuration,
+          profileDirectory: profile.data,
+          runtimeDirectory: profile.runtime,
+        ),
+      ),
+      current: () => true,
+      out: stdout,
+      err: stderr,
+      withOwner: command.mode == 'create'
+          ? offlineAudioBackupOwner(
+              profile: profile,
+              configuration: configuration,
+              ownershipUnconfirmed: () => explicitExit = true,
+            )
+          : null,
+    );
+  } catch (error) {
+    stderr.writeln('The audio backup command could not start: $error');
+    exitCode = 1;
+  } finally {
+    try {
+      explicitExit =
+          ((await diagnostics?.close())?.requiresExplicitExit ?? false) ||
+          explicitExit;
+    } catch (error) {
+      stderr.writeln('Diagnostic logging did not shut down cleanly: $error');
+      explicitExit = true;
+    }
+    if (explicitExit) {
+      await stdout.flush();
+      await stderr.flush();
+      exit(exitCode);
+    }
   }
 }
 
