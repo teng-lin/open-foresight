@@ -241,20 +241,61 @@ void main() {
     );
   });
 
-  test('rejects invalid or overlapping runs', () {
+  test(
+    'a sample counter reset discards aliasing history instead of throwing',
+    () {
+      final timeline = CaptureTimeline();
+      second(timeline, mic, 0, startUs: 0);
+      second(timeline, mic, 1, startUs: 1000000);
+      expect(timeline.counterResets(mic), 0);
+      // Device recovery restarts the counter at zero.
+      final result = timeline.addRun(
+        mic,
+        sampleStart: 0,
+        sampleCount: 48000,
+        sampleRate: 48000,
+        startUs: 9000000,
+        endUs: 10000000,
+      );
+      expect(result, CaptureRunResult.counterReset);
+      expect(timeline.counterResets(mic), 1);
+      expect(timeline.runCount(mic), 1);
+      expect(
+        timeline.map(mic, sampleStart: 0, sampleEnd: 100)!.startUs,
+        9000000,
+      );
+      // The other channel is untouched.
+      second(timeline, remote, 0, startUs: 0);
+      expect(timeline.counterResets(remote), 0);
+    },
+  );
+
+  test('says why a range does not map', () {
+    final timeline = CaptureTimeline();
+    TimelineMiss? miss(int a, int b) =>
+        timeline.mapOutcome(mic, sampleStart: a, sampleEnd: b).miss;
+    expect(miss(0, 10), TimelineMiss.unknownSource);
+    second(timeline, mic, 0, startUs: 0);
+    timeline.addRun(
+      mic,
+      sampleStart: 60000,
+      sampleCount: 48000,
+      sampleRate: 48000,
+      startUs: 2000000,
+      endUs: 3000000,
+    );
+    expect(miss(0, 10), isNull);
+    expect(miss(40000, 70000), TimelineMiss.sampleGap);
+    expect(miss(200000, 300000), TimelineMiss.notYetCaptured);
+    timeline.releaseBefore(mic, 48000);
+    expect(miss(0, 10), TimelineMiss.trimmed);
+    timeline.releaseBefore(mic, 1 << 40);
+    expect(miss(0, 10), TimelineMiss.trimmed);
+  });
+
+  test('rejects invalid runs', () {
     final timeline = CaptureTimeline();
     second(timeline, mic, 0, startUs: 0);
-    expect(
-      () => timeline.addRun(
-        mic,
-        sampleStart: 47999,
-        sampleCount: 10,
-        sampleRate: 48000,
-        startUs: 1,
-        endUs: 2,
-      ),
-      throwsArgumentError,
-    );
     for (final bad in [
       (48000, 10, 48000, 5, 4), // end before start
       (48000, 0, 48000, 0, 1), // no samples

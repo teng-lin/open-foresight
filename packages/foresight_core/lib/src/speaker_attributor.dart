@@ -19,7 +19,10 @@ import 'speaker_observation.dart';
 
 const speakerAttributionPolicyVersion = 'attr-1';
 
-enum AttributionState { named, unknown, multiple, stale, unavailable }
+/// Outcome of one attribution query. The persistence layer's
+/// `AttributionState` maps `named` to `attributed` and shares the other four
+/// names; this enum is deliberately distinct so both can be imported together.
+enum SpeakerDecisionState { named, unknown, multiple, stale, unavailable }
 
 /// Tunable attribution inputs. Lag is the measured delay between speech and
 /// its indicator, per evidence method; it is zero until measured.
@@ -100,7 +103,7 @@ final class AttributionDecision {
     this.displayName,
     this.method,
   });
-  final AttributionState state;
+  final SpeakerDecisionState state;
   final String? participantRef, displayName;
   final SpeakerEvidenceMethod? method;
   final AttributionEvidence evidence;
@@ -145,11 +148,9 @@ final class _Segment {
       if (!refs.contains(speaker.ref)) continue;
       final participant = read.participant(speaker.ref)!;
       names[speaker.ref] = participant.name;
-      if (participant.isSelf) {
-        selfRefs.add(speaker.ref);
-      } else {
-        selfRefs.remove(speaker.ref);
-      }
+      // Sticky: a participant ever marked as the local user within the
+      // segment keeps the whole segment from naming remote audio.
+      if (participant.isSelf) selfRefs.add(speaker.ref);
     }
   }
 }
@@ -225,8 +226,9 @@ final class ObservationHistory {
     }
     _lastCompleteEndUs = read.readEndUs;
     final refs = [for (final speaker in read.speakers) speaker.ref]..sort();
+    // A rename starts a new segment so a name always describes its interval.
     final key =
-        '${refs.length}:${refs.take(_maxRefsPerSegment).join('\u0000')}';
+        '${refs.length}:${refs.take(_maxRefsPerSegment).map((ref) => '$ref\u0001${read.participant(ref)!.name}').join('\u0000')}';
     final last = _segments.isEmpty ? null : _segments.last;
     if (last != null && last.breakAfter == _Break.none) {
       if (read.readStartUs - last.lastEndUs > maxReadGapUs) {
@@ -252,6 +254,16 @@ final class ObservationHistory {
   /// last complete read, and the earliest open claim is kept.
   void addUnavailable({required int sinceUs, required String reason}) =>
       _beginUnavailable(sinceUs, reason);
+
+  /// A new helper process (restart or new session) is reporting. Its clock
+  /// readings are unrelated to the last helper's ordering, so the ordering
+  /// guard restarts, and a blind period separates the two helpers' reads.
+  void beginEpoch() {
+    _latestReadStartUs = null;
+    if (_segments.isNotEmpty) {
+      _beginUnavailable(_lastCompleteEndUs ?? 0, 'observer_restart');
+    }
+  }
 
   /// Forget reads that ended before [us] once no queued work can need them.
   void releaseBefore(int us) {
@@ -316,17 +328,22 @@ final class SpeakerAttributor {
     ObservationHistory history, {
     required AudioSource source,
     required MappedAudioRange? mapped,
+    String missReason = 'timeline_unavailable',
   }) {
     if (source == AudioSource.microphone) {
       // A microphone may carry several people; the remote highlight says
       // nothing about it.
-      return _plain(AttributionState.unknown, 'microphone_channel', mapped);
+      return _plain(SpeakerDecisionState.unknown, 'microphone_channel', mapped);
     }
     if (mapped == null) {
-      return _plain(AttributionState.unknown, 'timeline_unavailable', null);
+      return _plain(SpeakerDecisionState.unknown, missReason, null);
     }
     if (mapped.hasDiscontinuity) {
-      return _plain(AttributionState.unknown, 'capture_discontinuity', mapped);
+      return _plain(
+        SpeakerDecisionState.unknown,
+        'capture_discontinuity',
+        mapped,
+      );
     }
     final margin = mapped.uncertaintyUs + policy.boundaryMarginUs;
     final start = mapped.startUs - margin;
@@ -334,7 +351,13 @@ final class SpeakerAttributor {
 
     final blind = _blindOverlap(history, start, end);
     if (blind != null) {
-      return _verdict(AttributionState.unavailable, blind, mapped, start, end);
+      return _verdict(
+        SpeakerDecisionState.unavailable,
+        blind,
+        mapped,
+        start,
+        end,
+      );
     }
     final regions = _regions(history);
     final overlapped = [
@@ -346,7 +369,7 @@ final class SpeakerAttributor {
         case _RegionType.unavailable:
           final reason = region.segment!.breakReason;
           return _verdict(
-            AttributionState.unavailable,
+            SpeakerDecisionState.unavailable,
             reason.isEmpty ? 'observer_unavailable' : reason,
             mapped,
             start,
@@ -354,7 +377,7 @@ final class SpeakerAttributor {
           );
         case _RegionType.hole:
           return _verdict(
-            AttributionState.stale,
+            SpeakerDecisionState.stale,
             'read_gap',
             mapped,
             start,
@@ -362,7 +385,7 @@ final class SpeakerAttributor {
           );
         case _RegionType.after:
           return _verdict(
-            AttributionState.stale,
+            SpeakerDecisionState.stale,
             'history_ends',
             mapped,
             start,
@@ -370,7 +393,7 @@ final class SpeakerAttributor {
           );
         case _RegionType.before:
           return _verdict(
-            AttributionState.unknown,
+            SpeakerDecisionState.unknown,
             'no_history',
             mapped,
             start,
@@ -398,7 +421,11 @@ final class SpeakerAttributor {
       final to = interval.endUs == null
           ? _positiveInfinity
           : interval.endUs! - minLag;
-      if (from < end && to > start) return interval.reason;
+      if (from < end && to > start) {
+        return interval.reason.isEmpty
+            ? 'observer_unavailable'
+            : interval.reason;
+      }
     }
     return null;
   }
@@ -416,6 +443,14 @@ final class SpeakerAttributor {
       return const [
         _Region(_RegionType.before, _negativeInfinity, _positiveInfinity),
       ];
+    }
+    // laterStart[i]: the earliest lag-adjusted first read among segments i..end.
+    final laterStart = List<int>.filled(segments.length + 1, _positiveInfinity);
+    for (var i = segments.length - 1; i >= 0; i--) {
+      laterStart[i] = math.min(
+        laterStart[i + 1],
+        segments[i].firstEndUs - _lagOf(segments[i]),
+      );
     }
     final regions = <_Region>[];
     var cursor = segments.first.firstEndUs - _lagOf(segments.first);
@@ -441,7 +476,14 @@ final class SpeakerAttributor {
       }
       final next = segments[i + 1];
       final nextFirst = next.firstEndUs - _lagOf(next);
-      final certainEnd = math.max(math.min(lastRead, nextFirst), cursor);
+      // A later segment with a larger lag can start earlier on the audio clock
+      // than this one ends, even beyond its immediate successor: certainty
+      // ends at the earliest such start.
+      final earliestLater = laterStart[i + 1];
+      final certainEnd = math.max(
+        math.min(lastRead, math.min(nextFirst, earliestLater)),
+        cursor,
+      );
       final windowEnd = math.max(math.max(lastRead, nextFirst), certainEnd);
       regions
         ..add(
@@ -476,7 +518,7 @@ final class SpeakerAttributor {
   ) {
     if (segment.speakerCount == 0) {
       return _verdict(
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'no_speaker_observed',
         mapped,
         start,
@@ -486,7 +528,7 @@ final class SpeakerAttributor {
     }
     if (!_supported(segment)) {
       return _verdict(
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'unsupported_evidence',
         mapped,
         start,
@@ -496,7 +538,7 @@ final class SpeakerAttributor {
     }
     if (segment.speakerCount > 1) {
       return _verdict(
-        AttributionState.multiple,
+        SpeakerDecisionState.multiple,
         'concurrent_speakers',
         mapped,
         start,
@@ -507,7 +549,7 @@ final class SpeakerAttributor {
     final ref = segment.refs.single;
     if (segment.selfRefs.contains(ref)) {
       return _verdict(
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'self_active',
         mapped,
         start,
@@ -517,7 +559,7 @@ final class SpeakerAttributor {
     }
     final method = _weakest(segment.methods);
     return AttributionDecision(
-      state: AttributionState.named,
+      state: SpeakerDecisionState.named,
       participantRef: ref,
       displayName: segment.names[ref],
       method: method,
@@ -562,7 +604,7 @@ final class SpeakerAttributor {
     }
     if (concurrent) {
       return _verdict(
-        AttributionState.multiple,
+        SpeakerDecisionState.multiple,
         'concurrent_speakers',
         mapped,
         start,
@@ -570,9 +612,29 @@ final class SpeakerAttributor {
         segments: involved,
       );
     }
+    if (refs.length == 1 &&
+        involved.length > 1 &&
+        involved.every(
+          (segment) =>
+              segment.speakerCount == 1 &&
+              _supported(segment) &&
+              segment.refs.single == refs.single,
+        )) {
+      // The same participant on both sides of a rename: not a handover, but
+      // no single name describes the whole window.
+      return _verdict(
+        SpeakerDecisionState.unknown,
+        'name_change',
+        mapped,
+        start,
+        end,
+        segments: involved,
+        overlapped: overlapped,
+      );
+    }
     return refs.length > 1
         ? _verdict(
-            AttributionState.multiple,
+            SpeakerDecisionState.multiple,
             'speaker_change',
             mapped,
             start,
@@ -581,7 +643,7 @@ final class SpeakerAttributor {
             overlapped: overlapped,
           )
         : _verdict(
-            AttributionState.unknown,
+            SpeakerDecisionState.unknown,
             'transition',
             mapped,
             start,
@@ -592,7 +654,7 @@ final class SpeakerAttributor {
   }
 
   AttributionDecision _plain(
-    AttributionState state,
+    SpeakerDecisionState state,
     String reason,
     MappedAudioRange? mapped,
   ) => AttributionDecision(
@@ -605,7 +667,7 @@ final class SpeakerAttributor {
   );
 
   AttributionDecision _verdict(
-    AttributionState state,
+    SpeakerDecisionState state,
     String reason,
     MappedAudioRange mapped,
     int start,
@@ -676,13 +738,19 @@ final class SpeakerAttributionSession {
     SpeakerAttributionPolicy policy = const SpeakerAttributionPolicy(),
     CaptureTimeline? timeline,
     ObservationHistory? history,
+    int? maxReadGapUs,
   }) : timeline = timeline ?? CaptureTimeline(),
-       history = history ?? ObservationHistory(),
+       history =
+           history ??
+           (maxReadGapUs == null
+               ? ObservationHistory()
+               : ObservationHistory(maxReadGapUs: maxReadGapUs)),
        attributor = SpeakerAttributor(policy);
   final String session;
   final CaptureTimeline timeline;
   final ObservationHistory history;
   final SpeakerAttributor attributor;
+  int _epoch = -1, _staleEvents = 0;
 
   /// Observations of another session are ignored (returns false).
   bool addObservation(SpeakerObservation observation) =>
@@ -691,18 +759,40 @@ final class SpeakerAttributionSession {
   void addUnavailable({required int sinceUs, required String reason}) =>
       history.addUnavailable(sinceUs: sinceUs, reason: reason);
 
-  /// Feed one event of a [MeetingSpeakerObserver]. A restart or failure is a
-  /// blind period that the next complete read ends, so a restarted helper's
-  /// references are never joined to the earlier helper's reads.
+  /// Reads the history refused as older than one it already holds. A
+  /// persistently growing count means the observer's clock mapping is wrong.
+  int get rejectedObservationCount => history.rejectedCount;
+
+  /// Events from a helper epoch older than one already seen, ignored.
+  int get staleEventCount => _staleEvents;
+
+  bool _enter(int epoch) {
+    if (epoch < _epoch) {
+      _staleEvents++;
+      return false;
+    }
+    if (epoch > _epoch) {
+      if (_epoch >= 0) history.beginEpoch();
+      _epoch = epoch;
+    }
+    return true;
+  }
+
+  /// Feed one event of a [MeetingSpeakerObserver]. A restart, failure or stop
+  /// is a blind period that the next complete read ends; references are
+  /// qualified per helper epoch, and a new epoch also restarts the history's
+  /// read-ordering guard, so one helper's reads never join another's.
   void apply(SpeakerObserverEvent event) {
     switch (event) {
-      case ObservationEvent(:final observation):
-        addObservation(observation);
-      case UnavailableEvent(:final sinceUs, :final reason):
-        addUnavailable(sinceUs: sinceUs, reason: reason);
-      case ObserverStateEvent(:final status, :final atUs):
+      case ObservationEvent(:final observation, :final epoch):
+        if (_enter(epoch)) addObservation(observation);
+      case UnavailableEvent(:final sinceUs, :final reason, :final epoch):
+        if (_enter(epoch)) addUnavailable(sinceUs: sinceUs, reason: reason);
+      case ObserverStateEvent(:final status, :final atUs, :final epoch):
+        if (!_enter(epoch)) return;
         if (status == ObserverStatus.restarting ||
-            status == ObserverStatus.failed) {
+            status == ObserverStatus.failed ||
+            status == ObserverStatus.stopped) {
           addUnavailable(sinceUs: atUs, reason: 'observer_${status.name}');
         }
     }
@@ -715,13 +805,29 @@ final class SpeakerAttributionSession {
     AudioSource source, {
     required int sampleStart,
     required int sampleEnd,
-  }) => attributor.attribute(
-    history,
-    source: source,
-    mapped: timeline.map(
+  }) {
+    if (sampleStart < 0 || sampleEnd <= sampleStart) {
+      return const AttributionDecision(
+        state: SpeakerDecisionState.unknown,
+        evidence: AttributionEvidence(reason: 'empty_range'),
+      );
+    }
+    final outcome = timeline.mapOutcome(
       source,
       sampleStart: sampleStart,
       sampleEnd: sampleEnd,
-    ),
-  );
+    );
+    return attributor.attribute(
+      history,
+      source: source,
+      mapped: outcome.range,
+      missReason: switch (outcome.miss) {
+        TimelineMiss.unknownSource => 'timeline_unknown_source',
+        TimelineMiss.trimmed => 'timeline_trimmed',
+        TimelineMiss.notYetCaptured => 'timeline_not_captured',
+        TimelineMiss.sampleGap => 'timeline_gap',
+        null => 'timeline_unavailable',
+      },
+    );
+  }
 }

@@ -75,9 +75,37 @@ final class _Run {
       (sample - sampleStart) * Duration.microsecondsPerSecond ~/ sampleRate;
 }
 
+/// Why a sample range could not be placed on the monotonic clock.
+enum TimelineMiss {
+  /// No run was ever recorded for the channel.
+  unknownSource,
+
+  /// The range starts before the oldest retained run: trimmed or released.
+  trimmed,
+
+  /// The range lies beyond the newest recorded sample.
+  notYetCaptured,
+
+  /// A hole in the sample counter lies inside the range.
+  sampleGap,
+}
+
+typedef TimelineMapOutcome = ({MappedAudioRange? range, TimelineMiss? miss});
+
+/// Result of recording a run.
+enum CaptureRunResult {
+  added,
+
+  /// The sample counter went backward (device recovery restarted it). Earlier
+  /// runs would alias the new counter values, so they were discarded.
+  counterReset,
+}
+
 final class _Channel {
   final List<_Run> runs = [];
   int head = 0;
+  int resets = 0;
+  bool recorded = false;
   bool pendingDiscontinuity = false;
 
   int get length => runs.length - head;
@@ -132,7 +160,7 @@ final class CaptureTimeline {
   /// Record that [sampleCount] samples starting at counter [sampleStart] were
   /// captured over [startUs, endUs] on the monotonic clock. [uncertaintyUs] is
   /// the anchor's own imprecision. Runs arrive in increasing sample order.
-  void addRun(
+  CaptureRunResult addRun(
     AudioSource source, {
     required int sampleStart,
     required int sampleCount,
@@ -151,9 +179,18 @@ final class CaptureTimeline {
       throw ArgumentError('Invalid capture run');
     }
     final channel = _channel(source);
-    final previous = channel.last;
+    channel.recorded = true;
+    var previous = channel.last;
+    var result = CaptureRunResult.added;
     if (previous != null && sampleStart < previous.sampleEnd) {
-      throw ArgumentError('Capture run overlaps earlier samples');
+      // Never throw into the capture path: forget what the counter now aliases.
+      channel.runs.clear();
+      channel
+        ..head = 0
+        ..resets += 1
+        ..pendingDiscontinuity = false;
+      previous = null;
+      result = CaptureRunResult.counterReset;
     }
     final durationUs =
         sampleCount * Duration.microsecondsPerSecond ~/ sampleRate;
@@ -188,24 +225,26 @@ final class CaptureTimeline {
     );
     final excess = channel.length - maxRunsPerChannel;
     if (excess > 0) channel.dropHead(excess);
+    return result;
   }
 
   /// A published durable chunk is a run with its own capture timestamps.
-  void addChunk(AudioChunk chunk, {int uncertaintyUs = 0}) => addRun(
-    chunk.source,
-    sampleStart: chunk.sampleStart,
-    sampleCount: chunk.sampleCount,
-    sampleRate: chunk.sampleRate,
-    startUs: chunk.captureStartUs,
-    endUs: chunk.captureEndUs,
-    discontinuousBefore: chunk.gapBefore,
-    uncertaintyUs: uncertaintyUs,
-  );
+  CaptureRunResult addChunk(AudioChunk chunk, {int uncertaintyUs = 0}) =>
+      addRun(
+        chunk.source,
+        sampleStart: chunk.sampleStart,
+        sampleCount: chunk.sampleCount,
+        sampleRate: chunk.sampleRate,
+        startUs: chunk.captureStartUs,
+        endUs: chunk.captureEndUs,
+        discontinuousBefore: chunk.gapBefore,
+        uncertaintyUs: uncertaintyUs,
+      );
 
   /// A native PCM event stamped when its frame was emitted. Emission follows
   /// capture by an unknown buffering delay, so the event is treated as the end
   /// of its samples and [uncertaintyUs] must cover that delay.
-  void addEmission(
+  CaptureRunResult addEmission(
     AudioSource source, {
     required int sampleStart,
     required int sampleCount,
@@ -215,7 +254,7 @@ final class CaptureTimeline {
   }) {
     final duration =
         sampleCount * Duration.microsecondsPerSecond ~/ math.max(1, sampleRate);
-    addRun(
+    return addRun(
       source,
       sampleStart: sampleStart,
       sampleCount: sampleCount,
@@ -245,6 +284,9 @@ final class CaptureTimeline {
 
   void clear() => _channels.clear();
 
+  /// How many times the channel's sample counter restarted.
+  int counterResets(AudioSource source) => _channels[source]?.resets ?? 0;
+
   int runCount(AudioSource source) => _channels[source]?.length ?? 0;
 
   int? oldestSample(AudioSource source) {
@@ -257,8 +299,15 @@ final class CaptureTimeline {
   int? endSample(AudioSource source) => _channels[source]?.last?.sampleEnd;
 
   /// Places [sampleStart, sampleEnd) on the monotonic clock, or null when any of
-  /// it is outside the retained history.
+  /// it is outside the retained history ([mapOutcome] says why).
   MappedAudioRange? map(
+    AudioSource source, {
+    required int sampleStart,
+    required int sampleEnd,
+  }) =>
+      mapOutcome(source, sampleStart: sampleStart, sampleEnd: sampleEnd).range;
+
+  TimelineMapOutcome mapOutcome(
     AudioSource source, {
     required int sampleStart,
     required int sampleEnd,
@@ -267,18 +316,33 @@ final class CaptureTimeline {
       throw ArgumentError('Invalid sample range');
     }
     final channel = _channels[source];
-    if (channel == null) return null;
+    if (channel == null || !channel.recorded) {
+      return (range: null, miss: TimelineMiss.unknownSource);
+    }
+    if (channel.length == 0) {
+      return (range: null, miss: TimelineMiss.trimmed);
+    }
+    if (sampleStart < channel.runs[channel.head].sampleStart) {
+      return (range: null, miss: TimelineMiss.trimmed);
+    }
+    if (sampleStart >= channel.last!.sampleEnd) {
+      return (range: null, miss: TimelineMiss.notYetCaptured);
+    }
     var index = channel.find(sampleStart);
-    if (index < 0) return null;
+    if (index < 0) return (range: null, miss: TimelineMiss.sampleGap);
     final pieces = <MappedAudioPiece>[];
     var uncertainty = 0, gap = 0;
     var discontinuity = false, rateChange = false;
     int? rate;
     var cursor = sampleStart;
     while (cursor < sampleEnd) {
-      if (index >= channel.runs.length) return null;
+      if (index >= channel.runs.length) {
+        return (range: null, miss: TimelineMiss.notYetCaptured);
+      }
       final run = channel.runs[index];
-      if (run.sampleStart != cursor && pieces.isNotEmpty) return null;
+      if (run.sampleStart != cursor && pieces.isNotEmpty) {
+        return (range: null, miss: TimelineMiss.sampleGap);
+      }
       if (pieces.isNotEmpty) {
         if (run.discontinuousBefore) {
           discontinuity = true;
@@ -300,15 +364,18 @@ final class CaptureTimeline {
       cursor = end;
       index++;
     }
-    return MappedAudioRange(
-      source: source,
-      sampleStart: sampleStart,
-      sampleEnd: sampleEnd,
-      pieces: pieces,
-      uncertaintyUs: uncertainty,
-      gapUs: gap,
-      hasDiscontinuity: discontinuity,
-      crossesRateChange: rateChange,
+    return (
+      range: MappedAudioRange(
+        source: source,
+        sampleStart: sampleStart,
+        sampleEnd: sampleEnd,
+        pieces: pieces,
+        uncertaintyUs: uncertainty,
+        gapUs: gap,
+        hasDiscontinuity: discontinuity,
+        crossesRateChange: rateChange,
+      ),
+      miss: null,
     );
   }
 }

@@ -92,12 +92,12 @@ AttributionDecision decide(
 
 void expectState(
   AttributionDecision decision,
-  AttributionState state,
+  SpeakerDecisionState state,
   String reason,
 ) {
   expect(decision.state, state, reason: decision.evidence.reason);
   expect(decision.evidence.reason, reason);
-  if (state != AttributionState.named) {
+  if (state != SpeakerDecisionState.named) {
     expect(decision.participantRef, isNull);
     expect(decision.displayName, isNull);
     expect(decision.method, isNull);
@@ -112,7 +112,7 @@ void main() {
     test('names a segment fully inside steady observations', () {
       reads(history, 1, 6, speakers: ['a']);
       final decision = decide(history, audio(2, 4));
-      expectState(decision, AttributionState.named, 'single_speaker');
+      expectState(decision, SpeakerDecisionState.named, 'single_speaker');
       expect(decision.participantRef, 'a');
       expect(decision.displayName, 'Ada Lovelace');
       expect(decision.method, SpeakerEvidenceMethod.participantStatus);
@@ -132,28 +132,32 @@ void main() {
       expect(first.displayName, second.displayName);
     });
 
-    test('uses the latest name when a participant is renamed', () {
-      history.addObservation(read(1, speakers: ['a']));
-      history.addObservation(
-        read(
-          1.5,
-          speakers: ['a'],
-          participants: const [
-            ObservedParticipant(ref: 'a', name: 'Countess Ada'),
-          ],
-        ),
+    test('a rename splits the interval so a name never spans it', () {
+      const renamed = [ObservedParticipant(ref: 'a', name: 'Countess Ada')];
+      reads(history, 1, 2, speakers: ['a']);
+      reads(history, 2.5, 4, speakers: ['a'], participants: renamed);
+      expect(decide(history, audio(1.2, 1.9)).displayName, 'Ada Lovelace');
+      expect(decide(history, audio(2.8, 3.8)).displayName, 'Countess Ada');
+      // Same person, but no single name describes a window across the rename.
+      expectState(
+        decide(history, audio(1.8, 2.8)),
+        SpeakerDecisionState.unknown,
+        'name_change',
       );
-      history.addObservation(read(2, speakers: ['a']));
-      history.addObservation(
-        read(
-          2.5,
-          speakers: ['a'],
-          participants: const [
-            ObservedParticipant(ref: 'a', name: 'Countess Ada'),
-          ],
-        ),
+    });
+
+    test('the local-user flag is sticky within an interval', () {
+      const meNow = [ObservedParticipant(ref: 'a', name: 'Ada', isSelf: true)];
+      const notMe = [ObservedParticipant(ref: 'a', name: 'Ada')];
+      history.addObservation(read(1, speakers: ['a'], participants: notMe));
+      history.addObservation(read(1.5, speakers: ['a'], participants: meNow));
+      history.addObservation(read(2, speakers: ['a'], participants: notMe));
+      history.addObservation(read(2.5, speakers: ['a'], participants: notMe));
+      expectState(
+        decide(history, audio(1.2, 2.4)),
+        SpeakerDecisionState.unknown,
+        'self_active',
       );
-      expect(decide(history, audio(1.6, 2.4)).displayName, 'Countess Ada');
     });
 
     test('does not name merely the largest overlap', () {
@@ -161,7 +165,7 @@ void main() {
       reads(history, 4, 7, speakers: ['b']);
       // 80% of the segment overlaps Ada but it crosses the handover.
       final decision = decide(history, audio(2.5, 3.7));
-      expectState(decision, AttributionState.multiple, 'speaker_change');
+      expectState(decision, SpeakerDecisionState.multiple, 'speaker_change');
       expect(decision.evidence.candidateRefs, ['a', 'b']);
       expect(decision.evidence.coveredUs, greaterThan(0));
     });
@@ -181,12 +185,12 @@ void main() {
     test('speech inside the handover window is ambiguous', () {
       expectState(
         decide(history, audio(3.1, 3.4)),
-        AttributionState.multiple,
+        SpeakerDecisionState.multiple,
         'speaker_change',
       );
       expectState(
         decide(history, audio(2.8, 4)),
-        AttributionState.multiple,
+        SpeakerDecisionState.multiple,
         'speaker_change',
       );
     });
@@ -196,7 +200,7 @@ void main() {
       reads(both, 1, 3, speakers: ['a', 'b']);
       expectState(
         decide(both, audio(1.5, 2.5)),
-        AttributionState.multiple,
+        SpeakerDecisionState.multiple,
         'concurrent_speakers',
       );
     });
@@ -207,12 +211,12 @@ void main() {
       reads(h, 3.5, 6);
       expectState(
         decide(h, audio(2, 3.3)),
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'transition',
       );
       expectState(
         decide(h, audio(4, 5)),
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'no_speaker_observed',
       );
       expect(decide(h, audio(1.5, 2.5)).participantRef, 'a');
@@ -223,14 +227,14 @@ void main() {
       reads(h, 1, 4, speakers: ['c']);
       expectState(
         decide(h, audio(2, 3)),
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'self_active',
       );
       final mixed = ObservationHistory();
       reads(mixed, 1, 4, speakers: ['a', 'c']);
       expectState(
         decide(mixed, audio(2, 3)),
-        AttributionState.multiple,
+        SpeakerDecisionState.multiple,
         'concurrent_speakers',
       );
     });
@@ -242,7 +246,7 @@ void main() {
           audio(1.5, 2.5, source: AudioSource.microphone),
           source: AudioSource.microphone,
         ),
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'microphone_channel',
       );
     });
@@ -258,7 +262,7 @@ void main() {
       );
       expectState(
         decide(h, audio(2, 3)),
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'unsupported_evidence',
       );
       final decision = decide(
@@ -297,12 +301,12 @@ void main() {
       reads(history, 2, 5, speakers: ['a']);
       expectState(
         decide(history, audio(1, 3)),
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'no_history',
       );
       expectState(
         decide(ObservationHistory(), audio(1, 3)),
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'no_history',
       );
     });
@@ -312,12 +316,12 @@ void main() {
       expect(decide(history, audio(1.5, 2.9)).participantRef, 'a');
       expectState(
         decide(history, audio(3.2, 4)),
-        AttributionState.stale,
+        SpeakerDecisionState.stale,
         'history_ends',
       );
       expectState(
         decide(history, audio(2.5, 3.5)),
-        AttributionState.stale,
+        SpeakerDecisionState.stale,
         'history_ends',
       );
       expect(history.latestReadEndUs, sec(3.03));
@@ -329,7 +333,7 @@ void main() {
       expect(history.segmentCount, 2);
       expectState(
         decide(history, audio(3, 4)),
-        AttributionState.stale,
+        SpeakerDecisionState.stale,
         'read_gap',
       );
       expect(decide(history, audio(1.2, 1.8)).participantRef, 'a');
@@ -341,7 +345,7 @@ void main() {
       // The first read showing Ada is at 1.0 s; speech began earlier.
       expectState(
         decide(history, audio(.8, 2)),
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'no_history',
       );
       final lagged = decide(
@@ -370,7 +374,7 @@ void main() {
       );
       expectState(
         decide(history, audio(2.5, 2.9), policy: policy),
-        AttributionState.multiple,
+        SpeakerDecisionState.multiple,
         'speaker_change',
       );
       expect(
@@ -388,7 +392,7 @@ void main() {
       expect(decide(history, audio(2, 3)).participantRef, 'a');
       expectState(
         decide(history, audio(2, 3, uncertaintyUs: sec(1.5))),
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'no_history',
       );
       final margin = decide(
@@ -396,21 +400,155 @@ void main() {
         audio(1.2, 1.8),
         policy: SpeakerAttributionPolicy(boundaryMarginUs: sec(.5)),
       );
-      expectState(margin, AttributionState.unknown, 'no_history');
+      expectState(margin, SpeakerDecisionState.unknown, 'no_history');
     });
 
     test('missing mappings and capture discontinuities are unknown', () {
       reads(history, 1, 6, speakers: ['a']);
       expectState(
         decide(history, null),
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'timeline_unavailable',
       );
       expectState(
         decide(history, audio(2, 4, discontinuity: true)),
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'capture_discontinuity',
       );
+    });
+  });
+
+  group('lag and timing edge cases', () {
+    test('lag inversion considers every later segment, not only the next', () {
+      reads(history, 0, 10, speakers: ['a']);
+      reads(history, 10.5, 11, speakers: ['b']);
+      reads(
+        history,
+        11.5,
+        13,
+        speakers: ['c'],
+        method: SpeakerEvidenceMethod.compactTalkingLabel,
+      );
+      final policy = SpeakerAttributionPolicy(
+        indicatorLagUs: {SpeakerEvidenceMethod.compactTalkingLabel: sec(3)},
+      );
+      // Segment c, lagged by 3 s, began before 8.53 s on the audio clock:
+      // a's certainty cannot reach past that even though b sits in between.
+      final decision = decide(history, audio(8.8, 9.2), policy: policy);
+      expect(decision.state, isNot(SpeakerDecisionState.named));
+      expect(decide(history, audio(2, 6), policy: policy).participantRef, 'a');
+    });
+
+    test('lag moves the trailing edge of the last interval earlier', () {
+      reads(history, 1, 5, speakers: ['a']);
+      final policy = SpeakerAttributionPolicy(
+        indicatorLagUs: {SpeakerEvidenceMethod.participantStatus: sec(.5)},
+      );
+      expect(
+        decide(history, audio(2, 4.4), policy: policy).participantRef,
+        'a',
+      );
+      expectState(
+        decide(history, audio(2, 4.7), policy: policy),
+        SpeakerDecisionState.stale,
+        'history_ends',
+      );
+    });
+
+    test('blind periods widen by the largest and smallest configured lag', () {
+      reads(history, 1, 4, speakers: ['a']);
+      history.addUnavailable(sinceUs: sec(5), reason: 'window_lost');
+      reads(history, 6, 8, speakers: ['a']);
+      final policy = SpeakerAttributionPolicy(
+        indicatorLagUs: {SpeakerEvidenceMethod.participantStatus: sec(.3)},
+      );
+      // Blind from 5.0 s on the indicator is 4.7 s on the audio clock.
+      expectState(
+        decide(history, audio(4.75, 4.9), policy: policy),
+        SpeakerDecisionState.unavailable,
+        'window_lost',
+      );
+    });
+
+    test('slow reads leave certainty only after their completion', () {
+      for (var t = 1.0; t <= 4; t += .5) {
+        history.addObservation(read(t, speakers: ['a'], duration: 1));
+      }
+      expectState(
+        decide(history, audio(1.5, 3)),
+        SpeakerDecisionState.unknown,
+        'no_history',
+      );
+      expect(decide(history, audio(2.1, 3.9)).participantRef, 'a');
+    });
+
+    test('a gap of exactly maxReadGapUs joins reads and one more splits', () {
+      final exact = ObservationHistory(maxReadGapUs: sec(2));
+      exact.addObservation(read(1, speakers: ['a']));
+      exact.addObservation(read(3.03, speakers: ['a']));
+      expect(exact.segmentCount, 1);
+      final over = ObservationHistory(maxReadGapUs: sec(2));
+      over.addObservation(read(1, speakers: ['a']));
+      over.addObservation(read(3.031, speakers: ['a']));
+      expect(over.segmentCount, 2);
+    });
+
+    test('a speaker shorter than the poll period is invisible', () {
+      // Documents the limitation: nothing was observed, so nothing is claimed.
+      reads(history, 1, 5, speakers: ['a']);
+      expect(decide(history, audio(2, 3)).participantRef, 'a');
+    });
+
+    test('a decision becomes named once later reads cover the window', () {
+      reads(history, 1, 3, speakers: ['a']);
+      expectState(
+        decide(history, audio(2.5, 3.5)),
+        SpeakerDecisionState.stale,
+        'history_ends',
+      );
+      reads(history, 3.5, 4, speakers: ['a']);
+      expect(decide(history, audio(2.5, 3.5)).participantRef, 'a');
+    });
+
+    test('a named decision is stable as later reads append', () {
+      reads(history, 1, 5, speakers: ['a']);
+      final first = decide(history, audio(2, 4));
+      reads(history, 5.5, 6, speakers: ['a']);
+      reads(history, 6.5, 9, speakers: ['b']);
+      history.addUnavailable(sinceUs: sec(9.5), reason: 'gone');
+      final later = decide(history, audio(2, 4));
+      expect(later.participantRef, first.participantRef);
+      expect(later.displayName, first.displayName);
+      expect(later.evidence.windowStartUs, first.evidence.windowStartUs);
+    });
+
+    test('an empty blind reason still reads as unavailable', () {
+      history.addUnavailable(sinceUs: 0, reason: '');
+      expectState(
+        decide(history, audio(1, 2)),
+        SpeakerDecisionState.unavailable,
+        'observer_unavailable',
+      );
+    });
+
+    test('evidence stays small even with maximal references', () {
+      final long = 'r' * 128;
+      final participants = [
+        for (var i = 0; i < 4; i++)
+          ObservedParticipant(ref: '$i$long', name: 'N' * 256),
+      ];
+      reads(
+        history,
+        1,
+        3,
+        speakers: [for (final p in participants) p.ref],
+        participants: participants,
+      );
+      final decision = decide(history, audio(1.5, 2.5));
+      final text = jsonEncode(decision.toJson());
+      expect(decision.evidence.candidateRefs.length, lessThanOrEqualTo(4));
+      expect(utf8.encode(text).length, lessThan(2048));
+      expect(decision.evidence.reason, 'concurrent_speakers');
     });
   });
 
@@ -420,7 +558,7 @@ void main() {
       reads(history, 3.5, 6, speakers: ['a']);
       expectState(
         decide(history, audio(2.9, 3.8)),
-        AttributionState.multiple,
+        SpeakerDecisionState.multiple,
         'concurrent_speakers',
       );
     });
@@ -430,7 +568,7 @@ void main() {
       history.addObservation(read(2.5, speakers: ['b']));
       reads(history, 3, 5, speakers: ['a']);
       final decision = decide(history, audio(1.5, 4));
-      expectState(decision, AttributionState.multiple, 'speaker_change');
+      expectState(decision, SpeakerDecisionState.multiple, 'speaker_change');
       // 0.5 s before the handover plus 0.97 s after it.
       expect(decision.evidence.coveredUs, sec(1.47));
     });
@@ -442,7 +580,7 @@ void main() {
       // Between Ada's last read (3.0 s) and the claimed loss (3.2 s).
       expectState(
         decide(history, audio(3.05, 3.15)),
-        AttributionState.unavailable,
+        SpeakerDecisionState.unavailable,
         'window_lost',
       );
     });
@@ -453,7 +591,7 @@ void main() {
       reads(history, 6, 8, speakers: ['a']);
       expectState(
         decide(history, audio(3.05, 3.15)),
-        AttributionState.unavailable,
+        SpeakerDecisionState.unavailable,
         'observer_unavailable',
       );
     });
@@ -466,13 +604,13 @@ void main() {
       reads(history, 6, 8, speakers: ['a']);
       expectState(
         decide(history, audio(3.5, 5)),
-        AttributionState.unavailable,
+        SpeakerDecisionState.unavailable,
         'window_lost',
       );
       // Speech spanning the blind period is also unavailable, never extended.
       expectState(
         decide(history, audio(2.5, 6.5)),
-        AttributionState.unavailable,
+        SpeakerDecisionState.unavailable,
         'window_lost',
       );
       expect(decide(history, audio(1.2, 2.8)).participantRef, 'a');
@@ -488,7 +626,7 @@ void main() {
       expect(history.unavailableIntervals, hasLength(1));
       expectState(
         decide(history, audio(5, 6)),
-        AttributionState.unavailable,
+        SpeakerDecisionState.unavailable,
         'permission_revoked',
       );
       expect(history.unavailableIntervals.single.endUs, isNull);
@@ -498,7 +636,7 @@ void main() {
       history.addUnavailable(sinceUs: sec(0), reason: 'zoom_not_running');
       expectState(
         decide(history, audio(1, 2)),
-        AttributionState.unavailable,
+        SpeakerDecisionState.unavailable,
         'zoom_not_running',
       );
     });
@@ -514,7 +652,7 @@ void main() {
         reads(history, 5, 7, speakers: ['a']);
         expectState(
           decide(history, audio(3.6, 4.5)),
-          AttributionState.unavailable,
+          SpeakerDecisionState.unavailable,
           'incomplete_read',
         );
         expect(decide(history, audio(5.2, 6.5)).participantRef, 'a');
@@ -548,7 +686,7 @@ void main() {
       expect(bounded.segmentCount, 4);
       expectState(
         decide(bounded, audio(2, 3)),
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'no_history',
       );
     });
@@ -569,7 +707,7 @@ void main() {
       expect(history.segmentCount, 1);
       expectState(
         decide(history, audio(2, 2.5)),
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         'no_history',
       );
       expect(decide(history, audio(4, 5)).participantRef, 'b');
@@ -706,7 +844,7 @@ void main() {
         sampleStart: 48000 * 4,
         sampleEnd: 48000 * 6,
       );
-      expect(crossing.state, AttributionState.multiple);
+      expect(crossing.state, SpeakerDecisionState.multiple);
       expect(
         session
             .attribute(
@@ -715,10 +853,41 @@ void main() {
               sampleEnd: 48000 * 21,
             )
             .state,
-        AttributionState.unknown,
+        SpeakerDecisionState.unknown,
         reason: 'unmapped samples',
       );
       expect(session.observationWatermarkUs, sec(20.03));
+    });
+
+    test('says why a range could not be placed', () {
+      final session = SpeakerAttributionSession(session: 's1');
+      String reason(int a, int b) => session
+          .attribute(AudioSource.playback, sampleStart: a, sampleEnd: b)
+          .evidence
+          .reason;
+      expect(reason(0, 10), 'timeline_unknown_source');
+      expect(reason(5, 5), 'empty_range');
+      expect(reason(-1, 5), 'empty_range');
+      session.timeline.addRun(
+        AudioSource.playback,
+        sampleStart: 1000,
+        sampleCount: 1000,
+        sampleRate: 1000,
+        startUs: 0,
+        endUs: 1000000,
+      );
+      session.timeline.addRun(
+        AudioSource.playback,
+        sampleStart: 3000,
+        sampleCount: 1000,
+        sampleRate: 1000,
+        startUs: 3000000,
+        endUs: 4000000,
+      );
+      expect(reason(0, 500), 'timeline_trimmed');
+      expect(reason(1500, 3500), 'timeline_gap');
+      expect(reason(5000, 6000), 'timeline_not_captured');
+      expect(reason(1100, 1200), 'no_history');
     });
 
     test('ignores observations from other sessions', () {
@@ -782,7 +951,7 @@ void main() {
         mapped: audio(5.5, 6.5),
       );
       expect(before.participantRef, 'a');
-      expect(blind.state, AttributionState.unavailable);
+      expect(blind.state, SpeakerDecisionState.unavailable);
       expect(blind.evidence.reason, 'observer_restarting');
       expect(after.participantRef, '1:a');
       expect(session.history.segmentCount, 2);
@@ -794,7 +963,98 @@ void main() {
           restartCount: 1,
         ),
       );
-      expect(session.history.unavailableIntervals, hasLength(1));
+      // The restart blind period, plus the stop that follows the last read.
+      expect(session.history.unavailableIntervals, hasLength(2));
+      expect(session.history.unavailableIntervals.last.endUs, isNull);
+    });
+
+    test('a stop is a blind period even if the next helper reuses a ref', () {
+      final session = SpeakerAttributionSession(session: 's1');
+      const bob = [ObservedParticipant(ref: 'p1', name: 'Bob')];
+      const ada = [ObservedParticipant(ref: 'p1', name: 'Ada')];
+      for (var t = 0.0; t <= 1; t += .5) {
+        session.apply(
+          ObservationEvent(0, read(t, speakers: ['p1'], participants: ada)),
+        );
+      }
+      session.apply(
+        ObserverStateEvent(
+          0,
+          status: ObserverStatus.stopped,
+          atUs: sec(1.1),
+          restartCount: 0,
+        ),
+      );
+      // The same observer was started again with the same session identifier.
+      for (var t = 1.2; t <= 3; t += .5) {
+        session.apply(
+          ObservationEvent(1, read(t, speakers: ['p1'], participants: bob)),
+        );
+      }
+      MappedAudioRange? at(num a, num b) => audio(a, b);
+      AttributionDecision d(num a, num b) => session.attributor.attribute(
+        session.history,
+        source: AudioSource.playback,
+        mapped: at(a, b),
+      );
+      expect(d(.2, .8).displayName, 'Ada');
+      expect(d(1.05, 1.15).state, SpeakerDecisionState.unavailable);
+      expect(d(1.8, 2.6).displayName, 'Bob');
+    });
+
+    test('a failed observer leaves later audio unavailable', () {
+      final session = SpeakerAttributionSession(session: 's1');
+      for (var t = 1.0; t <= 3; t += .5) {
+        session.apply(ObservationEvent(0, read(t, speakers: ['a'])));
+      }
+      session.apply(
+        ObserverStateEvent(
+          0,
+          status: ObserverStatus.failed,
+          atUs: sec(3.2),
+          restartCount: 5,
+        ),
+      );
+      final decision = session.attributor.attribute(
+        session.history,
+        source: AudioSource.playback,
+        mapped: audio(4, 5),
+      );
+      expect(decision.state, SpeakerDecisionState.unavailable);
+      expect(decision.evidence.reason, 'observer_failed');
+    });
+
+    test('older-epoch events are ignored and a new epoch resets ordering', () {
+      final session = SpeakerAttributionSession(session: 's1');
+      // A first helper reports an absurdly late clock reading.
+      session.apply(ObservationEvent(0, read(5000000, speakers: ['a'])));
+      expect(session.history.readCount, 1);
+      session.apply(
+        ObserverStateEvent(
+          0,
+          status: ObserverStatus.restarting,
+          atUs: sec(2),
+          restartCount: 1,
+        ),
+      );
+      for (var t = 3.0; t <= 5; t += .5) {
+        session.apply(ObservationEvent(1, read(t, speakers: ['a'])));
+      }
+      expect(session.rejectedObservationCount, 0);
+      expect(session.history.readCount, 6);
+      // The replaced helper keeps talking: nothing is accepted from it.
+      session.apply(ObservationEvent(0, read(5.5, speakers: ['b'])));
+      session.apply(
+        ObserverStateEvent(
+          0,
+          status: ObserverStatus.failed,
+          atUs: sec(5.6),
+          restartCount: 1,
+        ),
+      );
+      expect(session.staleEventCount, 2);
+      expect(session.history.readCount, 6);
+      expect(session.history.unavailableIntervals.last.endUs, isNotNull);
     });
   });
 }
