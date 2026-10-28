@@ -25,6 +25,45 @@ void _observeSocketOutput(Socket socket) {
   );
 }
 
+// Close and join the actual worker before an entry failure can escape. An
+// outstanding expectLater would otherwise prevent the teardown that closes it.
+Future<void> _assertHandshakeCancellation(
+  ModelBlobDownloader downloader,
+  Future<Object?> pending,
+  Future<void> entered,
+  Future<void> ended,
+) async {
+  final failed = expectLater(pending, throwsStateError);
+  Future<void>? retirement;
+  Future<void> closeAndJoin() {
+    downloader.close();
+    return retirement ??= failed.timeout(const Duration(seconds: 3));
+  }
+
+  Object? primary;
+  StackTrace? primaryStack;
+  try {
+    await entered.timeout(const Duration(seconds: 5));
+    await closeAndJoin();
+    await ended.timeout(const Duration(seconds: 2));
+  } catch (error, stack) {
+    primary = error;
+    primaryStack = stack;
+  } finally {
+    try {
+      await closeAndJoin();
+    } catch (error, stack) {
+      if (primary == null) {
+        primary = error;
+        primaryStack = stack;
+      } else if (!identical(primary, error)) {
+        print('TLS cleanup secondary error: ${error.runtimeType}');
+      }
+    }
+  }
+  if (primary != null) Error.throwWithStackTrace(primary, primaryStack!);
+}
+
 // Hold the caller after the real response future exists, before its deadline
 // wrapper can install an observer. This models a descheduled isolate without
 // depending on a loopback connection happening inside a narrow wall budget.
@@ -355,11 +394,12 @@ void main() {
         await server.close();
       });
       final pending = downloader.download(blobId: 'fixture', size: 4);
-      final failed = expectLater(pending, throwsStateError);
-      await entered.future.timeout(const Duration(seconds: 5));
-      downloader.close();
-      await failed.timeout(const Duration(seconds: 3));
-      await ended.future.timeout(const Duration(seconds: 2));
+      await _assertHandshakeCancellation(
+        downloader,
+        pending,
+        entered.future,
+        ended.future,
+      );
     },
   );
 
@@ -653,6 +693,7 @@ void main() {
           );
         }
         sockets.add(socket);
+        _observeSocketOutput(socket);
         final done = Completer<void>();
         closed.add(done);
         var answered = false;
@@ -670,7 +711,7 @@ void main() {
           },
           onDone: () {
             socket.destroy();
-            done.complete();
+            if (!done.isCompleted) done.complete();
           },
           onError: (Object _) {
             socket.destroy();
@@ -722,12 +763,13 @@ void main() {
       Socket? active;
       server.listen((socket) {
         active = socket;
+        _observeSocketOutput(socket);
         entered.complete();
         socket.listen(
           (_) {},
           onDone: () {
             socket.destroy();
-            ended.complete();
+            if (!ended.isCompleted) ended.complete();
           },
           onError: (Object _) {
             socket.destroy();
@@ -746,11 +788,64 @@ void main() {
         await server.close();
       });
       final pending = downloader.download(blobId: 'fixture', size: 4);
-      final failed = expectLater(pending, throwsStateError);
-      await entered.future.timeout(const Duration(seconds: 5));
-      downloader.close();
-      await failed.timeout(const Duration(seconds: 3));
-      await ended.future.timeout(const Duration(seconds: 2));
+      await _assertHandshakeCancellation(
+        downloader,
+        pending,
+        entered.future,
+        ended.future,
+      );
+    },
+  );
+
+  test(
+    'handshake entry failure joins the compiled worker before escaping',
+    () async {
+      // Keep the real TCP backlog without accepting a peer. Entry must fail at
+      // its original five-second bound; retirement must precede that failure.
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final downloader = ModelBlobDownloader(
+        apiKey: 'private-handshake-cleanup',
+        parallelCount: 1,
+        origin: Uri.parse('https://127.0.0.1:${server.port}'),
+      );
+      addTearDown(() async {
+        downloader.close();
+        await server.close();
+      });
+      final pending = downloader.download(blobId: 'fixture', size: 4);
+      var settled = false;
+      Object? terminalError;
+      final observed = pending.then<void>(
+        (_) {
+          settled = true;
+        },
+        onError: (Object error) {
+          settled = true;
+          terminalError = error;
+        },
+      );
+      await expectLater(
+        _assertHandshakeCancellation(
+          downloader,
+          pending,
+          Completer<void>().future,
+          Completer<void>().future,
+        ),
+        throwsA(
+          isA<TimeoutException>().having(
+            (error) => error.duration,
+            'original entry budget',
+            const Duration(seconds: 5),
+          ),
+        ),
+      );
+      expect(
+        settled,
+        isTrue,
+        reason: 'Worker retirement must precede entry failure',
+      );
+      expect(terminalError, isA<StateError>());
+      await observed;
     },
   );
 
@@ -761,6 +856,7 @@ void main() {
     final sockets = <Socket>[];
     server.listen((socket) {
       sockets.add(socket);
+      _observeSocketOutput(socket);
       var replied = false;
       Timer? timer;
       socket.listen(
@@ -781,7 +877,7 @@ void main() {
         onDone: () {
           timer?.cancel();
           socket.destroy();
-          ended.complete();
+          if (!ended.isCompleted) ended.complete();
         },
         onError: (Object _) {
           timer?.cancel();

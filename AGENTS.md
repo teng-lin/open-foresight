@@ -7,6 +7,8 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
 - Integrate small, independently verified batches, even when delivering one PR.
 - Reproduce the exact failed CI entrypoint. Match OS, pinned tools, UID/GID,
   NSS account/home, caches, network isolation and source/JIT mode. Record gaps.
+- Match the declared test concurrency separately from build parallelism;
+  `FORESIGHT_BUILD_JOBS` does not limit Dart test fan-out.
 - Check C++ library availability on the minimum supported Apple toolchain;
   selecting a language standard does not enable missing library features.
 - Exercise the actual consumer; metadata checks and quiet component replays
@@ -64,6 +66,10 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
   Keep regression operations and their uncaught-error observer in the same Dart
   error zone unless zone crossing is the behavior under test; prove the old code
   fails the controlled regression.
+- Close and join held fixture operations before an entry failure escapes. An
+  outstanding `expectLater` can prevent its closing teardown from running.
+- Own fixture listeners and accepted RPC sockets. Graceful server shutdown can
+  await unfinished peer streams; let HTTP/2 own its bound socket writer.
 - Apply lazy logging thresholds only before sink admission. Prove that an
   admitted sink retains a small normal suffix after a summary has flushed.
 - Capture the first failing shutdown stage before a terminal ownership warning
@@ -88,7 +94,10 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
 - Preserve tests, deadlines, coverage and integrity gates. Reuse verified SDKs;
   avoid unrelated cache deletion, clean builds and successful-job reruns.
 - Use short, private `/var/tmp` directories with `TMPDIR` and
-  `FORESIGHT_TEST_TEMP_ROOT` set.
+  `FORESIGHT_TEST_TEMP_ROOT` set. For macOS core boundary fixtures keep the
+  canonical root at most 26 bytes, counting the `/private` prefix.
+- Interpret status using the callee's contract: native negative errno values
+  are not process signals.
 - Follow [CI integrity](docs/platforms/ci-integrity.md), including owner review
   for workflow permissions, publishing and artifact-trust changes.
 
