@@ -513,8 +513,19 @@ def verify(root: Path = ROOT) -> dict[str, Any]:
         if status == "closed-production":
             if cell.get("missing"):
                 fail(f"{label}: a closed cell cannot list missing coverage")
-            if not any("production both" in str(entry.get("sides", "")).lower() for entry in evidence):
+            backed = [entry for entry in evidence if "production both" in str(entry.get("sides", "")).lower()]
+            if not backed:
                 fail(f"{label}: a closed cell needs evidence whose sides say production both")
+            for entry in backed:
+                # The cell's claim must agree with the boundary entry that lists the same test.
+                if not any(
+                    item["kind"] == "production-both-sides"
+                    and item["path"] == entry.get("path")
+                    and (not item.get("names") or entry.get("test") in item["names"])
+                    for boundary in boundaries
+                    for item in boundary.get("evidence", ())
+                ):
+                    fail(f"{label}: {entry.get('test')!r} is not listed as production-both-sides evidence by any boundary")
         elif not str(cell.get("missing") or "").strip():
             fail(f"{label}: {status} must say what is missing")
         for entry in evidence:

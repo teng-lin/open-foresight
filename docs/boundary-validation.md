@@ -64,7 +64,7 @@ merge base), so a dirty tree is never confused with its `HEAD`.
    | Change | Selects |
    | --- | --- |
    | Protobuf schemas and generated bindings | Wire consumers: desktop, MCP, frontend/worker bridge and helper, plus the drift check. |
-   | Shared test support (`packages/foresight_test_support`, `tests/service/gated_helper.py`) | Every Dart gate. The plan lists the test files that import the changed file (following support-to-support imports, `part` directives and conditional imports) and the Python tests that name it, such as the fixture-hygiene guard and the Dart/Python twin of a fixture, and the boundaries they exercise. A file the scan cannot read is kept as a consumer and makes the plan conservative. |
+   | Shared test support (`packages/foresight_test_support`, `packages/foresight_core/test/support`, `tests/service/gated_helper.py`) | Every Dart gate. The plan lists the test files that import the changed file (following support-to-support imports, `part` directives and conditional imports) and the Python tests that name it, such as the fixture-hygiene guard and the Dart/Python twin of a fixture, and the boundaries they exercise. A file the scan cannot read is kept as a consumer and makes the plan conservative. |
    | Native ABI | FFI, read workers, service consumers and packaged products, plus native and sanitizer gates. |
    | Runtime configuration | Model, helper, installed-product and harness consumers. |
    | Package layout | Installer, document-sandbox, launcher and harness consumers. |
@@ -193,15 +193,16 @@ content is `git show f7c06383:docs/architecture/service-lifecycle-tests.md`. The
 inventory's `lifecycle_reconciliation` re-checks each baseline gap against
 currently registered tests, with evidence and what remains missing. A cell is
 `closed-production` only with a read test whose recorded sides say production on
-both; the guard enforces that wording. Of the 14 baseline gaps, **two are
-closed** (desktop crash, and desktop EOF before reply) by contract tests that kill a
-real service under a real `RemoteDomain`; the rest are pinned in a test as
-partial, fixture-only or open.
+both and the cell lists no missing coverage; the guard enforces both. Of the 14
+baseline gaps **none is closed**. Two (desktop crash, and desktop EOF before reply)
+are now substantially proven by contract tests that kill a real service under a
+real `RemoteDomain`, but they stay partial because the remaining gaps are
+listed in each cell's `missing`, not in a note. All verdicts are pinned in a test.
 
 | Cell | Verdict | Why |
 | --- | --- | --- |
-| Desktop to service: crash | closed | `service_crash_contract_test.dart` SIGKILLs the real service (test-hook build of the same entrypoint) under an attached `RemoteDomain`; the next command reconnects once to a replacement and the committed note survived. Not covered: several requests in flight, a crash during startup. |
-| Desktop to service: EOF before reply | closed, for one instant | The hook holds the service after the commit and before the reply; SIGKILL then ends the pending `notes.save` as `outcomeUnknown`, it is not resent, and the replacement holds the note exactly once. A mutation that never committed, and a kill before the commit, are not covered. |
+| Desktop to service: crash | partial | `service_crash_contract_test.dart` attaches the production `RemoteDomain`, with its approval window visible, to the real service entrypoint (test-hook build) and SIGKILLs it (exit `-9` is asserted). The next command reconnects once to one replacement, the committed note survived, and an agent's overwrite is approved through the re-attached window. A control shows a request issued after the loss was seen is sent once and succeeds. Not proven: several requests in flight, a crash before the commit or during startup, a service with its helper or a recording active, the macOS launch path and a real desktop launcher (the replacement is started by a `/bin/sh` launcher). |
+| Desktop to service: EOF before reply | partial | The same test holds the service after the commit and before the reply and kills it: the pending `notes.save` ends `outcomeUnknown`, is not resent, and the replacement holds the note exactly once. One request at one instant; the same unproven list applies. |
 | Desktop to service: slow reply | fixture-only | Only a fixture service holds a non-attach reply for `RemoteDomain`. |
 | Desktop to service: reconnect, duplicate launch | partial | Reconnect after an unclean loss is now proven against a real service, but the baseline's other gap is unspecified and backoff, attach-timeout and epoch behavior are fixture-only. The older facade test SIGTERMs with no mutation in flight and its `no_mutation_replay` field is a literal `true`; the SIGKILL test above, not that field, is what proves non-replay. |
 | MCP to service: slow reply | fixture-only | Real MCP binary against a fixture service. |
@@ -209,7 +210,7 @@ partial, fixture-only or open.
 | Service to helper: closing | partial | The gate test proves graceful release with a stand-in helper; the real-helper stop test proves only that the pid is gone, which a SIGKILL fallback also satisfies. An adopted real helper does exit with SIGTERM. This was first recorded as closed and was downgraded. |
 | Service to helper: reconnect, EOF before reply | partial, fixture-only | One real-helper crash test has no RPC in flight, so it supports restart and recovery, not channel reuse or a lost reply. |
 | Service to helper: slow reply, duplicate launch | fixture-only, partial | No real helper answers slowly; adoption is covered but two helpers on one storage are not. |
-| Service to helper: malformed or partial frame | fixture-only | `helper_malformed_frame_test.dart` drives the production Helper, channel and transport against a hostile raw-byte peer over a real Unix socket (six scenarios). Every call ends as a `GrpcError`, nothing reaches the error zone, and the same channel serves a valid replacement. It shows client-side settlement only, not the real helper's reception. A peer that closes after the handshake fails the call promptly; one that fails before the handshake completes, or never finishes a frame, leaves the call pending until its deadline (45 s by default, 30 minutes for `indexDocument`). The same results held with grpc's stock connector, so the test characterizes the client stack; it does not pin the custom transport. |
+| Service to helper: malformed or partial frame | fixture-only | `helper_malformed_frame_test.dart` drives the production Helper, channel and transport against hostile raw-byte peers and a fixture HTTP/2 server with malformed gRPC messages, over a real Unix socket. Every call ends as a `GrpcError` (promptly when the peer closes with the request in flight, at its deadline otherwise), a second call is not wedged, nothing reaches the error zone, and the same channel serves a replacement within ten seconds. Two known deficiencies are characterized in separate tests: bytes that are not HTTP/2, and a peer closing before any frame, are reported only at the call deadline (45 s by default, 30 minutes for `indexDocument`). It shows client-side settlement only, not the real helper's reception, and it does not pin `HelperChannel`: replacing it with grpc's stock channel changes no result, because the "Cannot add event after closing" race is not reachable through a socket peer and is pinned only by `helper_channel_test.dart`. |
 | Lock and record handoff: duplicate launch | partial | The baseline's gap is not specified. |
 
 Two citation corrections follow the same review: the MCP boundary's
