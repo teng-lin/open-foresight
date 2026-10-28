@@ -25,6 +25,8 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
   verified build identity and hash; inspect skips before accepting coverage.
 - Audit composite setup actions and slim artifact handoffs as well as workflow
   jobs. Required test executables must reach the stage that runs their tests.
+- Exercise restored consumers offline with their actual UID and empty optional
+  environment. Select validated handed-off products before attempting downloads.
 - After changing Dart skips, run `python tools/check_integration_inventory.py`
   and review the matching inventory entries.
 - After adding or moving core Dart libraries, regenerate the diagnostic source
