@@ -743,19 +743,24 @@ def _unconditional(stream: Sequence[tuple[tuple[str, ...], list[str]]]) -> list[
         if segment:
             events.append(("seg", index))
 
-    def joined(position: int, step: int, operators: tuple[str, ...]) -> bool:
-        """Whether one of [operators] is among the consecutive separators from [position] in direction [step].
+    # For every event: is one of the operators among the run of consecutive separators right before it (or right
+    # after it)? `a &&\n b` has a newline right before `b` and the `&&` one separator further. Computed in one pass
+    # each way, so a long run of separators is never rescanned.
+    def runs(operators: tuple[str, ...]) -> tuple[list[bool], list[bool]]:
+        before, after = [False] * len(events), [False] * len(events)
+        flag = False
+        for position, (kind, value) in enumerate(events):
+            before[position] = flag
+            flag = (flag or value in operators) if kind == "sep" else False
+        flag = False
+        for position in range(len(events) - 1, -1, -1):
+            after[position] = flag
+            kind, value = events[position]
+            flag = (flag or value in operators) if kind == "sep" else False
+        return before, after
 
-        `a &&\n b` has a newline right before `b`; the `&&` is one separator further.
-        """
-        while 0 <= position < len(events) and events[position][0] == "sep":
-            if events[position][1] in operators:
-                return True
-            position += step
-        return False
-
-    def is_and_or(position: int, step: int = -1) -> bool:
-        return joined(position, step, _AND_OR)
+    and_or_before, and_or_after = runs(_AND_OR)
+    pipe_before, pipe_after = runs(_PIPES)
 
     stack: list[tuple[str, int]] = []
     conditional_group: dict[int, bool] = {}
@@ -765,6 +770,8 @@ def _unconditional(stream: Sequence[tuple[tuple[str, ...], list[str]]]) -> list[
             continue
         if value in ("{", "("):
             stack.append((str(value), position))
+            if len(stack) > MAX_GROUP_DEPTH:
+                return [False] * len(stream)  # nesting this deep is not a shell script worth classifying: all may_call
         elif value in ("}", ")") and stack and stack[-1][0] == ("{" if value == "}" else "("):
             opener, start = stack.pop()
             before = events[start - 1] if start else None
@@ -772,11 +779,10 @@ def _unconditional(stream: Sequence[tuple[tuple[str, ...], list[str]]]) -> list[
                 (start >= 2 and before == ("sep", ")") and events[start - 2] == ("sep", "("))
                 or (before is not None and before[0] == "seg" and (stream[int(before[1])][1][-1] == "()" or stream[int(before[1])][1][0] == "function"))
             )
-            conditional_group[start] = (
-                opener == "(" or function or is_and_or(start - 1, -1) or is_and_or(position + 1, 1)
-            )
+            conditional_group[start] = opener == "(" or function or and_or_before[start] or and_or_after[position]
             closing.add(position)
     open_flags: list[bool] = []
+    conditional_open = 0  # how many of the open groups are conditional: a counter, not a rescan of the stack
     blocks = 0
     reliable = True  # False once the block nesting can no longer be trusted: everything after is may_call
     after_exit = False
@@ -785,8 +791,9 @@ def _unconditional(stream: Sequence[tuple[tuple[str, ...], list[str]]]) -> list[
         if kind == "sep":
             if position in conditional_group:
                 open_flags.append(conditional_group[position])
+                conditional_open += conditional_group[position]
             elif position in closing and open_flags:
-                open_flags.pop()
+                conditional_open -= open_flags.pop()
             continue
         segment = stream[int(value)][1]
         head = segment[0]
@@ -796,9 +803,9 @@ def _unconditional(stream: Sequence[tuple[tuple[str, ...], list[str]]]) -> list[
             else:
                 blocks -= 1
         opened = sum(1 for index, word in enumerate(segment) if word in _OPENERS and (index == 0 or segment[index - 1] in _AFTER_KEYWORD))
-        in_list = is_and_or(position - 1, -1) or is_and_or(position + 1, 1)
-        piped = joined(position - 1, -1, _PIPES) or joined(position + 1, 1, _PIPES)
-        conditional = blocks > 0 or any(open_flags) or opened > 0 or in_list
+        in_list = and_or_before[position] or and_or_after[position]
+        piped = pipe_before[position] or pipe_after[position]
+        conditional = blocks > 0 or conditional_open > 0 or opened > 0 or in_list
         result[int(value)] = reliable and not conditional and not after_exit
         if head in _ENDS and not conditional and not piped:
             after_exit = True
@@ -806,6 +813,7 @@ def _unconditional(stream: Sequence[tuple[tuple[str, ...], list[str]]]) -> list[
     return result
 
 
+MAX_GROUP_DEPTH = 64  # groups nested deeper than this make the whole text may_call
 CHAIN_LIMIT = 512  # a token further into one command than this is only "may": walking back to the head would be quadratic
 ARGUMENT_LIMIT = 64  # tokens kept after a call: enough for --stage, --suite, --platform and --build-only
 # Appended when a call's arguments were cut: whatever the discarded tokens said, the discriminators are no longer known.

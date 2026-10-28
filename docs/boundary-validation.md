@@ -250,7 +250,7 @@ that point is `may_call`. A top-level `exit` or `exec` makes later commands
 `may_call`. After a wrapper (`env`, `timeout`, `xvfb-run`) the next word must itself
 be an interpreter, a wrapper or a repository script, and a container launcher
 (`docker run`, whose options and image have unknown arity) always gives `may_call`;
-a token beyond the 512th of one command is `may_call` without a walk. **Everything else that mentions the script in an executing position
+a token beyond the 512th of one command is `may_call` without a walk. Classification is linear in the text: separator runs are scanned once, and groups nested deeper than 64 make the whole text `may_call`. **Everything else that mentions the script in an executing position
 is `may_call`**: conditional or chained calls, calls after an `exit`, calls made
 by a repository shell script (shown as `via <script>`), a here-document fed to a
 shell (`via <heredoc>`), and a call whose stage or suite comes from a variable

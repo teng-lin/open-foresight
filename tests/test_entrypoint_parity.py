@@ -1467,3 +1467,54 @@ def test_a_gate_that_states_a_platform_is_not_satisfied_by_a_disagreeing_runner(
     agree = parity.Call("w", "s", "tools/build.sh", ("--platform", "linux", "--stage", "native"), None, True, "linux")
     clash = parity.Call("w", "s", "tools/build.sh", ("--platform", "linux", "--stage", "native"), None, True, "macos")
     assert parity.satisfies(agree, "tools/build.sh", gate) == "exact" and parity.satisfies(clash, "tools/build.sh", gate) == "ambiguous"
+
+
+# ------------------------------------------------- review round 10: classification is linear in the text
+
+def timed(text):
+    import time
+
+    started = time.monotonic()
+    result = parity.calls_in(text)
+    return result, time.monotonic() - started
+
+
+@pytest.mark.parametrize("n", [30_000, 100_000])
+def test_nested_groups_are_classified_in_linear_time(n):
+    result, seconds = timed("{ " * n + "tools/x.sh" + " }" * n)
+    assert [script for script, _args, _exact in result] == ["tools/x.sh"] and seconds < 5, seconds
+
+
+@pytest.mark.parametrize("n", [30_000, 100_000])
+def test_sequential_groups_and_separator_runs_are_classified_in_linear_time(n):
+    for text in ("{ x; " * n + "} " * n + "tools/x.sh", "a &&\n" * n + "tools/x.sh", "(" * 10 + ") ;;\n" * n + "tools/x.sh", "x |\n" * n + "tools/x.sh"):
+        result, seconds = timed(text)
+        assert [script for script, _args, _exact in result] == ["tools/x.sh"] and seconds < 5, (text[:12], seconds)
+
+
+def test_many_ifs_and_closers_are_linear_too():
+    result, seconds = timed("if a; then " * 100_000 + "tools/x.sh; " + "fi; " * 100_000)
+    assert [script for script, _args, _exact in result] == ["tools/x.sh"] and seconds < 5
+
+
+def test_groups_nested_deeper_than_the_cap_make_everything_may_call():
+    assert parity.MAX_GROUP_DEPTH == 64
+    limit = 64
+    at_cap = "{ " * limit + "tools/x.sh" + " }" * limit
+    over_cap = "{ " * (limit + 1) + "tools/x.sh" + " }" * (limit + 1)
+    assert [exact for _script, _args, exact in parity.calls_in(at_cap)] == [True]  # neutral groups are transparent up to the cap
+    assert [exact for _script, _args, exact in parity.calls_in(over_cap)] == [False]
+    assert [exact for _script, _args, exact in parity.calls_in("tools/x.sh; " + over_cap)] == [False, False]  # nothing in the text is trusted
+
+
+def test_the_conditional_group_count_follows_pushes_and_pops():
+    text = "test -f x && { echo a; }\ntools/x.sh\n{ echo b; }\ntools/y.sh"
+    assert [(script, exact) for script, _args, exact in parity.calls_in(text)] == [("tools/x.sh", True), ("tools/y.sh", True)]
+    assert [exact for _script, _args, exact in parity.calls_in("test -f x && { echo a;\ntools/x.sh; }")] == [False]
+    assert [exact for _script, _args, exact in parity.calls_in("( echo a; tools/x.sh )\ntools/y.sh")] == [False, True]
+
+
+def test_an_and_or_list_further_on_does_not_reach_back_to_an_earlier_command():
+    assert [exact for _script, _args, exact in parity.calls_in("tools/x.sh\necho y\nz && w")] == [True]
+    assert [exact for _script, _args, exact in parity.calls_in("z && w\necho y\ntools/x.sh")] == [True]
+    assert [exact for _script, _args, exact in parity.calls_in("tools/x.sh\n\n\necho y &&\nw")] == [True]
