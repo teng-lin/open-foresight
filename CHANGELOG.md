@@ -6,6 +6,13 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-10-28
+
+Release publication uses the existing build and CI evidence. The repository owner
+waived another release-verification cycle; no additional installed-release
+acceptance or physical GPU verification is required for publication. The Mac app
+and disk image are ad-hoc signed and are not notarized.
+
 ### Fixed
 
 - Keep diagnostic retry and native-drain fixtures synchronized with actual
@@ -251,7 +258,8 @@ The macOS disk image in this release is ad-hoc signed and is not notarized.
 Physical-device recovery and echo-cancellation quality were not validated across
 hardware. Model weights are downloaded after install and are not inside the packages.
 
-[Unreleased]: https://github.com/teng-lin/open-foresight/compare/v0.1.4-signed...HEAD
+[Unreleased]: https://github.com/teng-lin/open-foresight/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.5
 [0.1.4]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.4-signed
 [0.1.3]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.3
 [0.1.2]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.2
