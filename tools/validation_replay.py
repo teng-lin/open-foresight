@@ -222,7 +222,7 @@ def observe_git(root: Path, run: Callable[..., Any] = subprocess.run) -> dict[st
 def observe_host() -> dict[str, Any]:
     """The conditions of this host that a packet records."""
     identity = validation_evidence.host_identity()
-    account = validation_evidence.account_identity()
+    account = validation_evidence.account_identity({})
     return {
         "host": identity,
         "tools": validation_evidence.observe_tools(timeout=PROBE_TIMEOUT_SECONDS),

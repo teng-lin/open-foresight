@@ -189,7 +189,7 @@ test temp root); `{platform}` linux or macos; other placeholders printable paths
 bounded length without whitespace, shell metacharacters, `..` or a leading
 `/tmp`); otherwise the report says "unrecorded". The packet must be a regular file under 8 MiB with correctly typed
 fields; a FIFO, an oversized, deeply nested or wrongly typed packet is refused.
-The replay never runs a recorded command and reads no environment; on this host
+The replay never runs a recorded command and reads only `TMPDIR`, `FORESIGHT_TEST_TEMP_ROOT` (to judge this shell's temp roots) and `PATH` (to find tools) from its environment; on this host
 it runs only `git status` and `git rev-parse` (without optional locks) and the
 tools' `--version` probes (`flutter --version` may touch the Flutter SDK cache),
 each with a 10 second limit. A failed probe on either side, an unreadable

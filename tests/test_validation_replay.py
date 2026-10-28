@@ -798,3 +798,29 @@ def test_validate_change_no_longer_accepts_abbreviated_flags():
         validate_change.parse_arguments(["--skip-inv"])
     assert validate_change.build_parser().allow_abbrev is False
     assert validate_change.parse_arguments(["--skip-inventory-check"]).skip_inventory_check is True
+
+
+def test_the_replay_reads_only_the_documented_environment_names(monkeypatch):
+    class Recorder(dict):
+        names: set = set()
+
+        def get(self, key, default=None):
+            Recorder.names.add(key)
+            return super().get(key, default)
+
+        def __getitem__(self, key):
+            Recorder.names.add(key)
+            return super().__getitem__(key)
+
+        def __contains__(self, key):
+            Recorder.names.add(key)
+            return super().__contains__(key)
+
+    recorder = Recorder(dict(os.environ))
+    Recorder.names = set()
+    monkeypatch.setattr(os, "environ", recorder)
+    replay.observe_host()
+    names = {name.decode() if isinstance(name, bytes) else name for name in Recorder.names}  # the exec path lookup also asks for b"PATH"
+    monkeypatch.undo()
+    assert names <= {"TMPDIR", "FORESIGHT_TEST_TEMP_ROOT", "PATH"}, names
+    assert "HOME" not in names and "USER" not in names
