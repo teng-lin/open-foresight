@@ -6,6 +6,12 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep routine saved-audio processing messages from repeatedly shifting the
+  recording view. Show the final recording status after capture stops, including
+  failures and the reason for inactivity or desktop-visibility stops.
+
 ## [0.1.5] - 2026-10-28
 
 Release publication uses the existing build and CI evidence. The repository owner

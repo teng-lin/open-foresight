@@ -305,7 +305,12 @@ final class RecordingController {
                           ))
                       .inSeconds >=
                   minutes * 60) {
-            unawaited(stopRecording().catchError((Object _) {}));
+            unawaited(
+              stopRecording(
+                reason:
+                    'Recording stopped after $minutes minutes without audio.',
+              ).catchError((Object _) {}),
+            );
           }
         } catch (error, stack) {
           unawaited(
@@ -361,13 +366,17 @@ final class RecordingController {
     }
   }
 
-  Future<void> stopRecording() => _beginStop();
+  Future<void> stopRecording({String? reason}) => _beginStop(reason: reason);
 
-  Future<void> _beginStop({Object? initialFailure, StackTrace? initialStack}) =>
-      _stopping ??= _stopRecording(
-        initialFailure: initialFailure,
-        initialStack: initialStack,
-      ).whenComplete(() => _stopping = null);
+  Future<void> _beginStop({
+    Object? initialFailure,
+    StackTrace? initialStack,
+    String? reason,
+  }) => _stopping ??= _stopRecording(
+    initialFailure: initialFailure,
+    initialStack: initialStack,
+    reason: reason,
+  ).whenComplete(() => _stopping = null);
 
   Recording _activeRecording(int? id) {
     final active = recording;
@@ -505,6 +514,7 @@ final class RecordingController {
   Future<void> _stopRecording({
     Object? initialFailure,
     StackTrace? initialStack,
+    String? reason,
   }) async {
     final active = recording;
     final id = recordingMeeting;
@@ -598,6 +608,9 @@ final class RecordingController {
                   'Some speech was not saved; committed transcript retained.'
             : 'Capture stopped; meeting status could not be saved. '
                   'Committed transcript retained.';
+      }
+      if (!interrupted && failure == null && reason != null) {
+        recordingState = '$reason $recordingState';
       }
       _notify();
       _trackIndex(id, session, finalIndex: true);

@@ -4,6 +4,7 @@ export 'shell/test_access.dart' show WorkspaceTestAccess;
 import 'desktop_environment.dart';
 import 'features/chat/chat_controller.dart';
 import 'features/meetings/meetings_controller.dart';
+import 'features/meetings/recording_view.dart';
 import 'feature_request_identity.dart';
 import 'shell/feature_bridges.dart';
 import 'features/integrations/integrations_controller.dart';
@@ -604,7 +605,19 @@ class _WorkspaceState extends State<Workspace>
     return AgentApprovalSurface(
       domain: d,
       allowAgentRequests: !onboarding,
-      child: workspace,
+      child: Column(
+        children: [
+          if (!onboarding)
+            ValueListenableBuilder<int>(
+              valueListenable: serviceUiRevision,
+              builder: (_, __, ___) => RecordingStatusNotice(
+                active: d.capturePresentation.active,
+                status: d.capturePresentation.state,
+              ),
+            ),
+          Expanded(child: workspace),
+        ],
+      ),
     );
   }
 

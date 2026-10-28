@@ -126,6 +126,55 @@ Future<void> show(
 }
 
 void main() {
+  testWidgets('live chunk processing does not shift the recording player', (
+    tester,
+  ) async {
+    final actions = Actions();
+    await show(
+      tester,
+      actions,
+      session: clip(physical: MeetingAudioPhysicalState.recording),
+    );
+    final height = tester.getSize(find.byType(MeetingAudioPlayer)).height;
+    await show(
+      tester,
+      actions,
+      session: clip(
+        physical: MeetingAudioPhysicalState.recording,
+        sources: const [
+          AudioSourceProcessingPresentation(
+            source: MeetingAudioSource.microphone,
+            pendingDurationUs: 5000000,
+            pendingJobs: 1,
+          ),
+        ],
+        compression: const AudioWorkPresentation(pending: 1),
+      ),
+    );
+    expect(find.text('Saving space in the background…'), findsNothing);
+    expect(find.textContaining('transcription is catching up'), findsNothing);
+    expect(tester.getSize(find.byType(MeetingAudioPlayer)).height, height);
+    await show(
+      tester,
+      actions,
+      session: clip(
+        physical: MeetingAudioPhysicalState.recording,
+        compression: const AudioWorkPresentation(
+          state: MeetingAudioWorkState.failed,
+        ),
+        captureError: 'fixture capture failure',
+      ),
+    );
+    expect(
+      find.text('Audio compression needs attention. Available audio is kept.'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Recording stopped unexpectedly'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('storage distinguishes saved audio from additional copies', (
     tester,
   ) async {
