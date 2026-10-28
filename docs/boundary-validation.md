@@ -193,19 +193,23 @@ content is `git show f7c06383:docs/architecture/service-lifecycle-tests.md`. The
 inventory's `lifecycle_reconciliation` re-checks each baseline gap against
 currently registered tests, with evidence and what remains missing. A cell is
 `closed-production` only with a read test whose recorded sides say production on
-both; the guard enforces that wording. After review, **no cell is closed**: 14
-baseline gaps were re-checked and the verdicts are pinned in a test.
+both; the guard enforces that wording. Of the 14 baseline gaps, **two are
+closed** (desktop crash, and desktop EOF before reply) by contract tests that kill a
+real service under a real `RemoteDomain`; the rest are pinned in a test as
+partial, fixture-only or open.
 
 | Cell | Verdict | Why |
 | --- | --- | --- |
-| Desktop to service: crash, EOF before reply, slow reply | fixture-only | Only a fixture service drops or holds frames for `RemoteDomain`. The test that closes a connection before dispatch was removed from the EOF cell: nothing is pending there. |
-| Desktop to service: reconnect, duplicate launch | partial | The real-service facade test SIGTERMs with no mutation in flight and its `no_mutation_replay` field is a literal `true`, so it does not prove an uncertain mutation is never replayed; that is proven only against the fixture service. |
+| Desktop to service: crash | closed | `service_crash_contract_test.dart` SIGKILLs the real service (test-hook build of the same entrypoint) under an attached `RemoteDomain`; the next command reconnects once to a replacement and the committed note survived. Not covered: several requests in flight, a crash during startup. |
+| Desktop to service: EOF before reply | closed, for one instant | The hook holds the service after the commit and before the reply; SIGKILL then ends the pending `notes.save` as `outcomeUnknown`, it is not resent, and the replacement holds the note exactly once. A mutation that never committed, and a kill before the commit, are not covered. |
+| Desktop to service: slow reply | fixture-only | Only a fixture service holds a non-attach reply for `RemoteDomain`. |
+| Desktop to service: reconnect, duplicate launch | partial | Reconnect after an unclean loss is now proven against a real service, but the baseline's other gap is unspecified and backoff, attach-timeout and epoch behavior are fixture-only. The older facade test SIGTERMs with no mutation in flight and its `no_mutation_replay` field is a literal `true`; the SIGKILL test above, not that field, is what proves non-replay. |
 | MCP to service: slow reply | fixture-only | Real MCP binary against a fixture service. |
 | Frontend to worker isolate: slow reply | open | The nearest test is a service commit/reply gate, not a bridge assertion. |
 | Service to helper: closing | partial | The gate test proves graceful release with a stand-in helper; the real-helper stop test proves only that the pid is gone, which a SIGKILL fallback also satisfies. An adopted real helper does exit with SIGTERM. This was first recorded as closed and was downgraded. |
 | Service to helper: reconnect, EOF before reply | partial, fixture-only | One real-helper crash test has no RPC in flight, so it supports restart and recovery, not channel reuse or a lost reply. |
 | Service to helper: slow reply, duplicate launch | fixture-only, partial | No real helper answers slowly; adoption is covered but two helpers on one storage are not. |
-| Service to helper: malformed or partial frame | open | No test. |
+| Service to helper: malformed or partial frame | fixture-only | `helper_malformed_frame_test.dart` drives the production Helper, channel and transport against a hostile raw-byte peer over a real Unix socket (six scenarios). Every call ends as a `GrpcError`, nothing reaches the error zone, and the same channel serves a valid replacement. It shows client-side settlement only, not the real helper's reception. A peer that closes after the handshake fails the call promptly; one that fails before the handshake completes, or never finishes a frame, leaves the call pending until its deadline (45 s by default, 30 minutes for `indexDocument`). The same results held with grpc's stock connector, so the test characterizes the client stack; it does not pin the custom transport. |
 | Lock and record handoff: duplicate launch | partial | The baseline's gap is not specified. |
 
 Two citation corrections follow the same review: the MCP boundary's
@@ -216,9 +220,10 @@ registered tests, not proof that those tests pass; CI does that.
 
 ## Scope of this batch
 
-Implemented here: the planner, inventory and evidence summary above. Not
-implemented: fixture-ownership standardization, new behavioral contract tests,
-wiring `validate_change` into CI callers, failure triage of the current nightly
+Implemented here: the planner, inventory and evidence summary above, and the
+first contract tests (desktop crash and EOF before reply against a real service;
+helper malformed frames against a hostile peer). Not implemented: fixture-ownership
+standardization, the remaining lifecycle cells, wiring `validate_change` into CI callers, failure triage of the current nightly
 and reliability measurement. Those remain separate batches of
 [#192](https://github.com/teng-lin/open-foresight/issues/192), and none of this
 changes a workflow, deadline, coverage floor or artifact-trust control.

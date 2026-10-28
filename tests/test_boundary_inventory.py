@@ -402,8 +402,8 @@ def test_a_closed_cell_needs_evidence_that_says_production_on_both_sides(export,
 
 
 EXPECTED_VERDICTS = {
-    ("Desktop to service", "Crash"): "fixture-only",
-    ("Desktop to service", "EOF before reply"): "fixture-only",
+    ("Desktop to service", "Crash"): "closed-production",
+    ("Desktop to service", "EOF before reply"): "closed-production",
     ("Desktop to service", "Slow reply (non-attach)"): "fixture-only",
     ("Desktop to service", "Duplicate launch"): "partial",
     ("Desktop to service", "Reconnect"): "partial",
@@ -413,28 +413,41 @@ EXPECTED_VERDICTS = {
     ("Service to helper", "Reconnect"): "partial",
     ("Service to helper", "EOF before reply"): "fixture-only",
     ("Service to helper", "Slow reply"): "fixture-only",
-    ("Service to helper", "Malformed or partial frame"): "open",
+    ("Service to helper", "Malformed or partial frame"): "fixture-only",
     ("Service to helper", "Duplicate launch"): "partial",
     ("Lock and record handoff", "Duplicate launch"): "partial",
 }
 
 
-def test_every_lifecycle_verdict_is_pinned_and_none_is_closed():
+def test_every_lifecycle_verdict_is_pinned_and_only_proven_cells_are_closed():
     cells = {(item["boundary"], item["transition"]): item["status"] for item in inventory.load(ROOT)["lifecycle_reconciliation"]}
     # A verdict changes only together with the test that justifies it.
     assert cells == EXPECTED_VERDICTS
+    closed = {key for key, status in cells.items() if status == "closed-production"}
+    assert closed == {("Desktop to service", "Crash"), ("Desktop to service", "EOF before reply")}
+    for key in closed:
+        cell = next(item for item in inventory.load(ROOT)["lifecycle_reconciliation"] if (item["boundary"], item["transition"]) == key)
+        assert cell["missing"] is None and cell["note"] and any(
+            entry["path"].endswith("service_crash_contract_test.dart") and "production both" in entry["sides"] for entry in cell["evidence"]
+        )
 
 
-def test_downgraded_cells_say_why_and_cite_what_the_tests_prove():
+def test_cells_say_why_and_cite_what_the_tests_prove():
     data = inventory.load(ROOT)
     eof = cell(data, "Desktop to service", "EOF before reply")
-    assert [(e["path"].rsplit("/", 1)[1], e["test"]) for e in eof["evidence"][:2]] == [
-        ("remote_domain_test.dart", "abrupt service loss reconnects and refreshes snapshots without replaying a write"),
+    assert [(e["path"].rsplit("/", 1)[1], e["test"].split(":")[0]) for e in eof["evidence"]] == [
+        ("service_crash_contract_test.dart", "a service killed after committing a mutation and before its reply"),
         ("remote_domain_test.dart", "a command whose outcome is unknown is never resent"),
     ]
-    assert "already closed" in eof["missing"] and "no reply pending" in eof["missing"]
+    assert "before the commit" in eof["note"] and "several requests" in eof["note"]
+    crash = cell(data, "Desktop to service", "Crash")
+    assert "SIGKILL" in crash["evidence"][0]["sides"] and "several requests in flight" in crash["note"]
     reconnect = cell(data, "Desktop to service", "Reconnect")
-    assert "literal true" in reconnect["evidence"][1]["sides"] and "fixture service" in reconnect["missing"]
+    assert reconnect["status"] == "partial" and "literal true" in reconnect["missing"] and "fixture-only" in reconnect["missing"]
+    assert [e["path"].rsplit("/", 1)[1] for e in reconnect["evidence"][:2]] == ["service_crash_contract_test.dart"] * 2
+    malformed = cell(data, "Service to helper", "Malformed or partial frame")
+    assert malformed["status"] == "fixture-only" and "not the ForesightHelper" in malformed["evidence"][0]["sides"]
+    assert "real ForesightHelper" in malformed["missing"] and "deadline" in malformed["missing"]
     closing = cell(data, "Service to helper", "Closing")
     assert closing["status"] == "partial" and "SIGKILL fallback passes" in closing["missing"]
     assert any("helper.released" in item["sides"] for item in closing["evidence"])

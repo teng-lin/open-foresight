@@ -808,6 +808,15 @@
         },
         {
           "kind": "production-both-sides",
+          "path": "packages/foresight_core/test/service_crash_contract_test.dart",
+          "names": [
+            "a service killed after committing a mutation and before its reply: the desktop is told the outcome is unknown, never resends, and the replacement holds the mutation exactly once",
+            "a service killed while idle: the next command reconnects once to a replacement and the committed data survived"
+          ],
+          "note": "Real RemoteDomain against the real service entrypoint (test-hook build), killed with SIGKILL: idle, and after commit before reply. Proves an uncertain mutation is not resent and committed data survives the crash."
+        },
+        {
+          "kind": "production-both-sides",
           "path": "packages/foresight_core/test/service_profile_identity_test.dart",
           "names": [
             "a desktop reconnecting to an owner in another runtime names that owner's endpoint (L9)"
@@ -849,9 +858,9 @@
         }
       ],
       "gaps": [
-        "No test crashes (SIGKILL or crash gate) a real service under an attached RemoteDomain; real-service tests terminate gracefully.",
         "A slow non-attach reply from a real service to an attached RemoteDomain is not exercised.",
-        "The facade test against the compiled service SIGTERMs with no mutation in flight, and its no_mutation_replay report field is a literal true; 'an uncertain mutation is never replayed' is proven only against the fixture service in remote_domain_test.dart."
+        "The facade test against the compiled service SIGTERMs with no mutation in flight and its no_mutation_replay report field is a literal true; non-replay of an uncertain mutation is proven by the SIGKILL contract test instead, for the instant after commit and before reply only.",
+        "A crash with several requests in flight, a crash before the commit, and a crash during startup are not exercised."
       ]
     },
     {
@@ -1075,6 +1084,14 @@
         },
         {
           "kind": "fixture",
+          "path": "packages/foresight_core/test/helper_malformed_frame_test.dart",
+          "names": [
+            "bytes that are not HTTP/2 at all: the pending call settles as a typed error, nothing escapes, and the same channel serves a replacement"
+          ],
+          "note": "Production Helper, channel and transport against a hostile raw-byte peer over a real Unix socket (six scenarios)."
+        },
+        {
+          "kind": "fixture",
           "path": "packages/foresight_core/test/helper_close_test.dart",
           "names": [
             "concurrent helper shutdown shares one transport termination"
@@ -1107,7 +1124,7 @@
         }
       ],
       "gaps": [
-        "Malformed or partial frames from the helper have no test at all; only stream-reset fixtures exist.",
+        "The real helper's reception of malformed frames is untested; client-side settlement is covered by hostile-peer fixtures only, and pre-handshake failures wait for the call deadline.",
         "Two helpers on one storage (the flock path) and a SIGKILL crash of an adopted helper are untested.",
         "No test makes the real helper answer slowly; the gated helper delays SIGTERM only.",
         "EOF before reply with a real helper mid-request is not arranged deterministically; the real-helper crash test kills the process but does not hold an in-flight RPC."
@@ -2162,44 +2179,41 @@
       "boundary": "Desktop to service",
       "transition": "Crash",
       "baseline": "F",
-      "status": "fixture-only",
+      "status": "closed-production",
       "evidence": [
+        {
+          "path": "packages/foresight_core/test/service_crash_contract_test.dart",
+          "test": "a service killed while idle: the next command reconnects once to a replacement and the committed data survived",
+          "sides": "production both; the real RemoteDomain against bin/service.dart compiled with its test hooks, killed with SIGKILL while idle: the next command reconnects once to a replacement and the committed note survived"
+        },
         {
           "path": "packages/foresight_core/test/remote_domain_test.dart",
           "test": "abrupt service loss reconnects and refreshes snapshots without replaying a write",
-          "sides": "production client, fixture service"
-        },
-        {
-          "path": "tests/service/test_service_process.py",
-          "test": "test_unexpected_service_death_interrupts_capture_and_reuses_profile",
-          "sides": "raw Python peer client, production service"
+          "sides": "production client, fixture service that drops the socket (the earlier evidence, kept for the snapshot and epoch behavior)"
         }
       ],
-      "missing": "No test SIGKILLs or crash-gates a real service while a RemoteDomain or DesktopConnection is attached; the facade test terminates gracefully."
+      "missing": null,
+      "note": "Closed by a test that SIGKILLs a real service under an attached RemoteDomain. The build is the real entrypoint plus the test-hook gates; the kill itself is not a hook. Not covered: a crash with several requests in flight, and a crash during startup."
     },
     {
       "boundary": "Desktop to service",
       "transition": "EOF before reply",
       "baseline": "F",
-      "status": "fixture-only",
+      "status": "closed-production",
       "evidence": [
         {
-          "path": "packages/foresight_core/test/remote_domain_test.dart",
-          "test": "abrupt service loss reconnects and refreshes snapshots without replaying a write",
-          "sides": "production client, fixture service that drops the socket"
+          "path": "packages/foresight_core/test/service_crash_contract_test.dart",
+          "test": "a service killed after committing a mutation and before its reply: the desktop is told the outcome is unknown, never resends, and the replacement holds the mutation exactly once",
+          "sides": "production both; the real RemoteDomain and bin/service.dart (test-hook build) killed with SIGKILL after the commit and before the reply: the pending notes.save ends outcomeUnknown, is not resent, and the replacement holds the note exactly once"
         },
         {
           "path": "packages/foresight_core/test/remote_domain_test.dart",
           "test": "a command whose outcome is unknown is never resent",
-          "sides": "production client, fixture service"
-        },
-        {
-          "path": "packages/foresight_core/test/service_closing_protocol_test.dart",
-          "test": "at SIGTERM a request waiting for approval is refused and resent once to the replacement, while a dispatched one is outcomeUnknown",
-          "sides": "production service; the client is ServiceConnection, not RemoteDomain"
+          "sides": "production client, fixture service (the typed-error contract with a service-sent outcomeUnknown)"
         }
       ],
-      "missing": "A real service ending an in-flight request from an attached RemoteDomain with no reply. The earlier citation of 'a command on a connection that already closed is sent once, on the next' was removed: that test closes the connection before dispatch and has no reply pending."
+      "missing": null,
+      "note": "Closed for the instant after commit and before reply, which the request.committed gate pins exactly. Not covered: a kill before the commit (no gate exists there), a kill with several requests pending, and a read-only request."
     },
     {
       "boundary": "Desktop to service",
@@ -2246,6 +2260,16 @@
       "status": "partial",
       "evidence": [
         {
+          "path": "packages/foresight_core/test/service_crash_contract_test.dart",
+          "test": "a service killed while idle: the next command reconnects once to a replacement and the committed data survived",
+          "sides": "production both; reconnect after an unclean loss (SIGKILL) of a real service launches exactly one replacement"
+        },
+        {
+          "path": "packages/foresight_core/test/service_crash_contract_test.dart",
+          "test": "a service killed after committing a mutation and before its reply: the desktop is told the outcome is unknown, never resends, and the replacement holds the mutation exactly once",
+          "sides": "production both; the uncertain mutation is not resent by the reconnect"
+        },
+        {
           "path": "packages/foresight_core/test/service_profile_identity_test.dart",
           "test": "a desktop reconnecting to an owner in another runtime names that owner's endpoint (L9)",
           "sides": "production both"
@@ -2256,7 +2280,7 @@
           "sides": "production both; the service is SIGTERMed with no mutation in flight and needs a display. Its report's no_mutation_replay is a literal true in tests/service/remote_client_probe.dart, so, although it checks the persisted note is unchanged after the restart, it does not prove an uncertain mutation is never replayed"
         }
       ],
-      "missing": "Reconnect after an unclean loss of a real service (the baseline matrix does not state what its G part was). Non-replay of an uncertain mutation is proven only against the fixture service (remote_domain_test); no real-service test leaves a mutation in flight. Backoff, attach-timeout and epoch behavior are fixture-only."
+      "missing": "The baseline matrix does not state what its G part was, so the cell is not closed. Backoff, attach-timeout and epoch behavior are fixture-only. The facade test's no_mutation_replay is still a literal true; the new crash test is what proves non-replay."
     },
     {
       "boundary": "MCP/CLI to service",
@@ -2361,9 +2385,16 @@
       "boundary": "Service to helper",
       "transition": "Malformed or partial frame",
       "baseline": "G",
-      "status": "open",
-      "evidence": [],
-      "missing": "No test found. Stream-reset tests use a controlled-socket stand-in and do not cover a malformed frame."
+      "status": "fixture-only",
+      "evidence": [
+        {
+          "path": "packages/foresight_core/test/helper_malformed_frame_test.dart",
+          "test": "bytes that are not HTTP/2 at all: the pending call settles as a typed error, nothing escapes, and the same channel serves a replacement",
+          "sides": "production Helper, channel and transport over a real Unix socket; the peer is a hostile fixture writing raw bytes, not the ForesightHelper"
+        }
+      ],
+      "missing": "The real ForesightHelper's own reception of a malformed or partial frame is untested; the fixture peer shows only how the client side settles. Failures before the handshake completes, and a frame that never finishes, are not reported promptly: the call waits for its deadline (45 s by default, 30 minutes for indexDocument). A peer that closes after the handshake does fail promptly, but as UNKNOWN/UNAVAILABLE rather than a protocol-specific code.",
+      "note": "Six hostile-peer scenarios: non-HTTP/2 bytes, close before any frame, handshake plus a huge announced payload, half a frame header then silence, half a frame header then EOF, handshake then EOF. Each settles as a GrpcError, nothing reaches the error zone, and the same channel serves a valid replacement."
     },
     {
       "boundary": "Service to helper",
