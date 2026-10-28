@@ -60,6 +60,7 @@ QUALITY_ONLY = {
     "tests/test_ci_gate_owners.py": "Apple runner and host metadata are fixture inputs; real DMG contracts have an external owner.",
     "tests/test_build_recipes.py": "All platform/tool probes are monkeypatched.",
     "tests/test_litert_build_orchestration.py": "Host platform/machine are fixture inputs.",
+    "tests/test_workflow_lint_export.py": "The hosted-tool probe is a skip condition; the real actionlint run belongs to the quality workflow-lint job.",
     "tests/test_linux_bundle_failure_paths.py": "Dart SDK lookup, loader probes and compiler products are fixture inputs.",
 }
 
