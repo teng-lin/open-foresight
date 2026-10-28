@@ -19,6 +19,7 @@ import 'package:integration_test/integration_test.dart';
 import 'package:open_foresight/main.dart' as app;
 import '../test_support/onboarding.dart';
 import 'package:open_foresight/features/onboarding/onboarding_view.dart';
+import 'package:open_foresight/features/meetings/recording_view.dart';
 
 final observed = ObservedExpectations();
 
@@ -423,8 +424,10 @@ void main() {
         await workspace.d.command(Operation.meetingsStart, {'id': id});
         const captureWarning =
             'Capture interrupted: audio storage or capture failed. Saved audio is retained.';
-        const visibleWarning =
-            'Recording stopped unexpectedly. Your saved audio is still shown here.';
+        final captureNotice = find.descendant(
+          of: find.byType(RecordingStatusNotice),
+          matching: find.text(captureWarning),
+        );
         final denialDeadline = DateTime.now().add(const Duration(seconds: 30));
         await waitFor(
           tester,
@@ -436,7 +439,7 @@ void main() {
         expect(workspace.meetingFeature.recordingState, captureWarning);
         await waitFor(
           tester,
-          () => find.text(visibleWarning).evaluate().isNotEmpty,
+          () => captureNotice.evaluate().isNotEmpty,
           deadline: denialDeadline,
         );
         final failedStatus = await workspace.d.command(Operation.status) as Map;
@@ -480,7 +483,7 @@ void main() {
           (afterStopAudio['meeting'] as Map)['captureError'],
           captureWarning,
         );
-        expect(find.text(visibleWarning), findsWidgets);
+        expect(captureNotice, findsOneWidget);
         final failed =
             await workspace.d.command(Operation.meetingsGet, {'id': id}) as Map;
         observed.expect(
