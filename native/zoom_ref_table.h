@@ -6,12 +6,17 @@
 // is reused for someone else, or renamed, gets a new reference, so a screen
 // slot never lends one person's reference to another. Without element identity
 // the reference is keyed by name and ordinal and only trusted while the count
-// of that name is unchanged; duplicate names there cannot be told apart across
-// polls, which the result reports so the observation can be marked incomplete.
+// of that name is unchanged. Equal names are allowed (two people may share a
+// display name) and keep distinct references; the result is `uncertain` only
+// when references may have swapped: the elements behind a duplicated name
+// changed since the previous observation, or, without element identity, the
+// slot's occupant changed. People present in the current observation are never
+// evicted to make room.
 #include "zoom_ax_parser.h"
 
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -35,6 +40,7 @@ public:
       window_ = window;
       by_object_.clear();
       by_name_.clear();
+      duplicate_elements_.clear();
     }
     ++generation_;
     std::map<std::string, int> totals;
@@ -50,16 +56,15 @@ public:
       int count;
     };
     std::vector<Pending> pending;
+    std::map<std::string, std::set<uint64_t>> duplicates;
     // Pass 1: everyone already known keeps their reference and is marked as
     // present, so nothing below can evict a person who is still here.
     for (size_t i = 0; i < participants.size(); ++i) {
       const auto &participant = participants[i];
       int total = totals[participant.key];
-      // Equal names cannot be told apart if their tiles trade places (with
-      // element identity) or come and go (without it): never certain.
-      if (total > 1)
-        result.uncertain = true;
       if (participant.object_id != 0) {
+        if (total > 1)
+          duplicates[participant.key].insert(participant.object_id);
         auto key = std::make_pair(participant.object_id, participant.key);
         auto it = by_object_.find(key);
         if (it != by_object_.end()) {
@@ -96,6 +101,10 @@ public:
             true; // those people get new references if they return
     }
     for (const auto &item : pending) {
+      // Equal names without element identity: the slot's occupant changed, so
+      // the reference may now belong to someone else.
+      if (participants[item.index].object_id == 0 && item.count > 1)
+        result.uncertain = true;
       std::string ref = next();
       bool object = participants[item.index].object_id != 0;
       bool replaces = !object && by_name_.count(item.name_key) != 0;
@@ -109,6 +118,14 @@ public:
       }
       result.refs[item.index] = std::move(ref);
     }
+    // Equal names with element identity: references follow the element, so they
+    // may have swapped people only when the elements behind the name changed.
+    for (const auto &[key, elements] : duplicates) {
+      auto before = duplicate_elements_.find(key);
+      if (before == duplicate_elements_.end() || before->second != elements)
+        result.uncertain = true;
+    }
+    duplicate_elements_ = std::move(duplicates);
     return result;
   }
 
@@ -133,6 +150,8 @@ private:
   uint64_t generation_ = 0;
   std::map<std::pair<uint64_t, std::string>, Entry> by_object_;
   std::map<std::pair<std::string, int>, Entry> by_name_;
+  // Elements behind each duplicated name in the previous observation.
+  std::map<std::string, std::set<uint64_t>> duplicate_elements_;
 };
 
 } // namespace foresight::zoom
