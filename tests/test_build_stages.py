@@ -15,7 +15,7 @@ def install_media_prerequisite_fixture(root):
     # separately exercises its real receipt, signing and inherited selection.
     (root / "tools/run_media_test_gate.py").write_text(
         "import json,os,pathlib,sys\n"
-        "pathlib.Path(os.environ['COMMAND_LOG']+'.media-arguments').write_text(json.dumps(sys.argv[1:]))\n"
+        "pathlib.Path(__file__).with_suffix('.arguments.json').write_text(json.dumps(sys.argv[1:]))\n"
         "sys.exit(int(os.getenv('FAIL_MEDIA', '0'))) if os.getenv('FAIL_MEDIA', '0') != '0' else None\n"
         "keys=('WORKER','BUILD_ID','SHA256','CDHASH')\n"
         "path=pathlib.Path(sys.argv[sys.argv.index('--environment-output')+1])\n"
@@ -394,7 +394,7 @@ def test_core_selects_restored_build_only_without_inherited_identity(
     result = invoke_dart_gate(dart_gate_tree, "core", **inherited)
     assert result.returncode == 0, result.stdout + result.stderr
     arguments = json.loads(
-        Path(environment["COMMAND_LOG"] + ".media-arguments").read_text()
+        (root / "tools/run_media_test_gate.arguments.json").read_text()
     )
     assert "--reuse-selected" in arguments
     assert ("--existing-product" in arguments) is reuse_build

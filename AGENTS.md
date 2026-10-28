@@ -5,6 +5,8 @@ Use [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and required check
 - Before every push run `.venv/bin/python -m tools.check_local_validation`, then
   the applicable language/platform checks in CONTRIBUTING.
 - Integrate small, independently verified batches, even when delivering one PR.
+- Audit direct and transitive consumers of shared fixtures. After Python or
+  tooling changes, focused tests and shared guards do not replace the full suite.
 - Reproduce the exact failed CI entrypoint. Match OS, pinned tools, UID/GID,
   NSS account/home, caches, network isolation and source/JIT mode. Record gaps.
 - Match the declared test concurrency separately from build parallelism;
