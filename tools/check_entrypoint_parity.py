@@ -15,23 +15,31 @@ separating commands), and a script is called only when it is a whole token of a
 command that executes things: a mention in `echo`, `cp`, `chmod`, `test` or a
 quoted string is not a call, nor is a step or job whose `if:` is the literal
 `false`. A gate that names `--stage` or `--suite` is satisfied only by a call with
-the same value, and a `--build-only` call does not satisfy a gate that does not
-ask for it.
+the same value (`tools/build.sh` defaults to `--stage all`, so a call without
+`--stage` satisfies every stage), and a `--build-only` call does not satisfy a
+gate that does not ask for it.
 
-Only a step's own call, with a literal discriminator, puts a workflow step in a
-gate's `called_by`. Two weaker kinds of evidence are `may_call`: a call a
-repository shell script makes, and a call whose `--stage`/`--suite` value comes
-from a shell variable. Script-mediated calls are over-approximated, not
-evaluated: every command in a called script counts, whatever branch, loop or
-function it sits in, and each script is read once per step. A gate whose only
-evidence is `may_call` is wiring-unverified: it is listed in the output and must
-be acknowledged with a `wiring_unverified_reason` in the inventory, so a new
-unverified gate fails the guard and an acknowledged one that gains a direct
-caller is a stale declaration. Hard limits (script size and lines, scripts and
-calls per step, workflow size) are problems when hit, never silent truncation.
-Static limits remain: `if false; then ...; fi` or code after `exit 0` inside a
-step or script, shell functions never invoked, and the `--platform` argument
-(not compared) are read as if they ran or matched.
+Two tiers, and nothing is ever dropped by reasoning about shell control flow. A
+call is `exact` (the gate's `called_by`) only when it is a top-level
+unconditional simple command of the step's own text, with a literal
+`--stage`/`--suite` (and, for a gate that passes `--platform {platform}`, the
+platform of its flag or its runner). Everything else that mentions a script in an
+executing position is `may_call`: a call inside `if`/`case`/a loop/a function/a
+subshell/a conditional group, in an and-or list, after a top-level `exit`, made
+by a repository shell script, fed to a shell as a here-document, or whose stage
+or suite comes from a variable the guard cannot resolve. Script-mediated calls
+are over-approximated, not evaluated: every command in a called script counts,
+and each script is read once per step. The one thing resolved is a GitHub matrix:
+a variable bound to `${{ matrix.key }}` is replaced by each value of a literal
+list that no include or exclude touches (the step's own `if:` is not evaluated).
+A gate (on a platform) whose only evidence is `may_call` is wiring-unverified:
+it is listed in the output and must be acknowledged with a
+`wiring_unverified_reason` in the inventory, so a new unverified gate fails the
+guard and an acknowledged one that gains an exact caller is a stale declaration.
+Hard limits (script size and lines, scripts and calls per step, workflow size)
+are problems when hit, never silent truncation. Static limits: the guard does not
+tell whether a conditional call runs, and `--build-only`/`--platform` are the
+only other arguments it compares.
 
 Inline test-runner invocations in workflows (`dart test`, `flutter test`, `ctest`,
 `pytest`) are reported for information. They are not failures.
@@ -43,6 +51,7 @@ import argparse
 from collections.abc import Mapping, Sequence
 from collections import Counter, deque
 from dataclasses import dataclass, field
+import itertools
 import json
 from pathlib import Path
 import re
@@ -75,6 +84,7 @@ class Run:
     job: str
     step: str
     text: str
+    platform: str | None = None  # linux or macos when the job's runs-on says so
 
 
 @dataclass(frozen=True)
@@ -84,6 +94,8 @@ class Call:
     script: str  # repository path, such as tools/build.sh
     args: tuple[str, ...]
     via: str | None = None
+    exact: bool = False  # a top-level unconditional command of a step's own text
+    platform: str | None = None
 
 
 @dataclass
@@ -132,10 +144,87 @@ def _local_target(uses: Any) -> str | None:
     return uses[2:].rstrip("/")
 
 
-def _steps(document: Any, where: str, parsed: Parsed, file: str) -> None:
+_MATRIX_EXPRESSION = re.compile(r"^\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}$")
+_MAX_EXPANSIONS = 64
+
+
+def _runner_platform(runs_on: Any) -> str | None:
+    label = runs_on[0] if isinstance(runs_on, list) and runs_on else runs_on
+    if isinstance(label, str):
+        label = label.lower()
+        if label.startswith("macos"):
+            return "macos"
+        if label.startswith(("ubuntu", "linux")):
+            return "linux"
+    return None
+
+
+def _matrix_values(job: Mapping[str, Any]) -> dict[str, list[str]]:
+    """Matrix keys whose values are a literal list that no include or exclude touches."""
+    strategy = job.get("strategy")
+    matrix = strategy.get("matrix") if isinstance(strategy, dict) else None
+    if not isinstance(matrix, dict):
+        return {}
+    touched = {
+        key
+        for rule in ("include", "exclude")
+        if isinstance(matrix.get(rule), list)
+        for entry in matrix[rule]
+        if isinstance(entry, dict)
+        for key in entry
+    }
+    unreadable = any(rule in matrix and not isinstance(matrix[rule], list) for rule in ("include", "exclude"))
+    return {
+        str(key): [str(item) for item in values]
+        for key, values in matrix.items()
+        if key not in ("include", "exclude") and key not in touched and not unreadable
+        and isinstance(values, list) and values and all(isinstance(item, (str, int, float)) for item in values)
+    }
+
+
+def _expansions(step: Mapping[str, Any], job: Mapping[str, Any], text: str) -> list[str]:
+    """The step's text once per literal matrix value it is bound to, or once as written.
+
+    A variable is bound when the step's or job's `env` sets it to exactly
+    `${{ matrix.key }}`; an expression `${{ matrix.key }}` written in the text is
+    bound too. The step's own `if:` is not evaluated, so a value the condition
+    would skip still counts.
+    """
+    values = _matrix_values(job)
+    if not values:
+        return [text]
+    env: dict[str, Any] = {}
+    for source in (job.get("env"), step.get("env")):
+        if isinstance(source, dict):
+            env.update(source)
+    bound: dict[str, str] = {}  # replacement pattern -> matrix key
+    for name, value in env.items():
+        found = _MATRIX_EXPRESSION.match(value.strip()) if isinstance(value, str) else None
+        if found and found.group(1) in values:
+            bound[rf"\$\{{?{re.escape(str(name))}\}}?(?![A-Za-z0-9_])"] = found.group(1)
+    for key in values:
+        if re.search(rf"\$\{{\{{\s*matrix\.{re.escape(key)}\s*\}}\}}", text):
+            bound[rf"\$\{{\{{\s*matrix\.{re.escape(key)}\s*\}}\}}"] = key
+    bound = {pattern: key for pattern, key in bound.items() if re.search(pattern, text)}
+    if not bound:
+        return [text]
+    keys = sorted(set(bound.values()))
+    combinations = [dict(zip(keys, combo, strict=True)) for combo in itertools.product(*(values[key] for key in keys))]
+    result = []
+    for combination in combinations[:_MAX_EXPANSIONS]:
+        variant = text
+        for pattern, key in bound.items():
+            variant = re.sub(pattern, combination[key].replace("\\", "\\\\"), variant)
+        result.append(variant)
+    return result
+
+
+def _steps(document: Any, where: str, parsed: Parsed, file: str, job: Mapping[str, Any] | None = None) -> None:
     if not isinstance(document, list):
         parsed.problems.append(f"{where}: steps must be a list")
         return
+    job = job or {}
+    platform = _runner_platform(job.get("runs-on"))
     for index, step in enumerate(document):
         if not isinstance(step, dict):
             parsed.problems.append(f"{where}: step {index} is not a mapping")
@@ -148,7 +237,8 @@ def _steps(document: Any, where: str, parsed: Parsed, file: str) -> None:
                 continue
             if _literally_false(step.get("if")):
                 continue  # a step that can never run calls nothing
-            parsed.runs.append(Run(file, where, str(step.get("name", f"step {index}")), step["run"]))
+            for text in _expansions(step, job, step["run"]):
+                parsed.runs.append(Run(file, where, str(step.get("name", f"step {index}")), text, platform))
 
 
 def workflow_runs(root: Path = ROOT) -> tuple[list[Run], list[str]]:
@@ -196,7 +286,7 @@ def workflow_runs(root: Path = ROOT) -> tuple[list[Run], list[str]]:
                 elif not isinstance(body, dict) or "steps" not in body:
                     parsed.problems.append(f"{name}: job {job} has no steps")
                 elif not _literally_false(body.get("if")):
-                    _steps(body["steps"], f"{name}:{job}", parsed, name)
+                    _steps(body["steps"], f"{name}:{job}", parsed, name, body)
         elif isinstance(document.get("runs"), dict):
             _steps(document["runs"].get("steps", []), f"{name}:(action)", parsed, name)
         else:
@@ -393,11 +483,14 @@ def command_stream(text: str) -> list[tuple[tuple[str, ...], list[str]]]:
             current.append(token)
     if current:
         stream.append((tuple(separators), current))
+        separators = []
+    if separators:
+        stream.append((tuple(separators), []))  # trailing separators close groups: keep them, with no command
     return stream
 
 
 def command_segments(text: str) -> list[list[str]]:
-    return [segment for _separators, segment in command_stream(text)]
+    return [segment for _separators, segment in command_stream(text) if segment]
 
 
 _SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
@@ -455,61 +548,94 @@ def _runs_script(segment: Sequence[str], index: int) -> bool:
 
 _OPENERS = {"if", "case", "for", "while", "until", "select"}
 _CLOSERS = {"fi", "esac", "done"}
+_AND_OR = ("&&", "||")
+_PIPES = ("|", "|&")
 
 
-def calls_in(text: str, prune: bool = True) -> list[tuple[str, tuple[str, ...]]]:
-    """(script, arguments after it) for each repository script a command executes.
+def _unconditional(stream: Sequence[tuple[tuple[str, ...], list[str]]]) -> list[bool]:
+    """For each command: is it a top-level unconditional simple command of the text?
 
-    With [prune] (the state below only ever changes then), commands that provably cannot run are dropped: those after a
-    top-level `exit`, those joined to a bare `false` by `&&` or to a bare `true`
-    by `||`, and the body of `if false`. That is all the guard decides about
-    control flow; it is for a step's own text. A called script is read with
-    [prune] off, because over-approximating is the contract there.
+    It is not when it sits in an `if`/`case`/loop, a function body, a subshell or
+    a group that is itself conditional (an and-or operand, or a function), when it
+    belongs to an and-or list (`a && b`, `a || b`), or when a top-level `exit`
+    came before it. Nothing is ever dropped: this only decides how much a call
+    proves, and shell control flow is not evaluated.
     """
-    found: list[tuple[str, tuple[str, ...]]] = []
-    depth = 0
-    open_groups = {"(": 0, "{": 0}
-    dead = False
-    skip_joiner: str | None = None
-    false_if_depth: int | None = None
-    for separators, segment in command_stream(text):
-        for separator in separators:
-            if separator in open_groups:
-                open_groups[separator] += 1
-                depth += 1
-            elif separator in (")", "}"):
-                opener = "(" if separator == ")" else "{"
-                if open_groups[opener]:  # an unmatched `)` ends a case pattern, not a group
-                    open_groups[opener] -= 1
-                    depth = max(0, depth - 1)
+    events: list[tuple[str, int | str]] = []
+    for index, (separators, segment) in enumerate(stream):
+        events.extend(("sep", separator) for separator in separators)
+        if segment:
+            events.append(("seg", index))
+
+    def is_and_or(position: int) -> bool:
+        return 0 <= position < len(events) and events[position][0] == "sep" and events[position][1] in _AND_OR
+
+    def is_pipe(position: int) -> bool:
+        return 0 <= position < len(events) and events[position][0] == "sep" and events[position][1] in _PIPES
+
+    stack: list[tuple[str, int]] = []
+    conditional_group: dict[int, bool] = {}
+    closing: set[int] = set()
+    for position, (kind, value) in enumerate(events):
+        if kind != "sep":
+            continue
+        if value in ("{", "("):
+            stack.append((str(value), position))
+        elif value in ("}", ")") and stack and stack[-1][0] == ("{" if value == "}" else "("):
+            opener, start = stack.pop()
+            before = events[start - 1] if start else None
+            function = bool(
+                (start >= 2 and before == ("sep", ")") and events[start - 2] == ("sep", "("))
+                or (before is not None and before[0] == "seg" and (stream[int(before[1])][1][-1] == "()" or stream[int(before[1])][1][0] == "function"))
+            )
+            conditional_group[start] = (
+                opener == "(" or function or is_and_or(start - 1) or is_and_or(position + 1)
+            )
+            closing.add(position)
+    open_flags: list[bool] = []
+    blocks = 0
+    after_exit = False
+    result = [False] * len(stream)
+    for position, (kind, value) in enumerate(events):
+        if kind == "sep":
+            if position in conditional_group:
+                open_flags.append(conditional_group[position])
+            elif position in closing and open_flags:
+                open_flags.pop()
+            continue
+        segment = stream[int(value)][1]
         head = segment[0]
-        joiner = separators[-1] if separators and separators[-1] in ("&&", "||") else None
-        if false_if_depth is not None and depth == false_if_depth and head in ("fi", "else", "elif"):
-            false_if_depth = None  # the dead branch ends; an else or elif may run
         if head in _CLOSERS:
-            depth = max(0, depth - 1)
-            continue
-        opens = head in _OPENERS
-        if dead or false_if_depth is not None or (skip_joiner is not None and joiner == skip_joiner):
-            depth += opens
-            continue
-        skip_joiner = None
+            blocks = max(0, blocks - 1)
+        in_list = is_and_or(position - 1) or is_and_or(position + 1)
+        piped = is_pipe(position - 1) or is_pipe(position + 1)
+        conditional = blocks > 0 or any(open_flags) or head in _OPENERS or in_list
+        result[int(value)] = not conditional and not after_exit
+        if head == "exit" and not conditional and not piped:
+            after_exit = True
+        if head in _OPENERS:
+            blocks += 1
+    return result
+
+
+def calls_in(text: str) -> list[tuple[str, tuple[str, ...], bool]]:
+    """(script, arguments after it, exact) for each repository script a command executes.
+
+    Two tiers, and nothing is dropped. A call is exact only when it is a top-level
+    unconditional simple command of the text. Every other call in an executing
+    position (inside a conditional, an and-or list, a function or subshell, or
+    after a top-level `exit`) is reported with exact False, i.e. as `may_call`.
+    """
+    stream = command_stream(text)
+    eligible = _unconditional(stream)
+    found: list[tuple[str, tuple[str, ...], bool]] = []
+    for (_separators, segment), exact in zip(stream, eligible, strict=True):
         for index, token in enumerate(segment):
             path = _PATH.match(token)
             if path and ".." not in path.group(1).split("/") and _runs_script(segment, index):
-                found.append((path.group(1), tuple(segment[index + 1 :])))
+                found.append((path.group(1), tuple(segment[index + 1 :]), exact))
             elif index and segment[index - 1] == "-m" and _MODULE.match(token) and _runs_script(segment, index - 1):
-                found.append((token.replace(".", "/") + ".py", tuple(segment[index + 1 :])))
-        if prune:
-            if segment == ["false"]:
-                skip_joiner = "&&"
-            elif segment in (["true"], [":"]):
-                skip_joiner = "||"
-            elif head == "exit" and depth == 0 and joiner is None:
-                dead = True
-            elif segment == ["if", "false"]:
-                false_if_depth = depth + 1
-        depth += opens
+                found.append((token.replace(".", "/") + ".py", tuple(segment[index + 1 :]), exact))
     return found
 
 
@@ -551,17 +677,17 @@ def collect(runs: Sequence[Run], root: Path = ROOT) -> tuple[list[Call], list[st
         found = 0
         scripts: set[str] = set()
         main, bodies = split_heredocs(run.text)
-        # A step's own text is pruned; a script and a here-document fed to a shell are not (over-approximation).
+        #         # Only a step's own text can prove a call exact; a script and a heredoc fed to a shell are over-approximated.
         queue: deque[tuple[str, str | None, bool]] = deque([(main, None, True), *((body, "<heredoc>", False) for body in bodies)])
         while queue:
-            text, via, prune = queue.popleft()
-            for script, args in calls_in(text, prune):
+            text, via, own = queue.popleft()
+            for script, args, exact in calls_in(text):
                 if found >= MAX_CALLS_PER_STEP:
                     problems.append(f"{run.job}: step {run.step!r} makes more than {MAX_CALLS_PER_STEP} calls; the analysis stopped (wiring unverified)")
                     queue.clear()
                     break
                 found += 1
-                calls.append(Call(run.job, run.step, script, args, via))
+                calls.append(Call(run.job, run.step, script, args, via, exact and own, run.platform))
                 if not script.endswith(".sh") or script in scripts or not (root / script).is_file():
                     continue
                 if len(scripts) >= MAX_SCRIPTS_PER_STEP:
@@ -615,8 +741,7 @@ def satisfies(call: Call, script: str, argv: Sequence[str]) -> str | None:
         given = _flag_values(call.args, flag)
         if not given:
             if script == "tools/build.sh" and flag == "--stage":
-                result = "ambiguous"  # build.sh runs every stage when none is named: evidence, never an exact call
-                continue
+                continue  # build.sh defaults to --stage all, which runs every stage
             return None
         if wanted[0] in given or (script == "tools/build.sh" and "all" in given):
             continue
@@ -625,6 +750,19 @@ def satisfies(call: Call, script: str, argv: Sequence[str]) -> str | None:
             continue
         return None
     return result
+
+
+def _wants_platform(argv: Sequence[str]) -> bool:
+    """Whether the gate runs once per platform: its argv passes `--platform {platform}`."""
+    return any(word == "--platform" and index + 1 < len(argv) and argv[index + 1] == "{platform}" for index, word in enumerate(argv))
+
+
+def _call_platform(call: Call) -> str | None:
+    """The platform a call is for: its literal `--platform`, else the job's runner; None if unknown."""
+    values = _flag_values(call.args, "--platform")
+    if values:
+        return values[0] if "$" not in values[0] else None  # a literal platform (even an unknown one) or a variable
+    return call.platform
 
 
 def check(root: Path = ROOT, inventory: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -640,35 +778,50 @@ def check(root: Path = ROOT, inventory: Mapping[str, Any] | None = None) -> dict
         if gate["kind"] != "command":
             continue
         scripts = boundary_inventory._argv_entrypoints(gate["argv"])
-        evidence: dict[str, bool] = {}  # label -> a direct, literal call of this gate's own value
+        platform_aware = _wants_platform(gate["argv"])
+        platforms: list[str | None] = list(gate.get("platforms") or ()) if platform_aware else [None]
+        # platform -> label -> whether some call under that label is exact for that platform
+        evidence: dict[str | None, dict[str, bool]] = {platform: {} for platform in platforms}
         for call in calls:
             for script in scripts:
                 kind = satisfies(call, script, gate["argv"])
-                if kind:
-                    label = call.where + (f" via {call.via}" if call.via else "")
-                    evidence[label] = evidence.get(label, False) or (kind == "exact" and call.via is None)
-        called_by = sorted(label for label, direct in evidence.items() if direct)
-        may_call = sorted(label for label, direct in evidence.items() if not direct)
+                if not kind:
+                    continue
+                label = call.where + (f" via {call.via}" if call.via else "")
+                own = _call_platform(call) if platform_aware else None
+                for platform in platforms:
+                    if platform_aware and own not in (None, platform):
+                        continue  # a call for another platform
+                    certain = kind == "exact" and call.exact and (own == platform)
+                    evidence[platform][label] = evidence[platform].get(label, False) or certain
+        called_by = sorted({label for labels in evidence.values() for label, certain in labels.items() if certain})
+        may_call = sorted({label for labels in evidence.values() for label in labels} - set(called_by))
         local_only = gate.get("local_only")
-        unverified = local_only is None and not called_by and bool(may_call)
+        no_exact = [str(platform) for platform, labels in evidence.items() if labels and not any(labels.values())]
+        missing = [str(platform) for platform, labels in evidence.items() if not labels]
+        unverified = local_only is None and not missing and bool(no_exact)
         declared = gate.get("wiring_unverified_reason")
         gates[name] = {
-            "scripts": scripts, "called_by": called_by, "may_call": may_call,
-            "wiring_unverified": unverified, "local_only": local_only, "declared_unverified": declared,
+            "scripts": scripts, "called_by": called_by, "may_call": may_call, "platforms": [str(p) for p in platforms if p],
+            "verified_platforms": [str(platform) for platform, labels in evidence.items() if platform and any(labels.values())],
+            "wiring_unverified": unverified, "unverified_platforms": no_exact if unverified else [],
+            "local_only": local_only, "declared_unverified": declared,
         }
         if declared is not None and (not isinstance(declared, str) or not declared.strip()):
             problems.append(f"gate {name}: wiring_unverified_reason needs a reason")
         elif declared is not None and not unverified:
             problems.append(f"gate {name}: declared wiring_unverified_reason but it now has direct evidence or none; remove the stale declaration")
         elif unverified and declared is None:
-            problems.append(f"gate {name}: only a script or a variable may call it ({may_call[0]}); call it directly or declare wiring_unverified_reason")
+            where = f" on {', '.join(no_exact)}" if platform_aware else ""
+            problems.append(f"gate {name}: no step calls it as a top-level command{where} ({may_call[0]}); call it directly or declare wiring_unverified_reason")
         if local_only is not None and (not isinstance(local_only, str) or not local_only.strip()):
             problems.append(f"gate {name}: local_only needs a reason")
         elif local_only is not None and called_by:
             problems.append(f"gate {name}: declared local_only but {called_by[0]} calls it; remove the stale declaration")
-        elif local_only is None and not called_by and not may_call:
+        elif local_only is None and missing:
             detail = " ".join(gate["argv"][1:] if gate["argv"][0] in ("bash", "{python}") else gate["argv"])
-            problems.append(f"gate {name}: no workflow step calls `{detail}`; wire it or declare local_only with a reason")
+            on = f" for {', '.join(missing)}" if platform_aware else ""
+            problems.append(f"gate {name}: no workflow step calls `{detail}`{on}; wire it or declare local_only with a reason")
     return {
         "problems": problems, "gates": gates, "inline_runners": inline_runners(runs), "runs": len(runs),
         "wiring_unverified": sorted(name for name, gate in gates.items() if gate["wiring_unverified"]),

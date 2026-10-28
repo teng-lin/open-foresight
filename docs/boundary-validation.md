@@ -204,69 +204,73 @@ workflows without changing them and checks that every command gate's script is
 reached by some workflow step, or that the gate declares `local_only` with a
 reason, and that a `local_only` claim no workflow contradicts. The `run:` text
 is split into commands the way a shell would (comments stripped, quotes honored,
-`;`, `&&`, `||`, pipes and newlines separate commands). A script is called when it is
-a whole token in an executing position: the command itself (after keywords,
+`;`, `&&`, `||`, pipes and newlines separate commands). A script is called when it
+is a whole token in an executing position: the command itself (after keywords,
 assignments and wrappers such as `env`, `time`, `timeout`, `xvfb-run`,
 `dbus-run-session`), or the argument of `bash`, `sh`, `source`, `.`, `exec` or a
 `python` interpreter that has no flag stopping it from running the script (`-n`,
 `-c`). Anything else is not a call: `shellcheck tools/build.sh`, `bash -n`,
 `python -m py_compile`, `ruff check`, `xargs`, `find -exec`, `cat`, `cp`, `chmod`,
-`git add`, a quoted string, a comment, or a here-document body (unless the
-document is fed to a shell). A path with `..` is never a script. A step or job whose `if:` is literally false
-never runs and calls nothing. A workflow counts only if something can trigger it (a `workflow_call`-only workflow
-counts only when a triggered workflow calls it), and a composite action only if a
-reachable workflow or action `uses:` it. A gate
-with a `--stage` or `--suite` is satisfied by a call with that value (`--stage
-all` covers every stage); a `build.sh` call with no `--stage` runs every stage but
-names none, so it is `may_call` evidence, never an exact call; a `--build-only`
-call builds and runs no tests, so it satisfies no gate that does not ask for it.
-In a step's own text the guard drops commands that provably cannot run, and
-nothing else about control flow: those after a top-level `exit` (not one inside an
-`if`, `case`, loop, group, function or after `||`), those joined to a bare `false`
-by `&&` or a bare `true`/`:` by `||`, and the body of `if false`. A here-document
-opens only outside quotes, comments and arithmetic (`$(( 1<<2 ))`, `<<<`), and its
-body is skipped, except that a body fed to a shell is read as `may_call` (via
-`<heredoc>`), never as a direct call.
+`git add`, a quoted string, a comment, or a here-document body. A path with `..`
+is never a script. A workflow job or step whose YAML `if:` is literally false
+never runs and calls nothing; a workflow counts only if something can trigger it
+(a `workflow_call`-only workflow counts only when a triggered workflow calls it),
+and a composite action only if a reachable workflow or action `uses:` it. A gate
+with a `--stage` or `--suite` is satisfied by a call with that value (`build.sh`
+defaults to `--stage all`, so a call without `--stage` satisfies every stage); a
+`--build-only` call builds and runs no tests, so it satisfies no gate that does
+not ask for it. A gate that passes `--platform {platform}` needs a call for each
+platform it lists, where a call's platform is its literal `--platform` or else its
+job's `runs-on` (`macos-*`, `ubuntu-*`); removing the Linux build step therefore
+cannot hide a missing macOS stage, or the reverse.
 
-Evidence comes in two strengths. `called_by` lists the steps that call the gate's
-script directly with its own literal `--stage`/`--suite`. `may_call` lists weaker
-evidence: a call made by a repository shell script a step runs (shown as
-`via <script>`) and a call whose stage or suite comes from a shell variable.
-**Script-mediated calls are over-approximated, not evaluated**: every command in
-a called script counts, whatever `if`, `case`, loop, function or `exit` it sits
-in, so a script that dispatches on its first argument credits every branch to
-every step that calls it (on the current tree `acceptance-deb` and
-`acceptance-cpu` are credited with `integration-virtual-audio` again). A script
-is read once per step however often it is reached, and heredoc bodies are
-skipped. A gate with only `may_call` evidence is **wiring unverified**: it is
-listed in the default output and in `--json`, it is never counted as a pass, and
-it must be acknowledged with a `wiring_unverified_reason` on the gate in the
-inventory. A new
-unverified gate therefore fails the guard, and an acknowledged gate that gains a
-direct caller is a stale declaration. On the current tree that is five gates (a test pins the set).
-`integration-virtual-audio` runs only through `bash tools/linux_acceptance.sh
+**Two tiers; nothing is dropped by shell reasoning.** `called_by` lists steps that
+make the call as a *top-level unconditional simple command* of the step's own
+text: not inside an `if`, `case`, loop, function, subshell or conditional group,
+not part of an and-or list (`a && b`, `a || b`), and not after a top-level `exit`
+(an unconditional `{ ...; }` group, a pipeline and a closed block do not count
+against it). **Everything else that mentions the script in an executing position
+is `may_call`**: conditional or chained calls, calls after an `exit`, calls made
+by a repository shell script (shown as `via <script>`), a here-document fed to a
+shell (`via <heredoc>`), and a call whose stage or suite comes from a variable
+the guard cannot resolve. The guard never evaluates `if false`, `true || x`,
+`exit` or a test, because each such shortcut dropped a call that bash really runs;
+a call is exact or `may_call`, never absent. Script-mediated calls are
+over-approximated, not evaluated: every command in a called script counts
+whatever branch it sits in, so a dispatcher script credits every branch to every
+step that calls it, and each script is read once per step. The one thing the guard
+resolves is a GitHub matrix: a variable the step or job binds to
+`${{ matrix.key }}` (or that expression written in the text) is replaced by each
+value of a literal scalar list, when no `include` or `exclude` touches that key,
+and the call becomes exact once per listed value. The step's own `if:` is not
+evaluated, so a value the condition would skip still counts.
+
+A gate (on a platform) with only `may_call` evidence is **wiring unverified**: it
+is listed in the default output and in `--json` as `wiring_unverified`, it is
+never counted as a pass, and it must be acknowledged with a
+`wiring_unverified_reason` on the gate in the inventory. A new unverified gate
+therefore fails the guard, and an acknowledged gate that gains an exact caller is
+a stale declaration. On the current tree that is `integration-virtual-audio`
+alone (a test pins the set): it runs only through `bash tools/linux_acceptance.sh
 audio` (the `acceptance-audio` job and the weekly audit), inside a container and
-only when the audio selection variable allows it. `core-stage`, `desktop-stage`,
-`native-stage` and `service-stage` are run by `arch-drift.yml` (`build.sh
---platform linux` with no `--stage`, so every stage) and by `macos.yml` (the stage
-comes from the matrix variable `MACOS_CHECK_STAGE`, which the guard does not
-resolve). The guard cannot confirm which branch or stage runs. Gates that also
-have a direct caller print their `may_call` entries as "May also run (not
-verified)". Hard limits (256 KiB and 5000 lines per script, 200 scripts and 5000
-calls per step, 1 MiB per workflow) are problems when hit, never silent
-truncation, and each text is tokenized once.
+only when the audio selection variable allows it, and the guard cannot confirm
+which branch runs. The four stage gates are verified on both platforms: Linux by
+the `arch-drift.yml` build (`build.sh --platform linux`, whose missing `--stage`
+is `all`) and macOS by the literal matrix in `macos.yml`. Gates that also have a
+direct caller print their `may_call` entries as "May also run (not verified)".
+Hard limits (256 KiB and 5000 lines per script, 200 scripts and 5000 calls per
+step, 1 MiB per workflow) are problems when hit, never silent truncation, and
+each text is tokenized once.
 
 The check also rejects a workflow that calls a repository script that no longer
 exists and fails on any workflow shape it does not understand. It reads only
 `.yml` and `.yaml` files, and refuses YAML anchors, aliases and duplicate keys (a
 pull request controls these files; an alias expansion could exhaust the guard,
-and a repeated `steps:` key would let the last one silently win). Static limits
-remain: an `if false; then ...; fi` or code after `exit 0` inside a step or
-script, shell functions that are never invoked, and the `--platform` argument (not
-compared) are read as if they ran or matched. It is script-level: it does not check that a
-workflow passes the same other arguments, and inline `dart test`, `flutter test`,
-`ctest` or `pytest` invocations are listed in its `--json` output for information
-only.
+and a repeated `steps:` key would let the last one silently win). It is
+script-level: it does not tell whether a conditional call runs, does not compare
+arguments other than `--stage`, `--suite`, `--platform` and `--build-only`, and
+lists inline `dart test`, `flutter test`, `ctest` or `pytest` invocations in its
+`--json` output for information only.
 
 | Overall status | Meaning |
 | --- | --- |

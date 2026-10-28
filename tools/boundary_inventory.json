@@ -163,7 +163,6 @@
     "native-stage": {
       "title": "Native configure, compile and CTest (build.sh native stage)",
       "kind": "command",
-      "wiring_unverified_reason": "No workflow step names this stage literally: arch-drift.yml runs `tools/build.sh --platform linux` without --stage (every stage, on Linux) and macos.yml runs the stage from the matrix variable MACOS_CHECK_STAGE. The parity guard counts both as evidence, not as a call, and does not resolve the matrix.",
       "argv": [
         "bash",
         "tools/build.sh",
@@ -222,7 +221,6 @@
     "core-stage": {
       "title": "Core Dart analyze and tests against the native library (build.sh core stage)",
       "kind": "command",
-      "wiring_unverified_reason": "No workflow step names this stage literally: arch-drift.yml runs `tools/build.sh --platform linux` without --stage (every stage, on Linux) and macos.yml runs the stage from the matrix variable MACOS_CHECK_STAGE. The parity guard counts both as evidence, not as a call, and does not resolve the matrix.",
       "argv": [
         "bash",
         "tools/build.sh",
@@ -266,7 +264,6 @@
     "desktop-stage": {
       "title": "Desktop Flutter analyze and tests (build.sh desktop stage)",
       "kind": "command",
-      "wiring_unverified_reason": "No workflow step names this stage literally: arch-drift.yml runs `tools/build.sh --platform linux` without --stage (every stage, on Linux) and macos.yml runs the stage from the matrix variable MACOS_CHECK_STAGE. The parity guard counts both as evidence, not as a call, and does not resolve the matrix.",
       "argv": [
         "bash",
         "tools/build.sh",
@@ -314,7 +311,6 @@
     "service-stage": {
       "title": "Compiled service, MCP and helper integration (build.sh service stage)",
       "kind": "command",
-      "wiring_unverified_reason": "No workflow step names this stage literally: arch-drift.yml runs `tools/build.sh --platform linux` without --stage (every stage, on Linux) and macos.yml runs the stage from the matrix variable MACOS_CHECK_STAGE. The parity guard counts both as evidence, not as a call, and does not resolve the matrix.",
       "argv": [
         "bash",
         "tools/build.sh",
