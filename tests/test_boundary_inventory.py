@@ -165,7 +165,8 @@ def test_missing_evidence_file_and_stale_trigger_fail(export, editable):
 
 def test_skip_inventory_reconciliation_is_two_way(export, editable):
     def drop_skip_gate(data):
-        entry = next(item for boundary in data["boundaries"] for item in boundary["evidence"] if item.get("skip_gate"))
+        inventoried = {item["path"] for item in json.loads((export / "tools/integration_skips.json").read_text())["entries"]}
+        entry = next(item for boundary in data["boundaries"] for item in boundary["evidence"] if item["path"] in inventoried)
         entry.pop("skip_gate")
 
     editable("tools/boundary_inventory.json", drop_skip_gate)
@@ -176,7 +177,7 @@ def test_skip_inventory_reconciliation_is_two_way(export, editable):
         entry["skip_gate"] = "models"
 
     editable("tools/boundary_inventory.json", invent_skip_gate)
-    failing(export, "must equal the skip inventory gate")
+    failing(export, "is not an inventory gate")
 
     def unknown_gate(data):
         path = data["boundaries"][0]["evidence"][1]["path"]
@@ -394,3 +395,86 @@ def test_the_service_helper_gaps_are_recorded_not_assumed_closed():
 
 def test_copy_helper_leaves_no_git_metadata(export):
     assert not (export / ".git").exists()
+
+
+def test_scanner_ignores_registrations_in_comments_and_strings():
+    source = r"""
+    // test('line comment', () {});
+    /* testWidgets('block comment', (t) async {});
+       /* nested */ test('still commented', () {}); */
+    final fixtureText = 'test(\'inside a string\', () {});';
+    final raw = r'''
+test('inside a triple quoted string', () {});
+''';
+    test('the only real one', () {});
+    """
+    names = [entry.text for entry in inventory.dart_registered_tests(source)]
+    assert names == ["the only real one"]
+
+
+def test_python_scanner_uses_the_syntax_tree_not_text():
+    source = (
+        'def test_real():\n    """def test_in_docstring(): pass"""\n    # def test_in_comment(): pass\n'
+        'TEXT = "def test_in_string(): pass"\n'
+    )
+    assert inventory.python_registered_tests(source) == {"test_real"}
+    with pytest.raises(ValueError, match="does not parse"):
+        inventory.python_registered_tests("def test_broken(:\n")
+
+
+def test_skip_markers_are_detected_outside_comments_and_strings():
+    dart = "test('a', () { markTestSkipped('why'); });"
+    assert inventory.scan_dart(dart)[1] is True
+    assert inventory.scan_dart("test('b', () {}, skip: 'later');")[1] is True
+    assert inventory.scan_dart("// skip: nothing\n/* markTestSkipped */ final s = 'skip: x'; test('c', () {});")[1] is False
+    assert inventory.scan_dart("@Skip('x')\nvoid main() {}")[1] is True
+    source = "import pytest\n@pytest.mark.skipif(True, reason='r')\ndef test_a(): pass\ndef test_b():\n    pytest.skip('r')\ndef test_c(): pass\n"
+    assert inventory._python_tests(source) == {"test_a": True, "test_b": True, "test_c": False}
+
+
+def test_cited_tests_that_can_skip_must_declare_a_skip_gate(export, editable):
+    def drop(data):
+        entry = next(item for boundary in data["boundaries"] for item in boundary["evidence"] if item["path"] == "tests/test_linux_packages.py")
+        entry.pop("skip_gate")
+
+    editable("tools/boundary_inventory.json", drop)
+    failing(export, "tests/test_linux_packages.py: carries a skip marker, so the entry must declare its skip_gate")
+
+    def bogus(data):
+        entry = next(item for boundary in data["boundaries"] for item in boundary["evidence"] if item["path"] == "tests/test_linux_packages.py")
+        entry["skip_gate"] = "no-such-gate"
+
+    editable("tools/boundary_inventory.json", bogus)
+    failing(export, "skip_gate 'no-such-gate' is not an inventory gate")
+
+
+def test_unparseable_cited_python_is_a_drift_error_not_a_crash(export, editable):
+    (export / "tests" / "broken_cited.py").write_text("def test_x(:\n")
+    try:
+        editable("tools/boundary_inventory.json", lambda data: data["boundaries"][0]["evidence"].append({"kind": "static-guard", "path": "tests/broken_cited.py"}))
+        failing(export, "does not parse")
+    finally:
+        (export / "tests" / "broken_cited.py").unlink()
+
+
+def test_ci_job_map_must_cover_every_required_job_beyond_the_gates(export, editable):
+    def drop(data):
+        data["ci_job_map"].pop("acceptance-audio")
+        data["ci_job_map"]["linux-native"]["gates"] = ["ghost"]
+        data["ci_job_map"]["acceptance-cpu"]["gates"] = []
+
+    editable("tools/boundary_inventory.json", drop)
+    failing(export, "ci_job_map must name exactly", "unknown gate ghost", "needs a platform and at least one gate")
+    data = inventory.load(ROOT)
+    from tools import ci_selection
+
+    assert set(data["ci_job_map"]) == set(ci_selection.ACCEPTANCE) | {"linux-native"}
+    assert {"hosted-acceptance", "hosted-linux-native"} <= set(data["gates"])
+
+
+def test_a_new_required_job_without_a_mapping_is_drift(export, monkeypatch):
+    from tools import ci_selection
+
+    real = ci_selection.required_jobs
+    monkeypatch.setattr(ci_selection, "required_jobs", lambda *a, **k: [*real(*a, **k), "brand-new-job"])
+    failing(export, "required CI job brand-new-job maps to no gate")

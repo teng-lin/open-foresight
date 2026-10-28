@@ -183,7 +183,10 @@ def observe_tools(
         try:
             result = run([executable, *TOOL_PROBES[name][1:]], capture_output=True, text=True, timeout=30, check=False)
             lines = (result.stdout + result.stderr).strip().splitlines()
-            observed[name] = _printable(lines[0]) if lines else ""
+            if result.returncode:
+                observed[name] = f"probe failed: exit {result.returncode}" + (f": {_printable(lines[0])}" if lines else "")
+            else:
+                observed[name] = _printable(lines[0]) if lines else ""
         except (OSError, subprocess.SubprocessError) as error:
             observed[name] = f"probe failed: {type(error).__name__}"
     return observed
@@ -203,10 +206,32 @@ def junit_counts(path: Path, started: float) -> dict[str, Any]:
         return {"path": str(path), "present": True, "stale": False, "error": type(error).__name__}
     suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
     total = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
-    for suite in suites:
-        for key in total:
-            total[key] += int(suite.get(key, 0))
+    try:
+        for suite in suites:
+            for key in total:
+                total[key] += int(suite.get(key, 0))
+    except ValueError:
+        # A malformed count is unreadable evidence, never a crash and never zero.
+        return {"path": str(path), "present": True, "stale": False, "error": "malformed count attribute"}
     return {"path": str(path), "present": True, "stale": False, **total, "executed": total["tests"] - total["skipped"]}
+
+
+def junit_problems(reports: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Why declared JUnit evidence cannot support a pass; empty when it can."""
+    problems = []
+    for report in reports:
+        name = report.get("path", "?")
+        if not report.get("present"):
+            problems.append(f"{name}: report missing")
+        elif report.get("stale"):
+            problems.append(f"{name}: report was not written during this run")
+        elif report.get("error"):
+            problems.append(f"{name}: report unreadable ({report['error']})")
+        elif report["failures"] or report["errors"]:
+            problems.append(f"{name}: {report['failures']} failure(s), {report['errors']} error(s) recorded")
+        elif report["executed"] <= 0:
+            problems.append(f"{name}: no executed tests")
+    return problems
 
 
 def summarize_checks(checks: Sequence[Mapping[str, Any]]) -> dict[str, int]:
@@ -231,11 +256,12 @@ def classify(
     mode: str,
     checks: Sequence[Mapping[str, Any]],
     unexecuted_platforms: Sequence[str],
+    incomplete_reasons: Sequence[str] = (),
 ) -> tuple[str, list[str]]:
     """Return the overall status and the reasons it is not a full success."""
     if mode == "plan":
         return "plan-only", ["Plan mode executes nothing."]
-    reasons = []
+    reasons = list(incomplete_reasons)
     for check in checks:
         status = check["status"]
         if status == "failed":
@@ -263,8 +289,9 @@ def build_summary(
     environ: Mapping[str, str] | None = None,
     tools: Mapping[str, Any] | None = None,
     now: datetime | None = None,
+    incomplete_reasons: Sequence[str] = (),
 ) -> dict[str, Any]:
-    status, reasons = classify(mode, checks, unexecuted_platforms)
+    status, reasons = classify(mode, checks, unexecuted_platforms, incomplete_reasons)
     summary = {
         "schema": SCHEMA,
         "kind": KIND,
@@ -284,6 +311,7 @@ def build_summary(
         "checks": [dict(check) for check in checks],
         "counts": summarize_checks(checks),
         "unexecuted_platforms": list(unexecuted_platforms),
+        "incomplete_reasons": list(incomplete_reasons),
         "reproduction": list(reproduction),
     }
     validate_summary(summary)
@@ -314,6 +342,7 @@ def validate_summary(summary: Mapping[str, Any]) -> None:
     if summary["full_validation"] and (
         summary["mode"] != "run"
         or summary["unexecuted_platforms"]
+        or summary.get("incomplete_reasons")
         or any(check["status"] not in ("passed", "subsumed") for check in summary["checks"])
     ):
         raise ValueError("A full-validation claim needs a run with every selected check passed and no unexecuted platform")

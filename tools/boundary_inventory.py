@@ -12,6 +12,8 @@ together with `ci_changes` and `ci_selection`.
 from __future__ import annotations
 
 import argparse
+import ast
+from collections.abc import Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 import json
@@ -80,7 +82,8 @@ class Registered:
 
 
 _ESCAPES = {"n": "\n", "t": "\t", "r": "\r"}
-_CALL = re.compile(r"(?<![\w.$])(?:test|testWidgets)\s*\(\s*(?=r?['\"])")
+_WORD = re.compile(r"[A-Za-z_$][\w$]*")
+_SKIP_NAMES = {"skip", "skipif", "skipIf", "skipUnless", "skipTest", "importorskip", "SkipTest"}
 
 
 def _skip_quoted(text: str, index: int) -> int:
@@ -100,11 +103,12 @@ def _literal(text: str, index: int) -> tuple[str, re.Pattern[str] | None, int] |
     if index >= len(text) or text[index] not in "'\"":
         return None
     quote = text[index]
-    index += 1
+    terminator = quote * 3 if text.startswith(quote * 3, index) else quote
+    index += len(terminator)
     plain: list[str] = []
     regex: list[str] = []
     interpolated = False
-    while index < len(text) and text[index] != quote:
+    while index < len(text) and not text.startswith(terminator, index):
         char = text[index]
         if char == "\\" and not raw and index + 1 < len(text):
             literal = _ESCAPES.get(text[index + 1], text[index + 1])
@@ -132,33 +136,109 @@ def _literal(text: str, index: int) -> tuple[str, re.Pattern[str] | None, int] |
             plain.append(char)
             regex.append(re.escape(char))
             index += 1
-    return "".join(plain), (re.compile("".join(regex), re.S) if interpolated else None), index + 1
+    return "".join(plain), (re.compile("".join(regex), re.S) if interpolated else None), index + len(terminator)
+
+
+def _name_at(text: str, index: int) -> tuple[Registered, int] | None:
+    """The test name whose adjacent string literals begin at `index`."""
+    plain = ""
+    regex = ""
+    interpolated = False
+    parsed = _literal(text, index)
+    if parsed is None:
+        return None
+    while parsed is not None:
+        part, pattern, index = parsed
+        plain += part
+        regex += pattern.pattern if pattern else re.escape(part)
+        interpolated = interpolated or pattern is not None
+        while index < len(text) and text[index].isspace():
+            index += 1
+        parsed = _literal(text, index)
+    return Registered(plain, re.compile(regex, re.S) if interpolated else None), index
+
+
+def scan_dart(text: str) -> tuple[list[Registered], bool]:
+    """Registered test names and whether any skip marker exists, outside comments and strings."""
+    found: list[Registered] = []
+    skippable = False
+    index = 0
+    size = len(text)
+    while index < size:
+        char = text[index]
+        if text.startswith("//", index):
+            end = text.find("\n", index)
+            index = size if end < 0 else end
+        elif text.startswith("/*", index):
+            depth = 1
+            index += 2
+            while index < size and depth:
+                if text.startswith("/*", index):
+                    depth += 1
+                    index += 2
+                elif text.startswith("*/", index):
+                    depth -= 1
+                    index += 2
+                else:
+                    index += 1
+        elif char in "'\"":
+            parsed = _literal(text, index)
+            index = parsed[2] if parsed else index + 1
+        elif char == "@" and text.startswith("@Skip", index):
+            skippable = True
+            index += 5
+        elif (word := _WORD.match(text, index)) is not None:
+            name, end = word.group(), word.end()
+            after = end
+            while after < size and text[after].isspace():
+                after += 1
+            if name == "r" and end < size and text[end] in "'\"":
+                parsed = _literal(text, index)
+                index = parsed[2] if parsed else end
+                continue
+            if name == "markTestSkipped" or (name == "skip" and text.startswith(":", after)):
+                skippable = True
+            elif name in ("test", "testWidgets") and text.startswith("(", after) and (index == 0 or text[index - 1] != "."):
+                named = _name_at(text, _past_space(text, after + 1))
+                if named is not None:
+                    found.append(named[0])
+            index = end
+        else:
+            index += 1
+    return found, skippable
+
+
+def _past_space(text: str, index: int) -> int:
+    while index < len(text) and text[index].isspace():
+        index += 1
+    return index
 
 
 def dart_registered_tests(text: str) -> list[Registered]:
     """Names of `test(`/`testWidgets(` calls, including adjacent-literal names."""
-    found: list[Registered] = []
-    for call in _CALL.finditer(text):
-        index = call.end()
-        plain = ""
-        regex = ""
-        interpolated = False
-        while (parsed := _literal(text, index)) is not None:
-            part, pattern, index = parsed
-            plain += part
-            regex += pattern.pattern if pattern else re.escape(part)
-            interpolated = interpolated or pattern is not None
-            while index < len(text) and text[index].isspace():
-                index += 1
-        found.append(Registered(plain, re.compile(regex, re.S) if interpolated else None))
-    return found
+    return scan_dart(text)[0]
 
 
-_PYTHON_TEST = re.compile(r"^\s*(?:async\s+)?def\s+(test_\w+)\s*\(", re.M)
+def _python_tests(text: str) -> dict[str, bool]:
+    """Test function name to whether its decorators or body can skip."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as error:
+        raise ValueError(f"Python source does not parse: {error}") from error
+    tests: dict[str, bool] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            skips = any(
+                (isinstance(child, ast.Attribute) and child.attr in _SKIP_NAMES)
+                or (isinstance(child, ast.Name) and child.id in _SKIP_NAMES)
+                for child in ast.walk(node)
+            )
+            tests[node.name] = tests.get(node.name, False) or skips
+    return tests
 
 
 def python_registered_tests(text: str) -> set[str]:
-    return set(_PYTHON_TEST.findall(text))
+    return set(_python_tests(text))
 
 
 def is_registered(root: Path, path: str, name: str) -> bool:
@@ -168,6 +248,21 @@ def is_registered(root: Path, path: str, name: str) -> bool:
         return name.split("[", 1)[0] in python_registered_tests(source)
     if path.endswith(".dart"):
         return any(entry.matches(name) for entry in dart_registered_tests(source))
+    return False
+
+
+def can_skip(root: Path, path: str, names: Sequence[str] = ()) -> bool:
+    """Whether the cited tests (or any test in the file) carry a skip marker.
+
+    Dart markers are file-level; fixture-based pytest skips are not detected.
+    """
+    source = (root / path).read_text()
+    if path.endswith(".dart"):
+        return scan_dart(source)[1]
+    if path.endswith(".py"):
+        tests = _python_tests(source)
+        chosen = [tests.get(name.split("[", 1)[0], False) for name in names] if names else list(tests.values())
+        return any(chosen)
     return False
 
 
@@ -251,6 +346,26 @@ def verify(root: Path = ROOT) -> dict[str, Any]:
         if not entry.get("gates"):
             fail(f"ci_gate_map {ci_gate}: a CI gate needs a local equivalent or an explicit ci-only gate")
 
+    from tools import ci_selection
+
+    # ci_selection can require jobs that are not CI selection gates (acceptance
+    # jobs, linux-native); each must map to a local, ci-only or manual gate.
+    job_map = inventory.get("ci_job_map", {})
+    extra_jobs = set(ci_selection.ACCEPTANCE) | {"linux-native"}
+    if set(job_map) != extra_jobs:
+        fail("ci_job_map must name exactly " + ", ".join(sorted(extra_jobs)))
+    for job, entry in job_map.items():
+        if entry.get("platform") not in PLATFORMS or not entry.get("gates"):
+            fail(f"ci_job_map {job}: needs a platform and at least one gate")
+        for name in entry.get("gates", ()):
+            if name not in gates:
+                fail(f"ci_job_map {job}: unknown gate {name}")
+    every_job = set()
+    for tier in ("", "pr", "release"):
+        every_job.update(ci_selection.required_jobs(dict.fromkeys(ci_changes.GATES, True), tier=tier))
+    for job in sorted(every_job - set(mapping) - set(job_map)):
+        fail(f"required CI job {job} maps to no gate")
+
     ids = [boundary.get("id") for boundary in boundaries]
     if len(ids) != len(set(ids)) or not all(ids):
         fail("boundary ids must be present and unique")
@@ -294,8 +409,22 @@ def verify(root: Path = ROOT) -> dict[str, Any]:
                 if not is_registered(root, path, name):
                     fail(f"{where}: test {name!r} is not registered")
             gate = skips.get(path, {}).get("gate")
-            if entry.get("skip_gate") != gate:
-                fail(f"{where}: skip_gate {entry.get('skip_gate')!r} must equal the skip inventory gate {gate!r}")
+            declared = entry.get("skip_gate")
+            if gate is not None:
+                if declared != gate:
+                    fail(f"{where}: skip_gate {declared!r} must equal the skip inventory gate {gate!r}")
+            elif declared is not None and declared not in gates:
+                # A runtime skip (markTestSkipped, pytest.skip, unittest.skipUnless) is declared
+                # with the inventory gate whose run must report it.
+                fail(f"{where}: skip_gate {declared!r} is not an inventory gate")
+            if path.endswith((".py", ".dart")) and entry.get("kind") != "manual":
+                try:
+                    skippable = can_skip(root, path, entry.get("names", ()))
+                except ValueError as error:
+                    fail(f"{where}: {error}")
+                    skippable = False
+                if skippable and not declared:
+                    fail(f"{where}: carries a skip marker, so the entry must declare its skip_gate")
             if gate is not None and gate not in check_integration_inventory.GATES:
                 fail(f"{where}: skip inventory gate {gate!r} is unknown")
             if bool(entry.get("excluded")) != (path in exclusions):

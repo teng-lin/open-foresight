@@ -114,20 +114,25 @@ def test_observe_tools_records_first_line_absence_and_probe_failure():
     class Result:
         stdout = "cmake version 3.31\nmore\n"
         stderr = ""
+        returncode = 0
 
     def run(argv, **kwargs):
         assert kwargs["timeout"] == 30 and not kwargs["check"]
         if argv[0] == "/bin/ninja":
             raise subprocess.TimeoutExpired(argv, 30)
         if argv[0] == "/bin/protoc":
-            return type("Empty", (), {"stdout": "", "stderr": ""})()
+            return type("Empty", (), {"stdout": "", "stderr": "", "returncode": 0})()
+        if argv[0] == "/bin/dart":
+            return type("Broken", (), {"stdout": "", "stderr": "dart: bad flag\n", "returncode": 64})()
         return Result()
 
-    paths = {"cmake": "/bin/cmake", "ninja": "/bin/ninja", "protoc": "/bin/protoc"}
-    observed = evidence.observe_tools(("cmake", "ninja", "protoc", "dart"), run=run, which=paths.get)
+    paths = {"cmake": "/bin/cmake", "ninja": "/bin/ninja", "protoc": "/bin/protoc", "dart": "/bin/dart"}
+    observed = evidence.observe_tools(("cmake", "ninja", "protoc", "dart", "git"), run=run, which=lambda name: paths.get(name))
     assert observed["cmake"] == "cmake version 3.31"
     assert observed["ninja"] == "probe failed: TimeoutExpired"
-    assert observed["protoc"] == "" and observed["dart"] is None
+    assert observed["protoc"] == "" and observed["git"] is None
+    # A failing probe is a probe failure, never a version.
+    assert observed["dart"] == "probe failed: exit 64: dart: bad flag"
     assert observed["python"]
     assert "git" in evidence.observe_tools(("git",))
 
@@ -235,3 +240,28 @@ def test_failed_publication_leaves_no_partial_file(tmp_path, monkeypatch):
     with pytest.raises(OSError, match="disk full"):
         evidence.write_summary(summary(), tmp_path / "evidence.json")
     assert list(tmp_path.iterdir()) == []
+
+
+def test_incomplete_reasons_downgrade_a_run_and_cannot_be_forged_away():
+    result = evidence.build_summary(
+        mode="run", source={}, invocation={}, selection={}, checks=[check("a", "passed")], unexecuted_platforms=[],
+        reproduction=[], environ={}, incomplete_reasons=["inventory skipped"],
+    )
+    assert result["status"] == "partial" and result["not_full_validation_reasons"][0] == "inventory skipped"
+    forged = json.loads(json.dumps(summary()))
+    forged["incomplete_reasons"] = ["something is missing"]
+    with pytest.raises(ValueError):
+        evidence.validate_summary(forged)
+
+
+def test_junit_problems_name_every_way_a_report_can_fail_to_support_a_pass():
+    good = {"path": "g", "present": True, "stale": False, "tests": 2, "failures": 0, "errors": 0, "skipped": 0, "executed": 2}
+    assert evidence.junit_problems([good]) == []
+    bad = [
+        {"path": "a", "present": False},
+        {"path": "b", "present": True, "stale": True},
+        {"path": "c", "present": True, "stale": False, "error": "ParseError"},
+        {**good, "path": "d", "failures": 1},
+        {**good, "path": "e", "executed": 0},
+    ]
+    assert [problem.split(":")[0] for problem in evidence.junit_problems([good, *bad])] == list("abcde")

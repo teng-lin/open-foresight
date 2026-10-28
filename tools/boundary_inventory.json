@@ -604,6 +604,30 @@
       "doc": "docs/testing.md#native-leak-sanitizer",
       "certifies": "Not executable locally by validate_change."
     },
+    "hosted-acceptance": {
+      "title": "Hosted acceptance jobs (CPU, virtual audio, DEB)",
+      "kind": "ci-only",
+      "ci_job": ".github/workflows/macos.yml: acceptance-cpu, acceptance-audio, acceptance-deb",
+      "requirement": "These required jobs consume the in-run qualified application producer's exact bytes inside runtime containers; acceptance-deb installs the DEB. No checked-in local entrypoint reproduces that producer-bound execution. integration-models and integration-virtual-audio run the same groups against a prepared bundle but do not certify the hosted jobs.",
+      "platforms": [
+        "linux"
+      ],
+      "long": true,
+      "doc": "docs/testing.md#model-and-virtual-audio-acceptance",
+      "certifies": "Not executable locally by validate_change."
+    },
+    "hosted-linux-native": {
+      "title": "Hosted Linux native job (Arch Core)",
+      "kind": "ci-only",
+      "ci_job": ".github/workflows/macos.yml: linux-native",
+      "requirement": "The Arch Linux native and Core jobs run in the hosted pinned image with its account and NSS setup; they are reproduced only by the hosted workflow or an equivalent pinned container, not by a local entrypoint.",
+      "platforms": [
+        "linux"
+      ],
+      "long": true,
+      "doc": "docs/ci.md",
+      "certifies": "Not executable locally by validate_change."
+    },
     "hosted-packaging": {
       "title": "Hosted installer and package contracts",
       "kind": "ci-only",
@@ -690,6 +714,34 @@
       ]
     }
   },
+  "ci_job_map": {
+    "acceptance-cpu": {
+      "platform": "linux",
+      "gates": [
+        "hosted-acceptance",
+        "integration-models"
+      ]
+    },
+    "acceptance-audio": {
+      "platform": "linux",
+      "gates": [
+        "hosted-acceptance",
+        "integration-virtual-audio"
+      ]
+    },
+    "acceptance-deb": {
+      "platform": "linux",
+      "gates": [
+        "hosted-acceptance"
+      ]
+    },
+    "linux-native": {
+      "platform": "linux",
+      "gates": [
+        "hosted-linux-native"
+      ]
+    }
+  },
   "boundaries": [
     {
       "id": "desktop-service",
@@ -759,7 +811,8 @@
           "path": "packages/foresight_core/test/service_profile_identity_test.dart",
           "names": [
             "a desktop reconnecting to an owner in another runtime names that owner's endpoint (L9)"
-          ]
+          ],
+          "skip_gate": "core-stage"
         },
         {
           "kind": "production-both-sides",
@@ -778,7 +831,8 @@
         },
         {
           "kind": "fixture",
-          "path": "packages/foresight_core/test/service_connection_test.dart"
+          "path": "packages/foresight_core/test/service_connection_test.dart",
+          "skip_gate": "core-stage"
         },
         {
           "kind": "fixture",
@@ -854,7 +908,8 @@
         },
         {
           "kind": "production-both-sides",
-          "path": "packages/foresight_core/test/service_stop_command_test.dart"
+          "path": "packages/foresight_core/test/service_stop_command_test.dart",
+          "skip_gate": "core-stage"
         },
         {
           "kind": "production-both-sides",
@@ -1045,7 +1100,8 @@
         },
         {
           "kind": "static-guard",
-          "path": "tests/test_helper_build_identity.py"
+          "path": "tests/test_helper_build_identity.py",
+          "skip_gate": "platform-contracts"
         }
       ],
       "gaps": [
@@ -1221,7 +1277,8 @@
         },
         {
           "kind": "production-both-sides",
-          "path": "packages/foresight_core/test/service_idle_shutdown_test.dart"
+          "path": "packages/foresight_core/test/service_idle_shutdown_test.dart",
+          "skip_gate": "core-stage"
         },
         {
           "kind": "production-both-sides",
@@ -1308,7 +1365,8 @@
           "kind": "production-both-sides",
           "path": "tests/integration/test_native.py",
           "excluded": true,
-          "note": "Requires a native build; run through CTest."
+          "note": "Requires a native build; run through CTest.",
+          "skip_gate": "native-stage"
         },
         {
           "kind": "production-both-sides",
@@ -1469,7 +1527,8 @@
         },
         {
           "kind": "static-guard",
-          "path": "tests/test_linux_packages.py"
+          "path": "tests/test_linux_packages.py",
+          "skip_gate": "platform-contracts"
         },
         {
           "kind": "manual",
@@ -1625,7 +1684,8 @@
           "kind": "production-both-sides",
           "path": "tests/integration/test_linux_documents.py",
           "excluded": true,
-          "note": "Run only through tools/ci_document_sandbox.sh."
+          "note": "Run only through tools/ci_document_sandbox.sh.",
+          "skip_gate": "document-sandbox"
         },
         {
           "kind": "production-both-sides",
@@ -1635,7 +1695,8 @@
         },
         {
           "kind": "static-guard",
-          "path": "tests/test_installed_documents.py"
+          "path": "tests/test_installed_documents.py",
+          "skip_gate": "platform-contracts"
         }
       ],
       "gaps": []
@@ -1711,7 +1772,8 @@
         {
           "kind": "production-both-sides",
           "path": "tests/integration/test_persistent_speech.py",
-          "excluded": true
+          "excluded": true,
+          "skip_gate": "integration-models"
         },
         {
           "kind": "production-both-sides",
