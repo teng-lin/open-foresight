@@ -243,15 +243,6 @@ bool _isControl(int unit) =>
     unit == 0x200f ||
     unit == 0x061c;
 
-/// Zero-width and word-joiner format characters that make different names
-/// look identical. The joiner and non-joiner (U+200C, U+200D) stay: scripts
-/// and emoji sequences need them.
-bool _isInvisible(int unit) =>
-    unit == 0x200b ||
-    (unit >= 0x2060 && unit <= 0x2064) ||
-    unit == 0xfeff ||
-    unit == 0x180e;
-
 final _token = RegExp(r'^[A-Za-z0-9_.:\-]{1,64}$');
 
 // Decoding.
@@ -578,7 +569,10 @@ String _name(Object? value) {
     throw _limit('Participant name exceeds the length bound');
   }
   final text = _sanitize(value).trim();
-  if (text.isEmpty) throw _malformed('Participant name empty');
+  // Joiners survive inside names but are not a name by themselves.
+  if (!hasVisibleNameCharacter(text)) {
+    throw _malformed('Participant name empty');
+  }
   if (text.runes.length > speakerObserverMaxNameRunes) {
     throw _limit('Participant name exceeds the length bound');
   }
@@ -600,7 +594,7 @@ String _sanitize(String value) {
       out.write(' ');
     } else if (rune == 0x2028 || rune == 0x2029) {
       out.write(' ');
-    } else if (rune <= 0xffff && (_isControl(rune) || _isInvisible(rune))) {
+    } else if (_isControl(rune) || isStrippedNameRune(rune)) {
       continue;
     } else {
       out.writeCharCode(rune);

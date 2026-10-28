@@ -569,6 +569,18 @@ final class SpeakerAttributor {
         segments: [segment],
       );
     }
+    final name = segment.names[ref];
+    if (name == null || !hasVisibleNameCharacter(name)) {
+      // Persistence refuses an attributed row without a visible name.
+      return _verdict(
+        SpeakerDecisionState.unknown,
+        'name_unavailable',
+        mapped,
+        start,
+        end,
+        segments: [segment],
+      );
+    }
     final method = _weakest(segment.methods);
     return AttributionDecision(
       state: SpeakerDecisionState.named,

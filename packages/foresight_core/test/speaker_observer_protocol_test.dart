@@ -664,33 +664,93 @@ void main() {
       );
     });
 
-    test('zero-width and word-joiner characters cannot disguise names', () {
-      final frames = ObserverFrameDecoder().add(
-        utf8.encode(
-          line(
-            observation(
-              0,
-              overrides: {
-                'participants': [
-                  {
-                    'ref': 'p1',
-                    'name': 'A\u200Bd\u2060a\uFEFF \u200D\u{1F600}',
-                    'self': false,
-                  },
-                ],
-                'speakers': [],
-              },
-            ),
-          ),
-        ),
-      );
+    ObservationFrame withName(String name) =>
+        ObserverFrameDecoder()
+                .add(
+                  utf8.encode(
+                    line(
+                      observation(
+                        0,
+                        overrides: {
+                          'participants': [
+                            {'ref': 'p1', 'name': name, 'self': false},
+                          ],
+                          'speakers': [],
+                        },
+                      ),
+                    ),
+                  ),
+                )
+                .single
+            as ObservationFrame;
+
+    // The persistence layer strips and judges exactly this set.
+    const strippedCharacters = [
+      '\u00ad',
+      '\u061c',
+      '\u200b',
+      '\u200e',
+      '\u200f',
+      '\u202a',
+      '\u202e',
+      '\u2060',
+      '\u2061',
+      '\u2062',
+      '\u2063',
+      '\u2064',
+      '\u2066',
+      '\u2069',
+      '\u206a',
+      '\u206f',
+      '\ufe00',
+      '\ufe0f',
+      '\ufeff',
+      '\u{e0001}',
+      '\u{e0041}',
+      '\u{e007f}',
+      '\u{e0100}',
+      '\u{e01ef}',
+    ];
+
+    test('invisible characters cannot disguise or become a name', () {
+      for (final character in strippedCharacters) {
+        final reason = character.runes.first.toRadixString(16);
+        expect(
+          withName(
+            'A${character}d${character}a',
+          ).observation.participants.single.name,
+          'Ada',
+          reason: reason,
+        );
+        expect(
+          () => withName(character),
+          throwsA(isA<ObserverProtocolException>()),
+          reason: reason,
+        );
+      }
+    });
+
+    test('joiners stay inside names but never make one', () {
       expect(
-        (frames.single as ObservationFrame)
-            .observation
-            .participants
-            .single
-            .name,
-        'Ada \u200D\u{1F600}',
+        withName('a\u200db\u200cc').observation.participants.single.name,
+        'a\u200db\u200cc',
+      );
+      for (final name in [
+        '\u200d',
+        '\u200c\u200d',
+        ' \u200d ',
+        '\u00a0',
+        '\u200d\u00ad\u00a0',
+      ]) {
+        expect(
+          () => withName(name),
+          throwsA(isA<ObserverProtocolException>()),
+          reason: name.runes.map((r) => r.toRadixString(16)).join(' '),
+        );
+      }
+      expect(
+        withName('\u{1F600}').observation.participants.single.name,
+        '\u{1F600}',
       );
     });
 

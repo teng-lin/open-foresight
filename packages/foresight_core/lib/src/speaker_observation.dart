@@ -181,3 +181,40 @@ final class ObserverUnavailableInterval {
   final int? endUs;
   final String reason;
 }
+
+/// Characters removed from untrusted participant names because they have no
+/// visible form or change how surrounding text is displayed: soft hyphen,
+/// Arabic letter mark, zero-width space, directional marks, embeddings and
+/// isolates, the word joiner and invisible math operators, deprecated format
+/// controls, variation selectors, the byte-order mark and tag characters.
+/// The joiners U+200C and U+200D are not here: some names need them, but they
+/// are never visible by themselves ([hasVisibleNameCharacter]). The persistence
+/// layer strips and judges exactly the same set.
+bool isStrippedNameRune(int rune) =>
+    rune == 0x00ad ||
+    rune == 0x061c ||
+    rune == 0x200b ||
+    (rune >= 0x200e && rune <= 0x200f) ||
+    (rune >= 0x202a && rune <= 0x202e) ||
+    (rune >= 0x2060 && rune <= 0x2064) ||
+    (rune >= 0x2066 && rune <= 0x206f) ||
+    (rune >= 0xfe00 && rune <= 0xfe0f) ||
+    rune == 0xfeff ||
+    (rune >= 0xe0000 && rune <= 0xe007f) ||
+    (rune >= 0xe0100 && rune <= 0xe01ef);
+
+/// Whether [name] shows at least one character: not only whitespace, joiners
+/// or characters [isStrippedNameRune] removes.
+bool hasVisibleNameCharacter(String name) {
+  for (final rune in name.runes) {
+    final blank =
+        rune <= 0x20 ||
+        (rune >= 0x7f && rune <= 0xa0) ||
+        rune == 0x2028 ||
+        rune == 0x2029 ||
+        rune == 0x200c ||
+        rune == 0x200d;
+    if (!blank && !isStrippedNameRune(rune)) return true;
+  }
+  return false;
+}

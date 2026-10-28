@@ -146,6 +146,21 @@ void main() {
       );
     });
 
+    test('a name with nothing visible is never attributed', () {
+      for (final name in ['\u200d', '\u00ad', '\u00a0', ' \u200c ']) {
+        final h = ObservationHistory();
+        reads(
+          h,
+          1,
+          4,
+          speakers: ['a'],
+          participants: [ObservedParticipant(ref: 'a', name: name)],
+        );
+        final decision = decide(h, audio(2, 3));
+        expectState(decision, SpeakerDecisionState.unknown, 'name_unavailable');
+      }
+    });
+
     test('the local-user flag is sticky within an interval', () {
       const meNow = [ObservedParticipant(ref: 'a', name: 'Ada', isSelf: true)];
       const notMe = [ObservedParticipant(ref: 'a', name: 'Ada')];
