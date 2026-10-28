@@ -229,16 +229,28 @@ with a `--stage` or `--suite` is satisfied by a call with that value (`build.sh`
 defaults to `--stage all`, so a call without `--stage` satisfies every stage); a
 `--build-only` call builds and runs no tests, so it satisfies no gate that does
 not ask for it. A gate that passes `--platform {platform}` needs a call for each
-platform it lists, where a call's platform is its literal `--platform` or else its
-job's `runs-on` (`macos-*`, `ubuntu-*`); removing the Linux build step therefore
-cannot hide a missing macOS stage, or the reverse.
+platform it lists. A call is exact for platform P only when its literal
+`--platform` is P and its job's `runs-on` (`macos-*`, `ubuntu-*`) is P or unknown
+(an expression or a label list stays unknown); with no flag the runner decides.
+When the flag and a known runner disagree (`--platform macos` on an Ubuntu job)
+the call is evidence for neither platform and is `may_call`. Removing the Linux
+build step therefore cannot hide a missing macOS stage, or the reverse, and
+switching a macOS job to an Ubuntu runner fails the guard.
 
 **Two tiers; nothing is dropped by shell reasoning.** `called_by` lists steps that
 make the call as a *top-level unconditional simple command* of the step's own
 text: not inside an `if`, `case`, loop, function, subshell or conditional group,
 not part of an and-or list (`a && b`, `a || b`), and not after a top-level `exit`
 (an unconditional `{ ...; }` group, a pipeline and a closed block do not count
-against it). **Everything else that mentions the script in an executing position
+against it). An operator ending the previous line (`a &&` then a newline) joins
+the two commands. Block nesting counts `if`, `while`, `for`, `case` and `until` at
+every command position, including after `then`, `else`, `do` and `!`; if it ever
+cannot be trusted (a `fi`, `done` or `esac` that nothing opened) everything after
+that point is `may_call`. A top-level `exit` or `exec` makes later commands
+`may_call`. After a wrapper (`env`, `timeout`, `xvfb-run`) the next word must itself
+be an interpreter, a wrapper or a repository script, and a container launcher
+(`docker run`, whose options and image have unknown arity) always gives `may_call`;
+a token beyond the 512th of one command is `may_call` without a walk. **Everything else that mentions the script in an executing position
 is `may_call`**: conditional or chained calls, calls after an `exit`, calls made
 by a repository shell script (shown as `via <script>`), a here-document fed to a
 shell (`via <heredoc>`), and a call whose stage or suite comes from a variable
@@ -251,8 +263,15 @@ step that calls it, and each script is read once per step. The one thing the gua
 resolves is a GitHub matrix: a variable the step or job binds to
 `${{ matrix.key }}` (or that expression written in the text) is replaced by each
 value of a literal scalar list, when no `include` or `exclude` touches that key,
-and the call becomes exact once per listed value. The step's own `if:` is not
-evaluated, so a value the condition would skip still counts.
+and the call becomes exact once per listed value. The size of the product is
+computed first: more than 64 combinations for one step, or more than 2000
+expanded steps in a run, is not expanded at all (a problem line, and the call
+stays `may_call`). A step's `if:` of the form `matrix.key == 'v'` or `!= 'v'`
+(optionally wrapped in `${{ }}`) is read against each expanded value, or against
+every listed value for a step the matrix does not bind: a value that fails it
+produces no call, so excluding `service` from the condition makes `service-stage`
+unverified on macOS. Any other `if:` that mentions `matrix.` makes the calls under
+it `may_call`; an `if:` that does not mention the matrix is not evaluated.
 
 A gate (on a platform) with only `may_call` evidence is **wiring unverified**: it
 is listed in the default output and in `--json` as `wiring_unverified`, it is
@@ -269,6 +288,15 @@ which branch runs. The four stage gates are verified on both platforms: Linux by
 the `arch-drift.yml` build (`build.sh --platform linux`, whose missing `--stage`
 is `all`) and macOS by the literal matrix in `macos.yml`. Gates that also have a
 direct caller print their `may_call` entries as "May also run (not verified)".
+
+**Stop rule.** This guard is a drift detector for a repository whose workflow
+authors are trusted, not a defense against a hostile one. What blocks a change to
+it is a fail-open verdict reachable in the current workflows, a denial of service
+(time, memory or a crash), or a security finding in the replay or the evidence. A
+contrived shell shape that merely over-credits an `exact` call is a documented
+static limit, as are `if:` expressions that do not mention the matrix, the
+contents of `case` arms and functions that are never called.
+
 Hard limits (256 KiB and 5000 lines per script, 200 scripts and 5000 calls per
 step, 1 MiB per workflow, 4 MiB of text lexed in total) are problems when hit,
 never silent truncation. Each text is tokenized once, a script is lexed once per

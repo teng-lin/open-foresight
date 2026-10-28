@@ -927,13 +927,10 @@ def test_expansions_bind_env_variables_and_expressions_and_nothing_else():
     text = 'run "$S" "${S}" "$S2" "$NOT" "$JOB_STAGE" ${{ matrix.os }} "$OS"'
     variants = parity._expansions(step, job, text)
     assert len(variants) == 4  # stage x os
-    assert variants[0] == 'run "a" "a" "$S2" "$NOT" "a" x "x"'
-    assert {variant.split()[1] for variant in variants} == {'"a"', '"b"'}
-    assert parity._expansions({}, job, "no variables here") == ["no variables here"]
-    assert parity._expansions({}, {}, "$S") == ["$S"]
-    many = {"strategy": {"matrix": {f"k{i}": list(range(5)) for i in range(4)}}}
-    wide = parity._expansions({}, many, " ".join(f"${{{{ matrix.k{i} }}}}" for i in range(4)))
-    assert len(wide) == parity._MAX_EXPANSIONS
+    assert variants[0] == ('run "a" "a" "$S2" "$NOT" "a" x "x"', {"os": "x", "stage": "a"})
+    assert {variant[0].split()[1] for variant in variants} == {'"a"', '"b"'}
+    assert parity._expansions({}, job, "no variables here") == [("no variables here", {})]
+    assert parity._expansions({}, {}, "$S") == [("$S", {})]
 
 
 def test_a_job_level_variable_and_an_inline_expression_are_resolved_too(tmp_path):
@@ -963,7 +960,10 @@ def test_a_stage_less_build_is_the_default_all_and_exact(tmp_path):
         ("${{ inputs.runner }}", "bash tools/build.sh --stage core", [], True),
         ("ubuntu-24.04", 'bash tools/build.sh --platform "$P" --stage core', [], True),
         ("ubuntu-24.04", "bash tools/build.sh --platform windows --stage core", [], False),  # another platform: not this gate's
-        ("ubuntu-24.04", "bash tools/build.sh --platform macos --stage core", ["macos"], False),  # the flag overrides the runner
+        ("ubuntu-24.04", "bash tools/build.sh --platform macos --stage core", [], True),  # the flag and the runner disagree: evidence for neither
+        ("macos-15", "bash tools/build.sh --platform linux --stage core", [], True),
+        ("macos-15", "bash tools/build.sh --platform macos --stage core", ["macos"], False),
+        ("[self-hosted, macos]", "bash tools/build.sh --platform linux --stage core", ["linux"], False),  # an unreadable runner cannot disagree
     ],
 )
 def test_the_platform_of_a_call_is_its_flag_else_the_runner(tmp_path, runs_on, command, verified, may):
@@ -1027,19 +1027,19 @@ def test_a_call_with_more_arguments_than_the_limit_keeps_only_the_limit_and_forg
     command = "bash tools/build.sh " + "x " * 500 + "--stage core"
     [(script, args, exact)] = parity.calls_in(command)
     assert script == "tools/build.sh" and exact and len(args) == parity.ARGUMENT_LIMIT + len(parity._TRUNCATED)
-    assert args[-3:] == ("--stage=$TRUNCATED", "--suite=$TRUNCATED", "--platform=$TRUNCATED")
-    # An unknown stage is evidence, not a pass: the call cannot be exact for any one stage gate.
+    assert args[-len(parity._TRUNCATED):] == parity._TRUNCATED and "--build-only" in parity._TRUNCATED
+    # An unknown stage is not evidence for any one gate: a truncated call might be a build-only one, so it satisfies nothing.
     gate = {"gates": {"native-stage": {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", "native"]}}}
-    assert parity.satisfies(parity.Call("w", "s", "tools/build.sh", args, None, True), "tools/build.sh", gate["gates"]["native-stage"]["argv"]) == "ambiguous"
+    assert parity.satisfies(parity.Call("w", "s", "tools/build.sh", args, None, True), "tools/build.sh", gate["gates"]["native-stage"]["argv"]) is None
     short = parity.calls_in("bash tools/build.sh --stage native")[0][1]
     assert short == ("--stage", "native")
 
 
 def test_the_call_limit_stops_a_text_early_instead_of_after_the_fact():
-    text = "env tools/a.sh " * 8000
+    text = "env tools/a.sh; " * 8000
     found = parity.calls_in(text, limit=10)
     assert len(found) == 11  # limit + 1: enough for the caller to see that it was exceeded
-    assert len(parity.calls_in("env tools/a.sh " * 5)) == 5
+    assert len(parity.calls_in("env tools/a.sh; " * 5)) == 5
     assert all(len(args) <= parity.ARGUMENT_LIMIT + len(parity._TRUNCATED) for _script, args, _exact in parity.calls_in(text, limit=100))
 
 
@@ -1113,8 +1113,8 @@ def test_a_heredoc_that_may_be_something_else_is_read_as_may_call_never_dropped(
 
 
 def test_find_heredocs_returns_every_document_on_a_line_with_its_delimiter_form():
-    assert parity._find_heredocs("cat <<A <<-'B C' <<\\D") == [(4, False, "A", False), (8, True, "B C", False), (17, False, "D", False)]
-    assert parity._find_heredocs('cat <<E"O"F')[0][2:] == ("EOF", True)
+    assert parity._find_heredocs("cat <<A <<-'B C' <<\\D") == [(4, False, "A", False, 7), (8, True, "B C", False, 16), (17, False, "D", False, 21)]
+    assert parity._find_heredocs('cat <<E"O"F')[0][2:] == ("EOF", True, 11)
     assert parity._find_heredocs("cat <<END-OF")[0][2] == "END-OF"
     assert parity._find_heredocs("cat <<'x") == [] and parity._find_heredocs("cat << ") == []
     assert parity._find_heredoc("cat <<EOF") == (4, False, "EOF")
@@ -1212,7 +1212,7 @@ def test_the_real_acknowledgement_rests_on_jobs_that_exist():
     ("runs_on", "command", "kind"),
     [
         ("ubuntu-24.04", "bash tools/build.sh --platform linux --stage native", "called"),
-        ("macos-15", "bash tools/build.sh --platform linux --stage native", "called"),  # the flag decides, not the runner
+        ("macos-15", "bash tools/build.sh --platform linux --stage native", "may"),  # the flag and the runner disagree
         ("ubuntu-24.04", "bash tools/build.sh --platform macos --stage native", "none"),
         ("ubuntu-24.04", "bash tools/build.sh --stage native", "called"),  # no flag: the runner decides
         ("macos-15", "bash tools/build.sh --stage native", "none"),
@@ -1231,7 +1231,7 @@ def test_a_gate_that_states_its_platform_is_satisfied_only_by_a_call_for_it(tmp_
 def test_many_calls_in_one_segment_do_not_copy_the_rest_of_the_segment_each_time():
     import tracemalloc
 
-    text = "env tools/a.sh " * 6000
+    text = "env tools/a.sh; " * 6000
     tracemalloc.start()
     try:
         found = parity.calls_in(text)
@@ -1240,3 +1240,230 @@ def test_many_calls_in_one_segment_do_not_copy_the_rest_of_the_segment_each_time
         tracemalloc.stop()
     assert len(found) == 6000
     assert peak < 80 * 1024 * 1024, peak  # quadratic copying of the tail takes over a gigabyte
+
+
+# ------------------------------------------------- review round 9: separators across lines, nesting, chains, matrix size and conditions
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "false &&\ntools/build.sh --stage native",
+        '[ -n "$X" ] &&\n  tools/build.sh --stage native',
+        "false ||\ntools/build.sh --stage native",
+        "true &&\n\n  tools/build.sh --stage native",
+        "tools/build.sh --stage native &&\necho done",
+        "tools/build.sh --stage native ||\nexit 1",
+        "{ true; } &&\ntools/build.sh --stage native",
+        "test -f x &&\n{ tools/build.sh --stage native; }",
+        "test -f x ||\n{\n  tools/build.sh --stage native\n}",
+        "{ tools/build.sh --stage native; echo x; } && echo y",  # the group is an and-or operand: nothing inside is unconditional
+        "{ echo x; tools/build.sh --stage native; } ||\necho y",
+        # nesting the old counter lost: the first fi closes the inner if, the call is still inside the outer one
+        "if a; then echo; else if b; then echo; fi; tools/build.sh --stage native; fi",
+        "if a; then if b; then echo; fi; tools/build.sh --stage native; fi",
+        "while a; do if b; then echo; fi; tools/build.sh --stage native; done",
+        "if a; then echo; else\nif b; then echo; fi\ntools/build.sh --stage native\nfi",
+        "if x; then echo; fi\n! if y; then echo; fi\nfi\ntools/build.sh --stage native",  # an unmatched fi makes everything after it may_call
+        "fi\ntools/build.sh --stage native",
+        "done\ntools/build.sh --stage native",
+        "esac\ntools/build.sh --stage native",
+        "if x; then echo; fi\nfi\nfi\ntools/build.sh --stage native",
+        "exec tools/a.sh; tools/build.sh --stage native",
+        "exec true\ntools/build.sh --stage native",
+    ],
+)
+def test_a_call_that_is_not_provably_top_level_is_may_call_not_exact(tmp_path, command):
+    calls = [(script, exact) for script, _args, exact in parity.calls_in(command) if script == "tools/build.sh"]
+    assert calls == [("tools/build.sh", False)], command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "true;\ntools/build.sh --stage native",
+        "true\n\ntools/build.sh --stage native",
+        "if a; then echo; else if b; then echo; fi; fi\ntools/build.sh --stage native",
+        "if a; then if b; then echo; fi; fi\ntools/build.sh --stage native",
+        "for i in 1; do if b; then echo; fi; done\ntools/build.sh --stage native",
+        "! if y; then echo; fi\ntools/build.sh --stage native",
+        "if a; then echo; fi; tools/build.sh --stage native",
+        "while a; do echo; done; tools/build.sh --stage native",
+    ],
+)
+def test_balanced_nesting_returns_to_the_top_level(command):
+    assert [exact for script, _args, exact in parity.calls_in(command) if script == "tools/build.sh"] == [True], command
+
+
+@pytest.mark.parametrize(
+    ("command", "tier"),
+    [
+        ("env echo bash tools/build.sh --stage native", "may"),
+        ("sudo grep bash tools/build.sh --stage native", "may"),
+        ("docker run --rm img echo bash tools/build.sh --stage native", "may"),
+        ("docker run --rm img python3 tools/build.sh --stage native", "may"),
+        ("timeout -s KILL 5 bash tools/build.sh --stage native", "may"),
+        ("env FOO=1 mytool bash tools/build.sh --stage native", "may"),
+        ("env bash ./run.sh tools/build.sh --stage native", "may"),
+        ("bash ./run.sh tools/build.sh --stage native", "none"),
+        ("nice -n 5 bash tools/build.sh --stage native", "exact"),
+        ("timeout 5 env FOO=1 bash tools/build.sh --stage native", "exact"),
+        ("xvfb-run -a dbus-run-session -- bash tools/build.sh --stage native", "exact"),
+        ("env tools/build.sh --stage native", "exact"),
+        ("exec tools/build.sh --stage native", "exact"),
+        ("sudo -E env bash tools/build.sh --stage native", "exact"),
+        ('tools/run_ci_user.py --workspace "$W" -- xvfb-run -a bash tools/build.sh --stage native', "exact"),
+        (".venv/bin/python tools/run_ci_user.py --workspace w -- env bash tools/build.sh --stage native", "exact"),
+        ("tools/run_ci_user.py tools/build.sh --stage native", "none"),  # an argument of a script, not a command
+        ("python tools/run_ci_user.py tools/build.sh --stage native", "none"),
+    ],
+)
+def test_a_launcher_chain_is_exact_only_when_every_word_in_it_is_a_launcher(command, tier):
+    calls = [exact for script, _args, exact in parity.calls_in(command) if script == "tools/build.sh"]
+    assert calls == {"exact": [True], "may": [False], "none": []}[tier], command
+
+
+def test_a_token_far_into_one_command_is_may_call_without_a_quadratic_walk(monkeypatch):
+    walked = []
+    real = parity._chain
+    monkeypatch.setattr(parity, "_chain", lambda segment, index: walked.append(index) or real(segment, index))
+    command = "bash " + "x " * 600 + "tools/build.sh --stage native"
+    assert [(script, exact) for script, _args, exact in parity.calls_in(command)] == [("tools/build.sh", False)]
+    assert walked == []  # beyond CHAIN_LIMIT no walk happens at all
+    assert [exact for _script, _args, exact in parity.calls_in("bash tools/build.sh --stage native")] == [True]
+
+
+def test_a_truncated_call_never_satisfies_a_gate_that_does_not_ask_for_build_only(tmp_path):
+    args = parity.calls_in("bash tools/build.sh " + "x " * 100)[0][1]
+    call = parity.Call("w", "s", "tools/build.sh", args, None, True)
+    assert parity.satisfies(call, "tools/build.sh", ["bash", "tools/build.sh", "--stage", "native"]) is None
+    assert parity.satisfies(call, "tools/build.sh", ["bash", "tools/build.sh", "--stage", "native", "--build-only"]) in (None, "ambiguous")
+
+
+def test_heredoc_operator_lines_keep_the_rest_of_the_line_as_a_command():
+    assert [(script, exact) for script, _args, exact in parity.calls_in(parity.split_heredocs("cat <<EOF | tools/build.sh --stage native\nbody\nEOF")[0])] == [("tools/build.sh", True)]
+    assert [(script, exact) for script, _args, exact in parity.calls_in(parity.split_heredocs("cat <<EOF && tools/build.sh --stage native\nbody\nEOF")[0])] == [("tools/build.sh", False)]
+    assert parity.split_heredocs("cat <<A <<B | cat\na\nA\nb\nB")[0] == "cat   | cat"
+    main, bodies = parity.split_heredocs("bash <<EOF | tee log\ntools/build.sh --stage native\nEOF")
+    assert main == "bash  | tee log" and bodies == ["tools/build.sh --stage native"]
+
+
+# --- the matrix: size first, conditions read
+
+def matrix_workflow(keys, values, extra_step=""):
+    matrix = "\n".join(f"        k{i}: [{', '.join(str(n) for n in range(values))}]" for i in range(keys))
+    uses = " ".join(f"${{{{ matrix.k{i} }}}}" for i in range(keys))
+    return (
+        f"on: push\njobs:\n  m:\n    runs-on: macos-15\n    strategy:\n      matrix:\n{matrix}\n    steps:\n"
+        f"      - run: tools/build.sh --platform macos --stage {uses}\n{extra_step}"
+    )
+
+
+def test_a_matrix_too_large_to_expand_is_a_problem_and_never_materialized(tmp_path, monkeypatch):
+    def refuse(*arguments):
+        raise AssertionError("the product was built")
+
+    monkeypatch.setattr(parity.itertools, "product", refuse)
+    root = tree(tmp_path, {"ci.yml": matrix_workflow(6, 12)}, scripts=("tools/build.sh",))
+    report = parity.check(root, stage_gates())
+    assert any("a matrix of 2985984 combinations is not expanded" in problem for problem in report["problems"])
+    gate = report["gates"]["core-stage"]
+    assert gate["called_by"] == [] and gate["may_call"] == [".github/workflows/ci.yml:m"]  # still evidence, never exact
+
+
+def test_a_matrix_over_the_per_step_cap_but_within_the_run_budget_is_refused_too(tmp_path):
+    report = parity.check(tree(tmp_path, {"ci.yml": matrix_workflow(3, 5)}, scripts=("tools/build.sh",)), stage_gates())
+    assert any("a matrix of 125 combinations is not expanded" in problem for problem in report["problems"])
+    within = parity.check(tree(tmp_path / "ok", {"ci.yml": matrix_workflow(2, 5)}, scripts=("tools/build.sh",)), stage_gates())
+    assert not [problem for problem in within["problems"] if "is not expanded" in problem]
+
+
+def test_the_run_wide_expansion_budget_stops_expansion_and_says_so(tmp_path, monkeypatch):
+    monkeypatch.setattr(parity, "MAX_EXPANDED_RUNS", 20)
+    steps = "".join("      - run: tools/build.sh --platform macos --stage ${{ matrix.k0 }}\n" for _ in range(6))
+    text = "on: push\njobs:\n  m:\n    runs-on: macos-15\n    strategy:\n      matrix:\n        k0: [a, b, c, d, e, f, g, h]\n    steps:\n" + steps
+    report = parity.check(tree(tmp_path, {"ci.yml": text}, scripts=("tools/build.sh",)), stage_gates())
+    problems = [problem for problem in report["problems"] if "is not expanded" in problem]
+    assert len(problems) == 4  # two steps of eight fit in twenty; the other four do not
+    parsed = parity.Parsed()
+    parity._expansions({}, {"strategy": {"matrix": {"k": ["a", "b"]}}}, "${{ matrix.k }}", parsed, "w")
+    assert parsed.expanded == 2
+
+
+@pytest.mark.parametrize(
+    ("condition", "verdict"),
+    [
+        (None, True), (True, True), ("true", True), ("${{ true }}", True), ("github.event_name == 'push'", True),
+        ("matrix.stage == 'core'", True), ("matrix.stage != 'core'", False), ("${{ matrix.stage == 'core' }}", True),
+        ("matrix.stage == 'native'", False), ("matrix.stage != 'native'", True),
+        ("matrix.stage == 'core' && github.ref == 'x'", None), ("matrix.stage in ('core')", None), ("matrix.other == 'x'", None),
+        ("contains(matrix.stage, 'o')", None), ("matrix.stage == \"core\"", None),
+    ],
+)
+def test_a_step_condition_on_the_matrix_is_read_against_the_expanded_value(condition, verdict):
+    assert parity._condition(condition, {"stage": "core"}, {"stage": ["core", "native"]}) is verdict
+
+
+def test_an_unbound_condition_runs_if_any_listed_value_satisfies_it():
+    values = {"stage": ["a", "b"]}
+    assert parity._condition("matrix.stage == 'a'", {}, values) is True
+    assert parity._condition("matrix.stage != 'a'", {}, values) is True
+    assert parity._condition("matrix.stage == 'z'", {}, values) is False
+    assert parity._condition("matrix.stage != 'z'", {}, values) is True
+    assert parity._condition("matrix.stage == 'a'", {}, {}) is None
+
+
+def test_an_excluded_matrix_value_stops_verifying_its_stage_and_an_unreadable_condition_stops_proving_it(tmp_path):
+    base = stage_report(tmp_path / "base")
+    assert base["problems"] == [] and sorted(base["gates"]["service-stage"]["verified_platforms"]) == ["linux", "macos"]
+    skipped = stage_tree(tmp_path / "skip").joinpath(".github/workflows/ci.yml")
+    skipped.write_text(skipped.read_text().replace("if: matrix.stage != 'contracts'", "if: matrix.stage != 'service'"))
+    report = parity.check(skipped.parents[2], stage_gates())
+    assert report["gates"]["service-stage"]["verified_platforms"] == ["linux"]
+    assert report["problems"] == ["gate service-stage: no workflow step calls `tools/build.sh --platform {platform} --stage service` for macos; wire it or declare local_only with a reason"]
+    unreadable = stage_tree(tmp_path / "unreadable").joinpath(".github/workflows/ci.yml")
+    unreadable.write_text(unreadable.read_text().replace("if: matrix.stage != 'contracts'", "if: matrix.stage != 'contracts' && always()"))
+    gate = parity.check(unreadable.parents[2], stage_gates())["gates"]["core-stage"]
+    assert gate["verified_platforms"] == ["linux"] and gate["may_call"] == [".github/workflows/ci.yml:macos-checks"]
+
+
+# --- the runner and the flag must agree
+
+def test_an_ubuntu_job_does_not_satisfy_the_macos_requirement(tmp_path):
+    root = stage_tree(tmp_path)
+    workflow_file = root / ".github/workflows/ci.yml"
+    workflow_file.write_text(workflow_file.read_text().replace("runs-on: macos-15", "runs-on: ubuntu-24.04"))
+    report = parity.check(root, stage_gates())
+    for stage in STAGES:
+        gate = report["gates"][f"{stage}-stage"]
+        assert gate["verified_platforms"] == ["linux"], stage
+        assert gate["may_call"] == [".github/workflows/ci.yml:macos-checks"], stage
+    assert any(problem.startswith("gate core-stage: no step calls it as a top-level command on macos") for problem in report["problems"])
+
+
+def test_a_macos_job_does_not_satisfy_the_linux_requirement(tmp_path):
+    root = stage_tree(tmp_path)
+    workflow_file = root / ".github/workflows/ci.yml"
+    workflow_file.write_text(workflow_file.read_text().replace("runs-on: ubuntu-24.04", "runs-on: macos-15"))
+    report = parity.check(root, stage_gates())
+    for stage in STAGES:
+        gate = report["gates"][f"{stage}-stage"]
+        assert gate["verified_platforms"] == ["macos"], stage
+        assert ".github/workflows/ci.yml:arch" in gate["may_call"], stage
+    assert any("on linux" in problem for problem in report["problems"])
+
+
+@pytest.mark.parametrize(
+    ("flag", "runner", "expected"),
+    [("macos", "macos", ("macos", False)), ("linux", "macos", ("linux", True)), ("macos", "linux", ("macos", True)), ("linux", None, ("linux", False)),
+     (None, "macos", ("macos", False)), (None, None, (None, False)), ("windows", "linux", ("windows", False)), ("$P", "linux", (None, False))],
+)
+def test_call_platform_reports_the_platform_and_whether_flag_and_runner_disagree(flag, runner, expected):
+    args = (("--platform", flag) if flag else ()) + ("--stage", "core")
+    assert parity._call_platform(parity.Call("w", "s", "tools/build.sh", args, None, True, runner)) == expected
+
+
+def test_a_gate_that_states_a_platform_is_not_satisfied_by_a_disagreeing_runner():
+    gate = ["bash", "tools/build.sh", "--platform", "linux", "--stage", "native"]
+    agree = parity.Call("w", "s", "tools/build.sh", ("--platform", "linux", "--stage", "native"), None, True, "linux")
+    clash = parity.Call("w", "s", "tools/build.sh", ("--platform", "linux", "--stage", "native"), None, True, "macos")
+    assert parity.satisfies(agree, "tools/build.sh", gate) == "exact" and parity.satisfies(clash, "tools/build.sh", gate) == "ambiguous"

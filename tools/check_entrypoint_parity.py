@@ -53,6 +53,7 @@ from collections import Counter, deque
 from dataclasses import dataclass, field
 import itertools
 import json
+import math
 from pathlib import Path
 import re
 import shlex
@@ -85,6 +86,7 @@ class Run:
     step: str
     text: str
     platform: str | None = None  # linux or macos when the job's runs-on says so
+    exact_allowed: bool = True  # False when an `if:` on the step could not be evaluated and mentions the matrix
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,7 @@ class Parsed:
     problems: list[str] = field(default_factory=list)
     entries: set[str] = field(default_factory=set)  # workflows something can trigger
     reaches: dict[str, set[str]] = field(default_factory=dict)  # file -> workflows and action files it calls
+    expanded: int = 0  # steps produced by matrix expansion so far, against MAX_EXPANDED_RUNS
 
 
 class _Rejected(yaml.YAMLError):
@@ -184,17 +187,26 @@ def _matrix_values(job: Mapping[str, Any]) -> dict[str, list[str]]:
     }
 
 
-def _expansions(step: Mapping[str, Any], job: Mapping[str, Any], text: str) -> list[str]:
-    """The step's text once per literal matrix value it is bound to, or once as written.
+PLATFORM_NAMES = ("linux", "macos")
+MAX_EXPANDED_RUNS = 2000  # matrix-expanded steps in one run of the guard
+_IF_MATRIX = re.compile(r"^\s*(?:\$\{\{\s*)?matrix\.([A-Za-z0-9_-]+)\s*(==|!=)\s*'([^']*)'\s*(?:\}\}\s*)?$")
+
+
+def _expansions(
+    step: Mapping[str, Any], job: Mapping[str, Any], text: str, parsed: Parsed | None = None, label: str = ""
+) -> list[tuple[str, dict[str, str]]]:
+    """(text, matrix values) once per literal matrix combination the step is bound to, or once as written.
 
     A variable is bound when the step's or job's `env` sets it to exactly
     `${{ matrix.key }}`; an expression `${{ matrix.key }}` written in the text is
-    bound too. The step's own `if:` is not evaluated, so a value the condition
-    would skip still counts.
+    bound too. The size of the product is computed first: more than
+    `_MAX_EXPANSIONS` combinations, or more than the run's expansion budget, is not
+    expanded at all (a problem line; the unresolved variable keeps the call
+    may_call).
     """
     values = _matrix_values(job)
     if not values:
-        return [text]
+        return [(text, {})]
     env: dict[str, Any] = {}
     for source in (job.get("env"), step.get("env")):
         if isinstance(source, dict):
@@ -209,16 +221,49 @@ def _expansions(step: Mapping[str, Any], job: Mapping[str, Any], text: str) -> l
             bound[rf"\$\{{\{{\s*matrix\.{re.escape(key)}\s*\}}\}}"] = key
     bound = {pattern: key for pattern, key in bound.items() if re.search(pattern, text)}
     if not bound:
-        return [text]
+        return [(text, {})]
     keys = sorted(set(bound.values()))
-    combinations = [dict(zip(keys, combo, strict=True)) for combo in itertools.product(*(values[key] for key in keys))]
+    size = math.prod(len(values[key]) for key in keys)
+    if size > _MAX_EXPANSIONS or (parsed is not None and parsed.expanded + size > MAX_EXPANDED_RUNS):
+        if parsed is not None:
+            parsed.problems.append(f"{label}: a matrix of {size} combinations is not expanded (more than the cap or the run's budget of {MAX_EXPANDED_RUNS}); its calls stay may_call")
+        return [(text, {})]
+    if parsed is not None:
+        parsed.expanded += size
     result = []
-    for combination in combinations[:_MAX_EXPANSIONS]:
+    for combo in itertools.product(*(values[key] for key in keys)):
+        combination = dict(zip(keys, combo, strict=True))
         variant = text
         for pattern, key in bound.items():
             variant = re.sub(pattern, combination[key].replace("\\", "\\\\"), variant)
-        result.append(variant)
+        result.append((variant, combination))
     return result
+
+
+def _condition(expression: Any, combination: Mapping[str, str], values: Mapping[str, list[str]]) -> bool | None:
+    """Whether a step's `if:` lets it run: True, False, or None when it mentions the matrix and cannot be read.
+
+    Only `matrix.key == 'v'` and `!= 'v'` are read, against the expanded value, or
+    against every listed value when the key is not bound (the step runs if any
+    does). Anything else that does not mention the matrix is treated as true: the
+    guard does not evaluate workflow expressions.
+    """
+    if expression is None or expression is True or (isinstance(expression, str) and expression.strip().lower() in ("true", "${{ true }}")):
+        return True
+    text = expression if isinstance(expression, str) else str(expression)
+    if "matrix." not in text:
+        return True
+    found = _IF_MATRIX.match(text)
+    if not found or found.group(1) not in values:
+        return None
+    key, operator, literal = found.groups()
+
+    def holds(value: str) -> bool:
+        return (value == literal) == (operator == "==")
+
+    if key in combination:
+        return holds(combination[key])
+    return any(holds(value) for value in values[key])
 
 
 def _steps(document: Any, where: str, parsed: Parsed, file: str, job: Mapping[str, Any] | None = None) -> None:
@@ -239,8 +284,12 @@ def _steps(document: Any, where: str, parsed: Parsed, file: str, job: Mapping[st
                 continue
             if _literally_false(step.get("if")):
                 continue  # a step that can never run calls nothing
-            for text in _expansions(step, job, step["run"]):
-                parsed.runs.append(Run(file, where, str(step.get("name", f"step {index}")), text, platform))
+            values = _matrix_values(job)
+            for text, combination in _expansions(step, job, step["run"], parsed, f"{where}: step {index}"):
+                verdict = _condition(step.get("if"), combination, values)
+                if verdict is False:
+                    continue  # no listed value lets this step run
+                parsed.runs.append(Run(file, where, str(step.get("name", f"step {index}")), text, platform, verdict is not None))
 
 
 def workflow_runs(root: Path = ROOT) -> tuple[list[Run], list[str]]:
@@ -363,13 +412,13 @@ def _heredoc_delimiter(line: str, cursor: int) -> tuple[str, int, bool] | None:
     return (word, cursor, unsure) if word else None
 
 
-def _find_heredocs(line: str) -> list[tuple[int, bool, str, bool]]:
-    """(start, strips tabs, delimiter, unsure) of every here-document opened on [line], in order.
+def _find_heredocs(line: str) -> list[tuple[int, bool, str, bool, int]]:
+    """(start, strips tabs, delimiter, unsure, end) of every here-document opened on [line], in order.
 
     `<<` counts only outside quotes, comments and arithmetic (`$(( 1<<2 ))`,
     `(( x<<2 ))`), and never as the here-string `<<<`. `cat <<A <<B` opens two.
     """
-    found: list[tuple[int, bool, str, bool]] = []
+    found: list[tuple[int, bool, str, bool, int]] = []
     quote: str | None = None
     word_start = True
     index = 0
@@ -407,7 +456,7 @@ def _find_heredocs(line: str) -> list[tuple[int, bool, str, bool]]:
             if parsed is None:
                 return found
             delimiter, end, unsure = parsed
-            found.append((index, strip_tabs, delimiter, unsure))
+            found.append((index, strip_tabs, delimiter, unsure, end))
             index = end - 1
             word_start = False
         else:
@@ -448,8 +497,9 @@ def split_heredocs(text: str) -> tuple[str, list[str]]:
         found = _find_heredocs(line)
         if found:
             feeds_shell = bool(_SHELL_FEED.match(line))
-            pending.extend((tabs, delimiter, feeds_shell or unsure) for _start, tabs, delimiter, unsure in found)
-            line = line[: found[0][0]]
+            pending.extend((tabs, delimiter, feeds_shell or unsure) for _start, tabs, delimiter, unsure, _end in found)
+            for start, _tabs, _delimiter, _unsure, end in reversed(found):
+                line = line[:start] + line[end:]  # the operator and its word go; the rest of the line is still a command
         kept.append(line)
     if pending and current:
         bodies.append("\n".join(current))  # never terminated: not provably a document, so read it
@@ -570,7 +620,7 @@ _WRAPPERS = {
     "env", "sudo", "time", "nohup", "exec", "xvfb-run", "dbus-run-session", "timeout", "nice", "ionice", "stdbuf",
     "setsid", "unbuffer",
 }
-# `docker run ... IMAGE python3 script`: the options and the image sit between the launcher and the interpreter.
+# `docker run ... IMAGE python3 script`: the options and the image have unknown arity, so these chains are only "may".
 _CONTAINERS = {"docker", "podman", "nerdctl"}
 # Flags that make an interpreter read a script without running it, or run something else.
 _NOT_RUNNING_FLAGS = {"-n", "-c", "--version", "-V", "--help", "-h", "--check"}
@@ -596,53 +646,85 @@ def _takes_value(segment: Sequence[str], cursor: int) -> bool:
     return cursor > 0 and bool(re.fullmatch(r"[-+][A-Za-z]*o", segment[cursor - 1])) and not segment[cursor].startswith("-")
 
 
-def _head_executes(segment: Sequence[str]) -> bool:
-    """Whether the command a segment starts with runs its arguments as programs.
-
-    `echo use bash tools/build.sh`, `grep bash tools/build.sh`, `git commit -m x
-    python tools/x.py` and `command -v tools/build.sh` mention a script after a word
-    that is not an interpreter: they are not calls however the tail reads. The head
-    is an interpreter, a wrapper such as `env` or `timeout`, a container launcher,
-    or a repository script itself (which may pass its tail on, as `run_ci_user.py
-    -- bash tools/build.sh` does).
-    """
+def _first_word(segment: Sequence[str]) -> int:
+    """Index of the first word that is neither a keyword nor an assignment, or len(segment)."""
     cursor = 0
     while cursor < len(segment) and (segment[cursor] in _KEYWORDS or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", segment[cursor])):
         cursor += 1
-    if cursor >= len(segment):
-        return False
-    head = segment[cursor]
-    name = head.rsplit("/", 1)[-1]
-    return _interpreter(head) or name in _WRAPPERS or name in _CONTAINERS or bool(_PATH.match(head))
+    return cursor
 
 
-def _runs_script(segment: Sequence[str], index: int) -> bool:
-    """Whether the token at [index] sits where it is executed rather than read, linted or copied.
+def _chain(segment: Sequence[str], index: int) -> str:
+    """How the token at [index] is reached: "yes" (it is run), "may" (it might be) or "no" (it is only mentioned).
 
-    It is executed when it is the command itself (nothing before it but
-    keywords, assignments and wrappers) or the argument of an interpreter with no
-    flag that stops the interpreter from running it (`bash -n`, `-c`). The caller
-    has already checked that the segment starts with something that executes
-    (`_head_executes`).
+    The segment must start with an executor, and every word between the start and
+    the token must be part of a launcher chain, so `echo use bash tools/build.sh`,
+    `grep`, `git commit -m x ...` and `command -v` mention a script without
+    running it. Walking from the head:
+
+    - an interpreter (`bash`, `python`) takes its flags, and then a program; if that
+      program is the token the script runs (unless a flag such as `-n` or `-c`
+      stops it); if it is another repository script, that script may pass the
+      rest of the line on after a `--`;
+    - a wrapper (`env`, `timeout`, `xvfb-run`) takes options, counts and
+      assignments, and the next word must itself be an executor: if it is not, or
+      its option arity is unknown, the answer is "may", never "yes";
+    - a container launcher (`docker run ...`) has options and an image of unknown
+      arity: always "may";
+    - a repository script as the command passes on only what follows a `--`.
     """
-    flags: list[str] = []
-    cursor = index - 1
-    while cursor >= 0 and (_skippable(segment[cursor]) or _takes_value(segment, cursor)):
-        flags.append(segment[cursor])
-        cursor -= 1
-    if cursor < 0:
-        return True  # the script itself is the command, as in `FOO=1 tools/build.sh` or `then tools/build.sh`
-    runner = segment[cursor]
-    if runner in _SOURCERS and any(not _skippable(word) for word in segment[:cursor]):
-        return False  # `find . -exec ...`: a dot that is an argument is not the `.` builtin
-    if _interpreter(runner):
-        return not _NOT_RUNNING_FLAGS.intersection(flags)
-    return runner.rsplit("/", 1)[-1] in _WRAPPERS
+    cursor = _first_word(segment)
+    if cursor >= index:
+        return "yes" if cursor == index else "no"
+    after_wrapper = False
+    while cursor < index:
+        word = segment[cursor]
+        name = word.rsplit("/", 1)[-1]
+        if _interpreter(word):
+            flags = []
+            cursor += 1
+            while cursor < index and (segment[cursor].startswith("-") or _takes_value(segment, cursor)):
+                flags.append(segment[cursor])
+                cursor += 1
+            if cursor == index:
+                return "no" if _NOT_RUNNING_FLAGS.intersection(flags) else "yes"
+            if not _PATH.match(segment[cursor]):
+                return "may" if after_wrapper else "no"
+            after_wrapper = False
+            continue  # a repository script now heads the chain
+        if name in _WRAPPERS:
+            cursor += 1
+            while cursor < index and _skippable(segment[cursor]):
+                cursor += 1
+            if cursor == index:
+                return "yes"
+            after_wrapper = True  # the next word must itself be an executor, or the answer below is "may"
+            continue
+        if name in _CONTAINERS:
+            return "may"
+        if _PATH.match(word):
+            try:
+                cursor = segment.index("--", cursor + 1, index) + 1
+            except ValueError:
+                return "no"
+            cursor = _skip_to_command(segment, cursor, index)
+            after_wrapper = False
+            continue
+        return "may" if after_wrapper else "no"
+    return "yes"
+
+
+def _skip_to_command(segment: Sequence[str], cursor: int, index: int) -> int:
+    while cursor < index and (segment[cursor] in _KEYWORDS or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", segment[cursor])):
+        cursor += 1
+    return cursor
 
 
 _OPENERS = {"if", "case", "for", "while", "until", "select"}
 _CLOSERS = {"fi", "esac", "done"}
 _AND_OR = ("&&", "||")
+_AFTER_KEYWORD = {"then", "else", "do", "!", "time"}  # `else if`, `then if`, `do while` open a block too
+_ENDS = {"exit", "exec"}  # a top-level exit or exec ends the text for every later command
 _PIPES = ("|", "|&")
 
 
@@ -661,11 +743,19 @@ def _unconditional(stream: Sequence[tuple[tuple[str, ...], list[str]]]) -> list[
         if segment:
             events.append(("seg", index))
 
-    def is_and_or(position: int) -> bool:
-        return 0 <= position < len(events) and events[position][0] == "sep" and events[position][1] in _AND_OR
+    def joined(position: int, step: int, operators: tuple[str, ...]) -> bool:
+        """Whether one of [operators] is among the consecutive separators from [position] in direction [step].
 
-    def is_pipe(position: int) -> bool:
-        return 0 <= position < len(events) and events[position][0] == "sep" and events[position][1] in _PIPES
+        `a &&\n b` has a newline right before `b`; the `&&` is one separator further.
+        """
+        while 0 <= position < len(events) and events[position][0] == "sep":
+            if events[position][1] in operators:
+                return True
+            position += step
+        return False
+
+    def is_and_or(position: int, step: int = -1) -> bool:
+        return joined(position, step, _AND_OR)
 
     stack: list[tuple[str, int]] = []
     conditional_group: dict[int, bool] = {}
@@ -683,11 +773,12 @@ def _unconditional(stream: Sequence[tuple[tuple[str, ...], list[str]]]) -> list[
                 or (before is not None and before[0] == "seg" and (stream[int(before[1])][1][-1] == "()" or stream[int(before[1])][1][0] == "function"))
             )
             conditional_group[start] = (
-                opener == "(" or function or is_and_or(start - 1) or is_and_or(position + 1)
+                opener == "(" or function or is_and_or(start - 1, -1) or is_and_or(position + 1, 1)
             )
             closing.add(position)
     open_flags: list[bool] = []
     blocks = 0
+    reliable = True  # False once the block nesting can no longer be trusted: everything after is may_call
     after_exit = False
     result = [False] * len(stream)
     for position, (kind, value) in enumerate(events):
@@ -700,21 +791,25 @@ def _unconditional(stream: Sequence[tuple[tuple[str, ...], list[str]]]) -> list[
         segment = stream[int(value)][1]
         head = segment[0]
         if head in _CLOSERS:
-            blocks = max(0, blocks - 1)
-        in_list = is_and_or(position - 1) or is_and_or(position + 1)
-        piped = is_pipe(position - 1) or is_pipe(position + 1)
-        conditional = blocks > 0 or any(open_flags) or head in _OPENERS or in_list
-        result[int(value)] = not conditional and not after_exit
-        if head == "exit" and not conditional and not piped:
+            if blocks == 0:
+                reliable = False  # a fi, done or esac nothing opened
+            else:
+                blocks -= 1
+        opened = sum(1 for index, word in enumerate(segment) if word in _OPENERS and (index == 0 or segment[index - 1] in _AFTER_KEYWORD))
+        in_list = is_and_or(position - 1, -1) or is_and_or(position + 1, 1)
+        piped = joined(position - 1, -1, _PIPES) or joined(position + 1, 1, _PIPES)
+        conditional = blocks > 0 or any(open_flags) or opened > 0 or in_list
+        result[int(value)] = reliable and not conditional and not after_exit
+        if head in _ENDS and not conditional and not piped:
             after_exit = True
-        if head in _OPENERS:
-            blocks += 1
+        blocks += opened
     return result
 
 
+CHAIN_LIMIT = 512  # a token further into one command than this is only "may": walking back to the head would be quadratic
 ARGUMENT_LIMIT = 64  # tokens kept after a call: enough for --stage, --suite, --platform and --build-only
 # Appended when a call's arguments were cut: whatever the discarded tokens said, the discriminators are no longer known.
-_TRUNCATED = ("--stage=$TRUNCATED", "--suite=$TRUNCATED", "--platform=$TRUNCATED")
+_TRUNCATED = ("--stage=$TRUNCATED", "--suite=$TRUNCATED", "--platform=$TRUNCATED", "--build-only")
 
 
 def _arguments(segment: Sequence[str], index: int) -> tuple[str, ...]:
@@ -736,14 +831,18 @@ def calls_in(text: str, limit: int | None = None) -> list[tuple[str, tuple[str, 
     eligible = _unconditional(stream)
     found: list[tuple[str, tuple[str, ...], bool]] = []
     for (_separators, segment), exact in zip(stream, eligible, strict=True):
-        if not segment or not _head_executes(segment):
-            continue
         for index, token in enumerate(segment):
             path = _PATH.match(token)
-            if path and ".." not in path.group(1).split("/") and _runs_script(segment, index):
-                found.append((path.group(1), _arguments(segment, index), exact))
-            elif index and segment[index - 1] == "-m" and _MODULE.match(token) and _runs_script(segment, index - 1):
-                found.append((token.replace(".", "/") + ".py", _arguments(segment, index), exact))
+            if path and ".." not in path.group(1).split("/"):
+                reached = _chain(segment, index) if index <= CHAIN_LIMIT else "may"
+                script = path.group(1)
+            elif index and segment[index - 1] == "-m" and _MODULE.match(token):
+                reached = _chain(segment, index - 1) if index <= CHAIN_LIMIT else "may"
+                script = token.replace(".", "/") + ".py"
+            else:
+                continue
+            if reached != "no":
+                found.append((script, _arguments(segment, index), exact and reached == "yes"))
             if limit is not None and len(found) > limit:
                 return found
     return found
@@ -826,7 +925,7 @@ def collect(runs: Sequence[Run], root: Path = ROOT) -> tuple[list[Call], list[st
                     queue.clear()
                     break
                 found += 1
-                calls.append(Call(run.job, run.step, script, args, via, exact and via is None, run.platform))
+                calls.append(Call(run.job, run.step, script, args, via, exact and via is None and run.exact_allowed, run.platform))
                 if not script.endswith(".sh") or script in scripts or not (root / script).is_file():
                     continue
                 if len(scripts) >= MAX_SCRIPTS_PER_STEP:
@@ -903,6 +1002,8 @@ def satisfies(call: Call, script: str, argv: Sequence[str]) -> str | None:
                 if not any("$" in value for value in given_platform):
                     return None
                 result = "ambiguous"
+            elif call.platform in PLATFORM_NAMES and call.platform != wanted_platform:
+                result = "ambiguous"  # the flag names this platform, the runner another
         elif call.platform is None:
             result = "ambiguous"
         elif call.platform != wanted_platform:
@@ -915,12 +1016,17 @@ def _wants_platform(argv: Sequence[str]) -> bool:
     return any(word == "--platform" and index + 1 < len(argv) and argv[index + 1] == "{platform}" for index, word in enumerate(argv))
 
 
-def _call_platform(call: Call) -> str | None:
-    """The platform a call is for: its literal `--platform`, else the job's runner; None if unknown."""
+def _call_platform(call: Call) -> tuple[str | None, bool]:
+    """(the platform a call is for, whether its flag and its runner disagree).
+
+    The platform is the literal `--platform`, else the job's runner. When both are
+    known and differ, the call proves nothing for either platform.
+    """
     values = _flag_values(call.args, "--platform")
     if values:
-        return values[0] if "$" not in values[0] else None  # a literal platform (even an unknown one) or a variable
-    return call.platform
+        flag = values[0] if "$" not in values[0] else None  # a literal platform (even an unknown one) or a variable
+        return flag, flag in PLATFORM_NAMES and call.platform in PLATFORM_NAMES and flag != call.platform
+    return call.platform, False
 
 
 def check(root: Path = ROOT, inventory: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -948,7 +1054,9 @@ def check(root: Path = ROOT, inventory: Mapping[str, Any] | None = None) -> dict
                     continue
                 label = call.where + (f" via {call.via}" if call.via else "")
                 reached_by.add(call.where)
-                own = _call_platform(call) if platform_aware else None
+                own, conflict = _call_platform(call) if platform_aware else (None, False)
+                if conflict:
+                    own = None  # the flag says one platform and the runner another: evidence for neither
                 for platform in platforms:
                     if platform_aware and own not in (None, platform):
                         continue  # a call for another platform
