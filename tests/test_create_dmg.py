@@ -895,3 +895,187 @@ def test_attachment_timeout_preserves_partial_failure_output(tmp_path, phase, ca
     output = capsys.readouterr()
     assert "partial output" in output.out
     assert "partial error" in output.err
+
+
+@pytest.mark.parametrize("next_device", ["/dev/disk5", "/dev/disk8"])
+@pytest.mark.parametrize("checksum_valid", [True, False])
+def test_busy_detach_rediscovers_owned_device_and_requires_verification(
+    tmp_path, clock, capsys, next_device, checksum_valid
+):
+    image = tmp_path / "new.dmg"
+    image.write_bytes(b"created image")
+    commands = []
+    inventories = 0
+    busy = 'hdiutil: couldn\'t eject "disk5" - Resource busy\n'
+    checksum_error = "hdiutil: verify failed - image has no checksum\n"
+
+    def run(command, **kwargs):
+        nonlocal inventories
+        commands.append(command)
+        if command[1] == "info":
+            inventories += 1
+            device = "/dev/disk5" if inventories == 1 else next_device
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                plistlib.dumps(
+                    {
+                        "images": [
+                            attachment(tmp_path / "unrelated.dmg", "/dev/disk9"),
+                            attachment(image, device),
+                        ]
+                    }
+                ),
+                b"",
+            )
+        if command[1] == "detach":
+            assert kwargs["timeout"] == 10
+            return subprocess.CompletedProcess(
+                command,
+                int(inventories == 1),
+                "detach output\n",
+                busy if inventories == 1 else "",
+            )
+        assert command == ["hdiutil", "verify", str(image)]
+        if inventories == 0:
+            return subprocess.CompletedProcess(command, 1, "", BUSY)
+        return subprocess.CompletedProcess(
+            command,
+            0 if checksum_valid else 1,
+            "verified output\n",
+            "" if checksum_valid else checksum_error,
+        )
+
+    with (
+        patch.object(create_dmg.subprocess, "run", side_effect=run),
+        patch.object(create_dmg.time, "sleep", side_effect=clock.advance),
+    ):
+        if checksum_valid:
+            create_dmg.verify_image(image, created_image=True)
+        else:
+            with pytest.raises(subprocess.CalledProcessError) as failure:
+                create_dmg.verify_image(image, created_image=True)
+            assert failure.value.stderr == checksum_error
+    assert [cmd for cmd in commands if cmd[1] == "detach"] == [
+        ["hdiutil", "detach", "/dev/disk5"],
+        ["hdiutil", "detach", next_device],
+    ]
+    assert inventories == 2
+    assert sum(cmd[1] == "verify" for cmd in commands) == 2
+    assert clock.now == 2
+    assert image.read_bytes() == b"created image"
+    assert busy in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("change", ["foreign-owner", "duplicate", "changed-bytes"])
+def test_busy_detach_revalidates_ownership_and_bytes_before_retry(
+    tmp_path, clock, change
+):
+    image = tmp_path / "new.dmg"
+    image.write_bytes(b"created image")
+    commands = []
+    inventories = 0
+
+    def run(command, **kwargs):
+        nonlocal inventories
+        commands.append(command)
+        if command[1] == "info":
+            inventories += 1
+            owned = attachment(image)
+            entries = [owned]
+            if inventories > 1:
+                if change == "foreign-owner":
+                    owned["owner-uid"] += 1
+                else:
+                    entries.append(attachment(image))
+            return subprocess.CompletedProcess(
+                command, 0, plistlib.dumps({"images": entries}), b""
+            )
+        return subprocess.CompletedProcess(
+            command, 1, "", 'hdiutil: couldn\'t eject "disk5" - Resource busy\n'
+        )
+
+    def sleep(seconds):
+        clock.advance(seconds)
+        if change == "changed-bytes":
+            image.write_bytes(b"changed image")
+
+    with (
+        patch.object(create_dmg.subprocess, "run", side_effect=run),
+        patch.object(create_dmg.time, "sleep", side_effect=sleep),
+        pytest.raises(ValueError, match="DMG bytes changed|Ambiguous attachment"),
+    ):
+        create_dmg.detach_created_image(image)
+    assert [cmd for cmd in commands if cmd[1] == "detach"] == [
+        ["hdiutil", "detach", "/dev/disk5"]
+    ]
+    assert inventories == (1 if change == "changed-bytes" else 2)
+
+
+@pytest.mark.parametrize("budget,attempts", [(5, 3), (None, 10)])
+def test_permanently_busy_detach_exhausts_shared_budget_and_preserves_failure(
+    tmp_path, clock, capsys, budget, attempts
+):
+    image = tmp_path / "new.dmg"
+    image.write_bytes(b"created image")
+    commands = []
+    busy = 'hdiutil: couldn\'t eject "disk5" - Resource busy\n'
+
+    def run(command, **kwargs):
+        commands.append(command)
+        assert 0 < kwargs["timeout"] <= 10
+        if command[1] == "info":
+            return subprocess.CompletedProcess(
+                command, 0, plistlib.dumps({"images": [attachment(image)]}), b""
+            )
+        return subprocess.CompletedProcess(command, 1, "busy output\n", busy)
+
+    with (
+        patch.object(create_dmg.subprocess, "run", side_effect=run),
+        patch.object(create_dmg.time, "sleep", side_effect=clock.advance),
+        pytest.raises(subprocess.CalledProcessError) as failure,
+    ):
+        create_dmg.detach_created_image(image, deadline=budget)
+    assert failure.value.stdout == "busy output\n"
+    assert failure.value.stderr == busy
+    assert sum(cmd[1] == "info" for cmd in commands) == attempts
+    assert sum(cmd[1] == "detach" for cmd in commands) == attempts
+    assert clock.now == (20 if budget is None else budget)
+    output = capsys.readouterr()
+    assert output.err.count(busy) == attempts
+    assert output.out == "busy output\n" * attempts
+
+
+@pytest.mark.parametrize(
+    "returncode,stderr",
+    [
+        (1, "permission denied\n"),
+        (1, 'hdiutil: couldn\'t eject "disk9" - Resource busy\n'),
+        (-9, 'hdiutil: couldn\'t eject "disk5" - Resource busy\n'),
+        (1, None),
+    ],
+)
+def test_detach_does_not_retry_other_failures(tmp_path, returncode, stderr):
+    image = tmp_path / "new.dmg"
+    image.write_bytes(b"created image")
+    results = [
+        subprocess.CompletedProcess(
+            ["hdiutil", "info", "-plist"],
+            0,
+            plistlib.dumps({"images": [attachment(image)]}),
+            b"",
+        ),
+        subprocess.CompletedProcess(
+            ["hdiutil", "detach", "/dev/disk5"], returncode, "output\n", stderr
+        ),
+    ]
+    with (
+        patch.object(create_dmg.subprocess, "run", side_effect=results) as run,
+        patch.object(create_dmg.time, "sleep") as sleep,
+        pytest.raises(subprocess.CalledProcessError) as failure,
+    ):
+        create_dmg.detach_created_image(image)
+    assert failure.value.returncode == returncode
+    assert failure.value.stderr == stderr
+    assert run.call_count == 2
+    sleep.assert_not_called()
