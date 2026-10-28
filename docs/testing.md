@@ -89,6 +89,42 @@ These add diagnostics and cleanup. They are not retries and do not extend any
 budget. A failure message that names a phase is evidence for investigation; it
 does not establish the cause of a failure that has not been reproduced.
 
+### Caller audit of the shared helpers
+
+Counts are from a text search of every Dart file under `packages/*/test`,
+`apps/*/test` and `apps/*/integration_test` at the head that added this table
+(533 files). They locate candidates; no file below was reviewed line by line,
+and "risk" names what a failed test could leave behind, not an observed failure.
+Untimed `exitCode` counts include `ProcessResult.exitCode` and so overstate.
+
+| Pattern | Sites | Using the shared helpers |
+| --- | --- | --- |
+| `Process.start` | about 120 in 53 files | 2 files (`model_transport_cancellation_ownership_test`, `fixture_ownership_test`) |
+| `Process.run` / `runSync` | about 235 (mostly short `chmod`, `ps`, `kill -0`) | not applicable: finished before return |
+| `eventually` | about 357 | fewer than 10 pass `label` / `describe` |
+| Hand-rolled child cleanup in `foresight_test_support/lib` | `native_fixture.dart`, `hooked_service.dart`, `gated_helper.dart`, `capture_process.dart` | none |
+
+Migrated for the nightly failures of
+[#190](https://github.com/teng-lin/open-foresight/issues/190): every
+`Process.start` in `model_transport_cancellation_ownership_test`, the
+admission-lock evidence in `storage_worker_protocol_test`, and the waits of the native close test
+in `storage_worker_session_test`. The rest is a backlog, ranked by the number
+of un-reaped or un-bounded patterns per file, not by evidence of failure.
+Migrate a file when a failure implicates it; do not rewrite them in bulk.
+
+| Rank | File | Process owner | Sockets, streams, pending work | Risk if the test fails |
+| --- | --- | --- | --- | --- |
+| 1 | `restore_activation_test` | 5 starts, hand-rolled `kill` (7) and `finally` (7) | 2 stream listeners; 24 `exitCode` references, most untimed | A wait after SIGKILL has no bound or phase; a hung child blocks the test run |
+| 2 | `service_closing_protocol_test` | 21 starts, each in its own `finally` (21) | 2 sockets; 11 `eventually` without evidence; 3 untimed `exitCode` | A start whose `finally` is skipped by an earlier throw leaks a service |
+| 3 | `service_profile_identity_test` | 18 starts, 13 teardowns | 11 sockets; 11 untimed `exitCode` references, several in teardowns | Teardown awaits a killed child without a bound |
+| 4 | `service_shutdown_handoff_test` | 1 start, 25 `finally` blocks | 2 sockets; 11 `eventually` without evidence | Wait failures carry no phase; shutdown ordering is not recorded |
+| 5 | `helper_process_recovery_test` | 1 start, 4 `kill` | 5 `eventually` without evidence; 7 untimed `exitCode` references | Kill-then-await without a bound |
+| 6 | `desktop_peer_process_test` | 3 starts, 2 `kill` | 4 sockets, 3 listeners; 5 untimed `exitCode` | A peer started before an assertion can outlive it |
+| 7 | `service_connection_test` | 1 start | 9 sockets, 5 listeners; 11 `eventually` without evidence | Socket and wait failures are indistinguishable |
+| 8 | `file_parser_test` | 9 starts handed to the production parser; no `kill` | none | The parser is the only owner; a parser failure leaves the helper to the OS |
+| 9 | `foresight_test_support/lib/native_fixture.dart`, `hooked_service.dart`, `gated_helper.dart` | own SIGTERM/SIGKILL; `native_fixture` awaits `exitCode` unbounded after SIGKILL; `gated_helper` signals a recorded pid after matching its command | none | Unbounded reap; pid-based signaling instead of an owned handle |
+| 10 | `remote_domain_test` (57 `eventually`), `recording_storage_failure_test` (16) | none | many pending operations | Failures say only that the 3 s deadline passed |
+
 ### Known gap: diagnostic admission treats any lock errno as `retry`
 
 `DiagnosticStorage.admit` and `classify` take `admission.lock` with the
@@ -188,6 +224,36 @@ isolated native GUI gate. Do not fabricate display flags or use a personal
 desktop to turn a missing runner prerequisite into a pass. Preserve local and
 hosted results separately; new CI failures remain blockers even when local
 checks passed. Keep a PR in draft while required qualification remains unresolved.
+
+### Failure ledger
+
+Work package 5 of [#192](https://github.com/teng-lin/open-foresight/issues/192)
+asks for a named owner, a bounded next experiment and a concrete exit criterion
+for each active failure. Every entry starts as UNKNOWN until evidence supports a
+class. The class is one of product, fixture, environment, dependency, artifact
+or UNKNOWN. Status is `open`, `mitigated` (diagnostics or a control added; the
+original failure is neither explained nor reproduced at its source) or `closed`
+(the exit criterion was met). **A successful rerun does not close an entry.**
+Owner is "unassigned: needs named owner" until a person is named.
+
+Source for every entry: nightly run
+[40510685655](https://github.com/teng-lin/open-foresight/actions/runs/40510685655)
+at `f7c06383`, tracked by
+[#190](https://github.com/teng-lin/open-foresight/issues/190). Job-to-test
+assignments are from the triage of that run, not re-read from raw logs here.
+
+| ID | First job | Class | Exact error | Owner | Next bounded experiment | Exit criterion (controlling test) | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| L1 | `macos-checks (core)`, with coverage | UNKNOWN | `storage_worker_session_test` "busy native close cannot overtake a held late summary acknowledgement": `eventually` hit its 3 s deadline (~line 351) on `owner != null && owner.sink.records.isNotEmpty`. Passed on Linux | unassigned: needs named owner | 200 runs of the file on macOS with and without coverage; read the new owner-state line | The loop either names the phase (owner never created vs created with empty records vs later wait) or shows zero failures in 200 runs per mode. Controls: "summary wait evidence separates a missing owner from empty records" | open: evidence added, cause unconfirmed |
+| L2 | `linux-native / core-linux` | UNKNOWN | `storage_worker_protocol_test` "filesystem fixture writes only validated schema2 and closes before retirement": `classify` returned `retry`, expected `ok` | unassigned: needs named owner | Run the concurrent loop (four simultaneous copies of the protocol, session and transport suites) on the Linux host; collect the `admission.lock post-failure probe` lines | The lock holder is named, then a deterministic control reproduces it. Reproduced locally on macOS only as the symptom: `retry` once in 80 runs; the unmodified base `1d208f31` failed "duplicate manifest fields stay occupied…" once in 60 (`admit` returned null). Probe showed `held` once and `free` once. Hypothesis, not finding: a fork in another suite keeps a closed description alive until exec. Production gap: a non-contention errno is also reported as `retry` (see the known-gap note) | open: symptom reproduced, holder unidentified |
+| L3 | `linux-test` | UNKNOWN | `model_transport_cancellation_ownership_test` "broken config pipe preserves retry admission after confirmed exit": `TimeoutException` after 5 s where `RpcError` was expected (~line 458) | unassigned: needs named owner | Run the test file on the Linux host 200 times with and without a CPU load; read the phase line on any failure | A slow-launch control fails with the old shared bound and passes with separate budgets ("a cold worker launch is setup with its own budget…": fails with a 5 s setup budget at phase `launched`, passes with 15 s), and a retirement that never settles still fails at 5 s with its phase and no child left ("a retirement that never settles…", "closed-stdin worker settles cleanup while paused"). Hypothesis only: cold launch and retirement shared the budget | open: fixture hardened, original cause unconfirmed |
+| L4 | `acceptance-deb` | dependency (transient, per triage) | apt: `File has unexpected size (219540 != 3013728). Mirror sync in progress?` | unassigned: needs named owner | Reproduce the message with a fixture mirror serving a short package; read how the acceptance entrypoint classifies it | A simulated size mismatch is reported as dependency setup failure and retains its output, and a genuine `.deb` install failure is still a product failure. No control exists yet | open |
+| L5 | `acceptance-checks`, `macos`, `platform-checks`, `nightly-checks` | consequence | Aggregates of L1 to L4 | not applicable | none | Go green when L1 to L4 are closed; a green aggregate alone closes nothing | consequence only |
+
+Reliability measurement uses the existing CI statistics: first-attempt pass rate
+with its denominator, recurring failures by boundary, and time to diagnose. Keep
+platform, selection, execution mode and cold or warm cohorts separate, and label
+qualification repeats. No dashboard is built for this.
 
 ## Regular pull-request gates
 
