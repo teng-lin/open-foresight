@@ -86,6 +86,18 @@ extension _AssistantViews on MeetingsController {
               ),
         onCopy: (text) => Clipboard.setData(ClipboardData(text: text)),
         onListen: _audioTranscriptListener(id),
+        onCorrectSpeaker: _operations.busy
+            ? null
+            : (row) => _correctSpeaker(id, row),
+        onMarkUnnamed: _operations.busy
+            ? null
+            : (row) => _operations.run(() => _markSpeakerUnnamed(id, row)),
+        onResetSpeaker: _operations.busy
+            ? null
+            : (row) => _operations.run(() => _resetSpeaker(id, row)),
+        onRenameParticipant: _operations.busy
+            ? null
+            : (row) => _renameParticipant(id, row),
         onQuestion: (text) {
           _chatCommands.setQuestion(id, text);
           update(() => meetingPanel = 'Chat');

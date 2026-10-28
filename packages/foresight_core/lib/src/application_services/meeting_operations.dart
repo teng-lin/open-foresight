@@ -108,22 +108,23 @@ final class MeetingOperations {
 
   // A correction changes the transcript's rendered text, so cached note input
   // is dropped and the meeting is reprojected like any other transcript edit.
-  Future<void> _attributionChanged(
-    int meeting,
-    bool Function()? current,
-  ) async {
+  // The correction is already durable (so is its reindex intent); the producer
+  // runs on its own and a helper outage or full backlog never reports a saved
+  // correction as failed.
+  void _attributionChanged(int meeting) {
     if (recording.recordingMeeting == meeting && recording.recording != null) {
       notes.scheduleLiveTranscript(meeting);
     } else {
       notes.invalidateTranscript(meeting);
     }
-    await indexer.indexMeeting(meeting, current: current);
+    try {
+      indexer.scheduleFinalIndex(meeting).ignore();
+    } on RpcError {
+      // The durable intent is retried by recovery.
+    }
   }
 
-  Future<void> attribute(
-    MeetingsAttributeRequest request, {
-    bool Function()? current,
-  }) async {
+  void attribute(MeetingsAttributeRequest request) {
     final meeting = queries.transcriptMeeting(request.id);
     final TranscriptAttribution correction;
     try {
@@ -137,26 +138,20 @@ final class MeetingOperations {
       );
     }
     domain.store.setManualAttribution(request.id, correction);
-    await _attributionChanged(meeting, current);
+    _attributionChanged(meeting);
   }
 
-  Future<void> resetAttribution(
-    MeetingsResetAttributionRequest request, {
-    bool Function()? current,
-  }) async {
+  void resetAttribution(MeetingsResetAttributionRequest request) {
     final meeting = queries.transcriptMeeting(request.id);
     if (domain.store.resetAttribution(request.id)) {
-      await _attributionChanged(meeting, current);
+      _attributionChanged(meeting);
     }
   }
 
-  Future<void> renameParticipant(
-    MeetingsRenameParticipantRequest request, {
-    bool Function()? current,
-  }) async {
+  void renameParticipant(MeetingsRenameParticipantRequest request) {
     final meeting = queries.participantMeeting(request.id);
     if (domain.store.renameMeetingParticipant(request.id, request.name) > 0) {
-      await _attributionChanged(meeting, current);
+      _attributionChanged(meeting);
     }
   }
 
@@ -255,15 +250,15 @@ final class MeetingOperations {
     ),
     TypedOperationHandler<MeetingsAttributeRequest>(
       Operation.meetingsAttribute,
-      (request, {current}) => attribute(request, current: current),
+      (request, {current}) => attribute(request),
     ),
     TypedOperationHandler<MeetingsResetAttributionRequest>(
       Operation.meetingsResetAttribution,
-      (request, {current}) => resetAttribution(request, current: current),
+      (request, {current}) => resetAttribution(request),
     ),
     TypedOperationHandler<MeetingsRenameParticipantRequest>(
       Operation.meetingsRenameParticipant,
-      (request, {current}) => renameParticipant(request, current: current),
+      (request, {current}) => renameParticipant(request),
     ),
     TypedOperationHandler<MeetingsGetRequest>(
       Operation.meetingsGet,

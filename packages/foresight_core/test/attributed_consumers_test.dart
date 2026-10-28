@@ -376,13 +376,13 @@ void main() {
       };
       expect(render(person), {
         TranscriptFormatMode.display: 'Ada Lovelace\nraw words',
-        TranscriptFormatMode.export: '[Ada Lovelace 10–20 ms] raw words',
+        TranscriptFormatMode.export: 'Ada Lovelace: raw words',
         TranscriptFormatMode.retrieval: '[Ada Lovelace 10–20 ms] raw words',
         TranscriptFormatMode.modelInput: 'Ada Lovelace: raw words',
       });
       expect(render(anon), {
         TranscriptFormatMode.display: 'Remote\nraw words',
-        TranscriptFormatMode.export: '[Remote 10–20 ms] raw words',
+        TranscriptFormatMode.export: 'raw words',
         TranscriptFormatMode.retrieval: '[Remote 10–20 ms] raw words',
         TranscriptFormatMode.modelInput: 'raw words',
       });

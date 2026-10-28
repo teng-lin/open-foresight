@@ -8,7 +8,9 @@ enum TranscriptFormatMode {
   /// Heading plus text for people reading the transcript in the application.
   display,
 
-  /// A saved copy for people: `[label start–end ms] text`.
+  /// Copies and saved files for people: `name: text` for a named speaker and
+  /// the bare text otherwise, so an unattributed transcript copies exactly as
+  /// it always has.
   export,
 
   /// Exactly the indexed piece text, so search results and the stored source
@@ -87,11 +89,11 @@ abstract final class AttributedTranscript {
     final label = name ?? channel.label;
     final (prefix, rendered) = switch (mode) {
       TranscriptFormatMode.display => (label, '$label\n$raw'),
-      TranscriptFormatMode.export || TranscriptFormatMode.retrieval => (
+      TranscriptFormatMode.retrieval => (
         '[$label ${segment.startMs}–${segment.endMs} ms]',
         '[$label ${segment.startMs}–${segment.endMs} ms] $raw',
       ),
-      TranscriptFormatMode.modelInput =>
+      TranscriptFormatMode.export || TranscriptFormatMode.modelInput =>
         name == null ? ('', raw) : ('$name:', '$name: $raw'),
     };
     return FormattedTranscriptLine(
