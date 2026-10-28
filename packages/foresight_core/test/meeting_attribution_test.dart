@@ -1374,7 +1374,7 @@ void main() {
             attribution: automatic(null, 'Ada'),
           ),
         ),
-        throwsA(isA<SqliteException>()),
+        throwsA(isA<AttributionWriteFailure>()),
       );
       expect(rowsOf('SELECT * FROM transcript'), 0);
       expect(rowsOf('SELECT * FROM transcript_attributions'), 0);
@@ -1800,5 +1800,362 @@ void main() {
       ]);
       expect(rowsOf('SELECT * FROM meeting_participants'), roster.length);
     });
+  });
+
+  group('round 2', () {
+    RecordingTranscriptPersistence queue(
+      List<String> reports, {
+      List<void Function()>? timers,
+    }) {
+      final persistence = RecordingTranscriptPersistence(
+        store: store,
+        meeting: meeting,
+        createTimer: (_, callback) {
+          if (timers == null) throw StateError('no retry expected');
+          timers.add(callback);
+          return Timer.periodic(const Duration(days: 1), (_) {});
+        },
+        committed: (_) {},
+        retrying: () {},
+        exhausted: () {},
+        report: reports.add,
+      );
+      addTearDown(persistence.dispose);
+      return persistence;
+    }
+
+    test('a permanently rejected attribution cannot cost the text', () {
+      // A constraint the DDL cannot predict, whose message names the person.
+      store.db.execute(
+        'CREATE TRIGGER reject_attribution BEFORE INSERT ON transcript_attributions '
+        "BEGIN SELECT RAISE(ABORT,'cannot store Grace Hopper'); END",
+      );
+      final reports = <String>[];
+      final persistence = queue(reports);
+      final segment = RecordingTranscriptSegment(
+        'Spoken words',
+        1,
+        2,
+        'playback',
+        finalText: true,
+        attribution: automatic(null, 'Grace Hopper'),
+      );
+      persistence.add(segment);
+      expect(persistence.failed, isFalse);
+      expect(persistence.failure, isNull);
+      expect(persistence.pending, 0);
+      expect(store.meetingQueries.finalTranscriptText(meeting), [
+        'Spoken words',
+      ]);
+      expect(rowsOf('SELECT * FROM transcript_attributions'), 0);
+      expect(segment.attributionSaved, isFalse);
+      expect(segment.attributionErrorCode, 1811);
+      expect(persistence.attributionRejections, 1);
+      expect(persistence.lastAttributionRejectionCode, 1811);
+      expect(reports, ['Transcript attribution rejected (SQLite code 1811)']);
+      for (final text in [...reports, '${segment.attributionErrorCode}']) {
+        expect(text, isNot(contains('Grace')));
+      }
+      // The next segment keeps its own attribution request.
+      store.db.execute('DROP TRIGGER reject_attribution');
+      final next = RecordingTranscriptSegment(
+        'More words',
+        3,
+        4,
+        'playback',
+        finalText: true,
+        attribution: automatic(null, 'Grace Hopper'),
+      );
+      persistence.add(next);
+      expect(next.attributionSaved, isTrue);
+    });
+
+    test('deeply nested evidence degrades instead of reaching SQLite', () {
+      Object? nest(int depth) {
+        Object? value = 1;
+        for (var i = 0; i < depth; i++) {
+          value = <String, Object?>{'a': value};
+        }
+        return value;
+      }
+
+      final evidence = nest(1000) as Map<String, Object?>;
+      expect(
+        () => TranscriptAttribution(
+          state: AttributionState.unknown,
+          evidence: evidence,
+        ),
+        throwsArgumentError,
+      );
+      final clamped = TranscriptAttribution.clamped(
+        displayName: 'Grace Hopper',
+        state: AttributionState.attributed,
+        evidence: evidence,
+      );
+      expect(clamped.state, AttributionState.unknown);
+      expect(clamped.evidence, isEmpty);
+      final persistence = queue([]);
+      persistence.add(
+        RecordingTranscriptSegment(
+          'Text survives',
+          1,
+          2,
+          'playback',
+          finalText: true,
+          attribution: clamped,
+        ),
+      );
+      expect(persistence.failed, isFalse);
+      expect(store.meetingQueries.finalTranscriptText(meeting), [
+        'Text survives',
+      ]);
+      // Within the bound, nesting is accepted.
+      expect(
+        TranscriptAttribution(
+          state: AttributionState.unknown,
+          evidence: nest(maxAttributionEvidenceDepth) as Map<String, Object?>,
+        ).evidence,
+        isNotEmpty,
+      );
+    });
+
+    test('an exhausted retry stores and rethrows a failure without payload', () {
+      store.db.execute(
+        'CREATE TRIGGER block_text BEFORE INSERT ON transcript '
+        "BEGIN SELECT RAISE(ABORT,'blocked Secret Phrase for Grace Hopper'); END",
+      );
+      final timers = <void Function()>[];
+      final reports = <String>[];
+      final persistence = queue(reports, timers: timers);
+      persistence.add(
+        RecordingTranscriptSegment(
+          'Secret Phrase',
+          1,
+          2,
+          'playback',
+          finalText: true,
+          attribution: automatic(null, 'Grace Hopper'),
+        ),
+      );
+      while (!persistence.failed && timers.isNotEmpty) {
+        timers.removeLast()();
+      }
+      expect(persistence.failed, isTrue);
+      final shown = '${persistence.failure} ${persistence.failureStack}';
+      expect(persistence.failure, isA<RpcError>());
+      expect(shown, isNot(contains('Grace')));
+      expect(shown, isNot(contains('Secret')));
+      expect(shown, contains('SQLite code'));
+      expect(reports, isEmpty, reason: 'a text failure is not a rejection');
+    });
+
+    test('transient storage failures keep the attribution request', () {
+      final write = AttributionWriteFailure(5, 5);
+      expect(write.isConstraint, isFalse);
+      expect('$write', isNot(contains('Grace')));
+      expect(AttributionWriteFailure(19, 1811).isConstraint, isTrue);
+    });
+
+    test('U+0000 is rejected or stripped before it can lose a batch', () {
+      for (final bad in ['Ada\u0000Lovelace', '\u0000']) {
+        expect(() => participant('k', bad), throwsArgumentError);
+      }
+      expect(() => participant('k\u0000', 'Ada'), throwsArgumentError);
+      expect(
+        () => MeetingParticipant(
+          scope: 's\u0000',
+          identityKey: 'k',
+          displayName: 'Ada',
+          firstSeenMs: 0,
+          lastSeenMs: 1,
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => TranscriptAttribution(
+          state: AttributionState.unknown,
+          method: 'a\u0000b',
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        TranscriptAttribution.clamped(
+          displayName: 'Ada\u0000 L',
+          state: AttributionState.attributed,
+        ).displayName,
+        'Ada L',
+      );
+      final observed = [
+        MeetingParticipant.tryCreate(
+          scope: 's',
+          identityKey: 'a',
+          displayName: 'Keeps\u0000 Name',
+          firstSeenMs: 0,
+          lastSeenMs: 1,
+        ),
+        MeetingParticipant.tryCreate(
+          scope: 's',
+          identityKey: 'b\u0000',
+          displayName: 'Dropped',
+          firstSeenMs: 0,
+          lastSeenMs: 1,
+        ),
+        MeetingParticipant.tryCreate(
+          scope: 's',
+          identityKey: 'c',
+          displayName: 'Also Kept',
+          firstSeenMs: 0,
+          lastSeenMs: 1,
+        ),
+      ];
+      expect(observed[1], isNull);
+      final saved = store.saveMeetingParticipants(meeting, [
+        for (final p in observed)
+          if (p != null) p,
+      ]);
+      expect(saved.map((p) => p.displayName), ['Keeps Name', 'Also Kept']);
+      expect(
+        () => store.renameMeetingParticipant(saved.first.id!, 'A\u0000B'),
+        throwsA(isA<RpcError>()),
+      );
+    });
+
+    test('evidence is immutable at every level and canonical', () {
+      final a = TranscriptAttribution(
+        state: AttributionState.unknown,
+        evidence: {'b': 2, 'a': 1},
+      );
+      final b = TranscriptAttribution(
+        state: AttributionState.unknown,
+        evidence: {'a': 1, 'b': 2},
+      );
+      expect(a.evidenceJson, '{"a":1,"b":2}');
+      expect(a.sameContent(b), isTrue);
+      expect(() => a.evidence['injected'] = 'x', throwsUnsupportedError);
+      expect(a.toJson()['evidence'], {'a': 1, 'b': 2});
+      final copy = a.withDisplayName('Ignored for unknown');
+      expect(copy.evidence, {'a': 1, 'b': 2});
+      expect(
+        () => TranscriptAttribution(
+          state: AttributionState.unknown,
+          evidence: <String, Object?>{
+            'k': {1: 'non-string key'},
+          },
+        ),
+        throwsArgumentError,
+      );
+      final id = finalRow('reordered');
+      store.saveAutomaticAttribution(id, a);
+      expect(
+        store.saveAutomaticAttribution(id, b),
+        AttributionWriteOutcome.unchanged,
+      );
+    });
+
+    test('a pending journal entry still advances the source revision', () {
+      mapSource();
+      final id = finalRow('fresh row');
+      final sourceBefore =
+          store
+                  .rows(
+                    "SELECT revision FROM sources WHERE id='meeting-$meeting'",
+                  )
+                  .single['revision']
+              as int;
+      final meetingBefore = revision();
+      final version = store
+          .rows('SELECT version FROM meeting_transcript_changes')
+          .single['version'];
+      store.setManualAttribution(
+        id,
+        TranscriptAttribution.manual(displayName: 'Ada'),
+      );
+      expect(
+        store
+            .rows("SELECT revision FROM sources WHERE id='meeting-$meeting'")
+            .single['revision'],
+        sourceBefore + 1,
+      );
+      expect(revision(), meetingBefore + 1);
+      expect(
+        store
+            .rows('SELECT version FROM meeting_transcript_changes')
+            .single['version'],
+        version,
+        reason: 'the journal needs no second entry',
+      );
+      expect(sourceBody(), '[Ada 10–20 ms] fresh row');
+    });
+
+    test('INSERT OR REPLACE onto an unnamed state invalidates the old name', () {
+      mapSource();
+      final id = finalRow('renamed away');
+      store.saveAutomaticAttribution(id, automatic(null, 'Alice'));
+      final projection = MeetingTranscriptProjection(store);
+      projection.acknowledge(
+        meeting,
+        store.workspaceEpoch,
+        projection.prepare(meeting, store.workspaceEpoch, 0)!,
+      );
+      expect(sourceBody(), contains('[Alice 10–20 ms]'));
+      final before = revision();
+      store.db.execute(
+        'INSERT OR REPLACE INTO transcript_attributions(transcript_id,state,updated_ms) '
+        "VALUES(?,'unknown',1)",
+        [id],
+      );
+      expect(revision(), before + 1);
+      expect(rowsOf('SELECT * FROM meeting_index_segments'), 0);
+      expect(
+        store.rows('SELECT projected FROM meeting_transcript_changes').single,
+        {'projected': 0},
+      );
+      expect(sourceBody(), '[Remote 10–20 ms] renamed away');
+    });
+
+    test(
+      'rename measures code points and the renderer strips more controls',
+      () {
+        final person = store.saveMeetingParticipants(meeting, [
+          participant('k', 'Ada'),
+        ]).single;
+        final emoji = '😀' * 300;
+        expect(emoji.length, greaterThan(maxParticipantNameLength));
+        expect(store.renameMeetingParticipant(person.id!, emoji), 0);
+        expect(
+          store.meetingQueries.participants(meeting).single.displayName,
+          emoji,
+        );
+        expect(
+          () => store.renameMeetingParticipant(person.id!, '😀' * 501),
+          throwsA(isA<RpcError>()),
+        );
+        const stripped = [
+          '\u061c',
+          '\u2061',
+          '\u2062',
+          '\u2063',
+          '\u2064',
+          '\u206a',
+          '\u206f',
+          '\u{e0001}',
+          '\u{e0041}',
+          '\u{e007f}',
+          '\ufe00',
+          '\ufe0f',
+          '\u{e0100}',
+          '\u{e01ef}',
+        ];
+        for (final character in stripped) {
+          expect(renderedAttributionName('A${character}B'), 'AB');
+          expect(renderedAttributionName(character), isEmpty);
+          expect(
+            () => participant('k2', character),
+            throwsArgumentError,
+            reason: character.runes.first.toRadixString(16),
+          );
+        }
+      },
+    );
   });
 }

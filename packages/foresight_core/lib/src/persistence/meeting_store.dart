@@ -174,7 +174,10 @@ class MeetingStore {
   /// exception from the write itself, whether a busy, I/O or full-disk error
   /// or a failure in a downstream invalidation trigger, is not an attribution
   /// problem: it propagates with nothing committed so the caller's bounded
-  /// retry boundary reruns the whole row. The attribution and the text bump the
+  /// retry boundary reruns the whole row. A failure while writing the
+  /// attribution itself surfaces as [AttributionWriteFailure] (codes only); a
+  /// constraint-class one cannot be fixed by retrying, so the retry boundary
+  /// saves the text without the attribution. The attribution and the text bump the
   /// meeting revision once between them. This atomic pairing holds for this
   /// path (used by `RecordingTranscriptPersistence`); rows committed by other
   /// writers, such as the durable-audio ASR commit, are attributed afterwards
@@ -196,7 +199,13 @@ class MeetingStore {
       return TranscriptWrite(id, attributionErrorCode: rejection);
     }
     final afterText = _meetingRevision(meeting);
-    _writeAttribution(id, attribution, overwriteManual: attribution.manual);
+    try {
+      _writeAttribution(id, attribution, overwriteManual: attribution.manual);
+    } on SqliteException catch (error) {
+      // Re-thrown as codes only: the exception prints bound parameters, which
+      // include participant names. The enclosing savepoint rolls the row back.
+      throw AttributionWriteFailure(error.resultCode, error.extendedResultCode);
+    }
     // Nobody can observe this transaction's middle, so one bump covers the
     // text and its attribution together.
     if (_meetingRevision(meeting) > afterText) {
@@ -380,10 +389,11 @@ class MeetingStore {
   /// name. Returns the number of relabeled rows.
   int renameParticipant(int participantId, String displayName) {
     if (renderedAttributionName(displayName).isEmpty ||
-        displayName.length > maxParticipantNameLength) {
+        displayName.runes.length > maxParticipantNameLength ||
+        displayName.contains('\u0000')) {
       throw RpcError(
         RpcErrorCode.invalidArgument,
-        'Participant name must contain 1–$maxParticipantNameLength characters.',
+        'Participant name must contain 1–$maxParticipantNameLength characters without U+0000.',
       );
     }
     return _savepoint('rename_participant', () {

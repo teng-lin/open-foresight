@@ -7,6 +7,7 @@ import '../meeting_attribution.dart';
 import '../meeting_workflow_store.dart';
 import '../rpc_error.dart';
 import '../store.dart';
+import 'package:sqlite3/sqlite3.dart' show SqliteException;
 
 final class RecordingTranscriptSegment {
   RecordingTranscriptSegment(
@@ -32,6 +33,9 @@ final class RecordingTranscriptSegment {
   /// SQLite extended result code when the attribution was rejected. Only the
   /// number is kept: an exception would carry participant names.
   int? attributionErrorCode;
+
+  /// Set after an attribution failed permanently; the text is then saved alone.
+  bool attributionDropped = false;
   int attempts = 0;
   final age = Stopwatch()..start();
   late final int bytes = utf8
@@ -118,15 +122,29 @@ final class RecordingTranscriptPersistence {
             segment.finalText
                 ? '${segment.source}; captured-sample timeline (gaps excluded)'
                 : segment.source,
-            attribution: segment.attribution,
+            attribution: segment.attributionDropped
+                ? null
+                : segment.attribution,
           ),
         );
         segment
           ..transcriptId = written.transcriptId
           ..attributionSaved = written.attributionSaved
-          ..attributionErrorCode = written.attributionErrorCode;
+          ..attributionErrorCode =
+              written.attributionErrorCode ?? segment.attributionErrorCode;
       } catch (error, stack) {
-        failure ??= error;
+        if (error is AttributionWriteFailure &&
+            error.isConstraint &&
+            segment.attribution != null &&
+            !segment.attributionDropped) {
+          // No retry can make this attribution storable, and it must not cost
+          // the recording its text: save the text alone, once, right away.
+          segment
+            ..attributionDropped = true
+            ..attributionErrorCode = error.extendedResultCode;
+          continue;
+        }
+        failure ??= _withoutPayload(error);
         failureStack ??= stack;
         if (segment.attempts >= 5) {
           _fail();
@@ -172,6 +190,17 @@ final class RecordingTranscriptPersistence {
       _settlement = null;
     }
   }
+
+  /// The stored failure is rethrown to callers and logged, so it must not print
+  /// SQL parameters (transcript text, participant names): keep only the codes.
+  static Object _withoutPayload(Object error) => switch (error) {
+    SqliteException(:final extendedResultCode) ||
+    AttributionWriteFailure(:final extendedResultCode) => RpcError(
+      RpcErrorCode.unavailable,
+      'Transcript storage failed (SQLite code $extendedResultCode)',
+    ),
+    _ => error,
+  };
 
   void _fail() {
     if (failed) return;

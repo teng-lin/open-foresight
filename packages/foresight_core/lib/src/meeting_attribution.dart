@@ -49,17 +49,23 @@ String _truncateRunes(String value, int maximum) => _runeCount(value) <= maximum
     ? value
     : String.fromCharCodes(value.runes.take(maximum));
 
-/// Format and bidirectional controls that are removed from rendered names:
-/// soft hyphen, zero-width space, directional marks and embeddings/isolates,
-/// the word joiner and the byte-order mark.
+/// Format, bidirectional and invisible-selector characters that are removed
+/// from rendered names: soft hyphen, Arabic letter mark, zero-width space,
+/// directional marks, embeddings and isolates, the word joiner and invisible
+/// math operators, deprecated format controls, variation selectors, the BOM and
+/// tag characters.
 bool _stripped(int rune) =>
     rune == 0x00ad ||
+    rune == 0x061c ||
     rune == 0x200b ||
     (rune >= 0x200e && rune <= 0x200f) ||
     (rune >= 0x202a && rune <= 0x202e) ||
-    rune == 0x2060 ||
-    (rune >= 0x2066 && rune <= 0x2069) ||
-    rune == 0xfeff;
+    (rune >= 0x2060 && rune <= 0x2064) ||
+    (rune >= 0x2066 && rune <= 0x206f) ||
+    (rune >= 0xfe00 && rune <= 0xfe0f) ||
+    rune == 0xfeff ||
+    (rune >= 0xe0000 && rune <= 0xe007f) ||
+    (rune >= 0xe0100 && rune <= 0xe01ef);
 
 bool _whitespace(int rune) =>
     rune <= 0x20 ||
@@ -103,30 +109,68 @@ String renderedAttributionName(String displayName) {
 
 void _bounded(String name, String value, int maximum, {bool required = false}) {
   final count = _runeCount(value);
-  if (count > maximum || (required && count == 0)) {
+  // SQLite's length() stops at U+0000, so a NUL would fail the CHECK limits
+  // (and lose a whole batch); it is never valid in stored text.
+  if (count > maximum || (required && count == 0) || value.contains('\u0000')) {
     throw ArgumentError.value(
       count,
       name,
       required
-          ? 'must contain 1–$maximum characters'
-          : 'must contain at most $maximum characters',
+          ? 'must contain 1–$maximum characters without U+0000'
+          : 'must contain at most $maximum characters without U+0000',
     );
   }
 }
 
-/// Validate and canonicalize evidence once, at construction, so later changes
-/// to the caller's map or its nested values cannot alter what is stored.
-String _canonicalEvidence(Map<String, Object?> evidence) {
-  final String encoded;
-  try {
-    encoded = jsonEncode(evidence);
-  } on JsonUnsupportedObjectError catch (_) {
+String _withoutNul(String value) => value.replaceAll('\u0000', '');
+
+/// Maximum evidence nesting. SQLite's json_valid rejects more than 999 levels;
+/// real evidence is flat, so this keeps a wide margin.
+const maxAttributionEvidenceDepth = 32;
+
+/// Copy JSON-compatible [value] with sorted keys, rejecting anything that is
+/// not finite JSON or nests too deeply (which also stops cycles).
+Object? _canonicalValue(Object? value, int depth) {
+  if (depth > maxAttributionEvidenceDepth) {
     throw ArgumentError.value(
       'evidence',
       'evidence',
-      'Evidence must be finite JSON values',
+      'Evidence nests deeper than $maxAttributionEvidenceDepth levels',
     );
   }
+  return switch (value) {
+    null || bool() || String() => value,
+    int() => value,
+    double() when value.isFinite => value,
+    List() => [for (final item in value) _canonicalValue(item, depth + 1)],
+    Map() => _canonicalMap(value, depth),
+    _ => throw ArgumentError.value(
+      'evidence',
+      'evidence',
+      'Evidence must be finite JSON values',
+    ),
+  };
+}
+
+Map<String, Object?> _canonicalMap(Map<Object?, Object?> value, int depth) {
+  if (value.keys.any((key) => key is! String)) {
+    throw ArgumentError.value(
+      'evidence',
+      'evidence',
+      'Evidence keys must be strings',
+    );
+  }
+  final keys = value.keys.cast<String>().toList()..sort();
+  return <String, Object?>{
+    for (final key in keys) key: _canonicalValue(value[key], depth + 1),
+  };
+}
+
+/// Validate and canonicalize evidence once, at construction, so later changes
+/// to the caller's map or its nested values cannot alter what is stored, and
+/// equal evidence always has equal text.
+String _canonicalEvidence(Map<String, Object?> evidence) {
+  final encoded = jsonEncode(_canonicalValue(evidence, 0));
   if (utf8.encode(encoded).length > maxAttributionEvidenceBytes) {
     throw ArgumentError.value(
       'evidence',
@@ -213,7 +257,10 @@ final class MeetingParticipant {
       return MeetingParticipant(
         scope: scope,
         identityKey: identityKey,
-        displayName: _truncateRunes(displayName, maxParticipantNameLength),
+        displayName: _truncateRunes(
+          _withoutNul(displayName),
+          maxParticipantNameLength,
+        ),
         isSelf: isSelf,
         firstSeenMs: firstSeenMs,
         lastSeenMs: lastSeenMs,
@@ -343,7 +390,10 @@ final class TranscriptAttribution {
     try {
       return TranscriptAttribution(
         participantId: participantId,
-        displayName: _truncateRunes(displayName, maxParticipantNameLength),
+        displayName: _truncateRunes(
+          _withoutNul(displayName),
+          maxParticipantNameLength,
+        ),
         state: state,
         method: method,
         parserVersion: parserVersion,
@@ -427,10 +477,9 @@ final class TranscriptAttribution {
   /// Populated only on values read back from storage.
   final int? transcriptId, revision, updatedMs;
 
-  /// Deeply immutable view of [evidenceJson].
-  late final Map<String, Object?> evidence = Map<String, Object?>.from(
-    _freeze(jsonDecode(evidenceJson)) as Map,
-  );
+  /// Deeply immutable view of [evidenceJson], including its top level.
+  late final Map<String, Object?> evidence =
+      _freeze(jsonDecode(evidenceJson)) as Map<String, Object?>;
 
   /// One-line label used in indexed text; empty means "use the channel label".
   String get renderedName => state == AttributionState.attributed
@@ -494,4 +543,20 @@ final class TranscriptWrite {
   /// participant, [sqliteConstraintTrigger] for another meeting's). It is a
   /// number on purpose; an exception would carry participant names.
   final int? attributionErrorCode;
+}
+
+/// A failure while writing an attribution beside its transcript row. It
+/// carries only SQLite's result codes: the underlying exception prints the
+/// bound parameters, which include participant names.
+final class AttributionWriteFailure implements Exception {
+  const AttributionWriteFailure(this.resultCode, this.extendedResultCode);
+
+  /// Primary result code (19 is a constraint violation, which no retry can
+  /// fix; busy, I/O and full-disk codes are transient).
+  final int resultCode, extendedResultCode;
+  bool get isConstraint => resultCode == 19;
+
+  @override
+  String toString() =>
+      'Attribution write failed (SQLite code $extendedResultCode)';
 }
