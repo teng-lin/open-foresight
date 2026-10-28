@@ -113,6 +113,9 @@ Build snapshots from roles, descriptions, values, identifiers, and children.
 Keep platform snapshot collection separate from pure parsing so fixtures can
 exercise the parser without requiring operating-system permission.
 
+Implementation notes and the unexecuted live-validation checklist are in
+[macOS observer helper](zoom-observer-macos.md).
+
 ### Participant and active-speaker parsing
 
 Implement these independent evidence paths:
