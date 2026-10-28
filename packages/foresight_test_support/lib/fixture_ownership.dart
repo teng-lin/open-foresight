@@ -18,11 +18,18 @@ final class PhaseTrace {
   final int limit;
   final _clock = Stopwatch()..start();
   final _entries = <(String, Duration)>[];
+  var _dropped = 0;
 
   void enter(String phase) {
     _entries.add((phase, _clock.elapsed));
-    if (_entries.length > limit) _entries.removeAt(0);
+    if (_entries.length > limit) {
+      _entries.removeAt(0);
+      _dropped++;
+    }
   }
+
+  /// How many older phases were dropped to stay within [limit].
+  int get dropped => _dropped;
 
   /// The most recently observed phase, or null before the first.
   String? get last => _entries.isEmpty ? null : _entries.last.$1;
@@ -35,7 +42,10 @@ final class PhaseTrace {
         ? 'last observed phase: none'
         : 'last observed phase: ${latest.$1} '
               '(+${latest.$2.inMilliseconds}ms of ${_clock.elapsed.inMilliseconds}ms)';
-    final path = _entries.isEmpty ? '' : '; path: ${phases.join(' > ')}';
+    final earlier = _dropped == 0 ? '' : '(+$_dropped earlier) > ';
+    final path = _entries.isEmpty
+        ? ''
+        : '; path: $earlier${phases.join(' > ')}';
     final inferred = pending == null
         ? ''
         : '; inferred pending (not observed): $pending';

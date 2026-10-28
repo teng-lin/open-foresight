@@ -116,6 +116,9 @@ void main() {
         trace.enter(phase);
       }
       expect(trace.phases, ['c', 'd', 'e']);
+      expect(trace.dropped, 2);
+      expect(trace.describe(), contains('path: (+2 earlier) > c > d > e'));
+      expect(PhaseTrace().describe(), isNot(contains('earlier')));
     });
   });
 
