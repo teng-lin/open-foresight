@@ -231,12 +231,14 @@ void main() {
       await _turn();
       expect(model.noteLoaded(1), true);
       expect(model.speech, same(registration));
+      expect(model.presentedSpeech, same(registration));
       reader.reply(note, data, freshness: ReadFreshness.preview);
       reader.reply(speech, registration, freshness: ReadFreshness.preview);
       await _turn();
       expect(model.note(1), same(data));
       expect(model.noteLoaded(1), false);
       expect(model.speech, isNull);
+      expect(model.presentedSpeech, same(registration));
       reader.reply(
         note,
         null,
@@ -251,6 +253,7 @@ void main() {
       await _turn();
       expect(model.note(1), isNull);
       expect(model.speech, isNull);
+      expect(model.presentedSpeech, isNull);
       reader.reply(note, data);
       await _turn();
       expect(model.note(1), isNull);

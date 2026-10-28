@@ -41,7 +41,7 @@ extension _MeetingComposition on MeetingsController {
         },
       ),
       audio: meetingAudioPanel(id),
-      speechProblem: preparedSpeechSetupProblem(_reads.speech),
+      speechProblem: preparedSpeechSetupProblem(_reads.presentedSpeech),
       onSetupSpeech: () => _settings.showModelSetup('speech'),
       sidecarVisible: meetingSidecarVisible,
       assistantFallback: meetingAssistantFallback,
