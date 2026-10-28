@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "source": "nightly run 40510685655 at f7c06383, tracked by #190; job-to-test assignments are from the triage of that run, not re-read from raw logs",
+  "entries": [
+    {
+      "id": "L1",
+      "kind": "failure",
+      "first_job": "`macos-checks (core)`, with coverage",
+      "class": "UNKNOWN",
+      "error": "`storage_worker_session_test` \"busy native close cannot overtake a held late summary acknowledgement\": `eventually` hit its 3 s deadline (~line 351) on `owner != null && owner.sink.records.isNotEmpty`. Passed on Linux. #194 since rewrote the test (waits for the native adapter first, prints setup state on failure, adds a delayed-setup variant). #200 found for a sibling, `native_queue_adapter_test`, that an idle cold native writer need not have drain credits until a bootstrap enqueue is admitted; whether that applies here is untested",
+      "owner": null,
+      "owner_status": "unassigned",
+      "next_experiment": "200 runs of the file on macOS with and without coverage; read the owner-state line (and #194's `native_summary_setup_failure` line)",
+      "exit_criterion": "The loop either names the phase (owner never created vs created with empty records vs later wait) or shows zero failures in 200 runs per mode. Controls: \"summary wait evidence separates a missing owner from empty records\"",
+      "status": "open",
+      "status_note": "evidence added, cause unconfirmed",
+      "reruns": []
+    },
+    {
+      "id": "L2",
+      "kind": "failure",
+      "first_job": "`linux-native / core-linux`",
+      "class": "UNKNOWN",
+      "error": "`storage_worker_protocol_test` \"filesystem fixture writes only validated schema2 and closes before retirement\": `classify` returned `retry`, expected `ok` (the test now runs as `contended=false/true` variants since #194)",
+      "owner": null,
+      "owner_status": "unassigned",
+      "next_experiment": "Run the concurrent loop (four simultaneous copies of the protocol, session and transport suites) on the Linux host against the #194 fixtures; collect the `admission.lock post-failure probe` lines from any exhaustion failure",
+      "exit_criterion": "The lock holder is named, then a deterministic control reproduces it. Before #194, reproduced locally on macOS only as the symptom: the unmodified base `1d208f31` failed \"duplicate manifest fields stay occupied…\" once in 60 (`admit` returned null), and with evidence in place later concurrent loops (about 240 runs) showed `admit` returning null with the probe `held` four times, `classify` returning `retry` once (probe `free`) and the post-retirement slot lease unavailable once. On Linux, with an extra 5.5 s control spawning a worker in a parallel isolate of the same VM process, the target test's post-retirement slot-lease assertion failed in 2 of 10 serial runs (second checked attempt observed `held`), against 0 in 50 runs without that control. Hypothesis, not finding: a fork in another suite keeps a closed description alive until exec. Production gap: a non-contention errno is also reported as `retry` (see the known-gap note)",
+      "status": "mitigated",
+      "status_note": "#194 bounds the fixture on independently checked contention; holder still unidentified, concurrent loops against the #194 fixtures not yet run",
+      "reruns": []
+    },
+    {
+      "id": "L3",
+      "kind": "failure",
+      "first_job": "`linux-test`",
+      "class": "UNKNOWN",
+      "error": "`model_transport_cancellation_ownership_test` \"broken config pipe preserves retry admission after confirmed exit\": `TimeoutException` after 5 s where `RpcError` was expected (~line 458)",
+      "owner": null,
+      "owner_status": "unassigned",
+      "next_experiment": "Run the test file on the Linux host 200 times with and without a CPU load; read the phase line on any failure",
+      "exit_criterion": "Main already separated a 5 s setup wait from a 5 s retirement wait (from #189); the shared bound was the `f7c06383` version. This branch adds a cold start with its own 15 s setup budget (\"a cold worker launch is setup with its own budget…\"), a retirement that never settles still failing at its bound with its phase (\"a retirement that never settles…\", shortened to 100 ms in the control only) and \"closed-stdin worker settles cleanup while paused\". The 5 s failure of the same cold start (default setup bound, phase `launched`) was observed manually and is not encoded in a test: a fork-heavy 5 s control added spawn pressure to the shared VM process and made the admission-lease flake appear on Linux (see L2). The original shared-bound failure is not reproduced. Hypothesis only: cold launch and retirement shared the budget",
+      "status": "open",
+      "status_note": "fixture hardened, original cause unconfirmed",
+      "reruns": []
+    },
+    {
+      "id": "L4",
+      "kind": "failure",
+      "first_job": "`acceptance-deb`",
+      "class": "dependency",
+      "class_note": "transient, per triage",
+      "class_evidence": [
+        "triage of nightly run 40510685655 (#190); the raw log was not re-read for this classification"
+      ],
+      "error": "apt: `File has unexpected size (219540 != 3013728). Mirror sync in progress?`",
+      "owner": null,
+      "owner_status": "unassigned",
+      "next_experiment": "Reproduce the message with a fixture mirror serving a short package; read how the acceptance entrypoint classifies it",
+      "exit_criterion": "A simulated size mismatch is reported as dependency setup failure and retains its output, and a genuine `.deb` install failure is still a product failure. No control exists yet",
+      "status": "open",
+      "status_note": "",
+      "reruns": []
+    },
+    {
+      "id": "L5",
+      "kind": "consequence",
+      "first_job": "`acceptance-checks`, `macos`, `platform-checks`, `nightly-checks`",
+      "error": "Aggregates of L1 to L4",
+      "owner": null,
+      "owner_status": "not-applicable",
+      "causes": [
+        "L1",
+        "L2",
+        "L3",
+        "L4"
+      ],
+      "next_experiment": "none",
+      "exit_criterion": "Go green when L1 to L4 are closed; a green aggregate alone closes nothing",
+      "status": "consequence-only",
+      "status_note": ""
+    }
+  ]
+}
