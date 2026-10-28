@@ -451,7 +451,7 @@ def test_a_closed_claim_must_agree_with_the_boundary_evidence_kind(export, edita
                     entry["kind"] = "fixture"
 
     editable("tools/boundary_inventory.json", relabel)
-    failing(export, "is not listed as production-both-sides evidence by any boundary")
+    failing(export, "is not listed as production-both-sides evidence by boundary")
 
     def gap_remains(data):
         close(data)
@@ -533,6 +533,12 @@ def test_a_closed_cells_note_cannot_hide_a_gap(export, editable):
         "There is no test for a kill before the commit.",
         "A crash during startup is uncovered.",
         "Not yet exercised with a recording active.",
+        "No coverage for a crash during startup",
+        "There is NO COVERAGE of the recording case.",
+        "Lacks coverage of a kill before the commit.",
+        "Lacking any coverage for startup.",
+        "Without coverage for the helper being active.",
+        "Currently without any coverage of reconnect.",
     ):
         def hide(data, phrase=phrase):
             target = cell(data, "Desktop to service", "Crash")
@@ -555,6 +561,11 @@ def test_gap_language_accepts_ordinary_prose_that_merely_contains_similar_words(
         "Verified by the SIGKILL contract test.",
         "The test covers the kill; a covered case is listed in evidence.",
         "Nothing was untouched.",
+        "Coverage is listed in the evidence.",
+        "The coverage gate passes with the contract test.",
+        "Covered by the SIGKILL contract test; a request not yet dispatched is resent once.",
+        "Nobody lacked a covered case.",
+        "This note has coverage of the kill and no gap.",
     ):
         assert inventory.GAP_LANGUAGE.search(fine) is None, fine
 
@@ -598,7 +609,7 @@ def test_a_closed_claim_needs_the_exact_test_name_not_just_a_names_less_entry(ex
                     entry.pop("names", None)
 
     editable("tools/boundary_inventory.json", drop_names)
-    failing(export, "is not listed as production-both-sides evidence by any boundary")
+    failing(export, "is not listed as production-both-sides evidence by boundary")
 
     def wrong_name(data):
         close(data)
@@ -608,4 +619,60 @@ def test_a_closed_claim_needs_the_exact_test_name_not_just_a_names_less_entry(ex
                     entry["names"] = ["control: a request issued after the loss was seen was never sent, so the reconnect sends it once and it succeeds (not every loss is outcomeUnknown)"]
 
     editable("tools/boundary_inventory.json", wrong_name)
-    failing(export, "is not listed as production-both-sides evidence by any boundary")
+    failing(export, "is not listed as production-both-sides evidence by boundary")
+
+
+def test_every_lifecycle_cell_names_the_boundary_it_belongs_to(export, editable):
+    assert {(item["boundary"], item["boundary_id"]) for item in inventory.load(ROOT)["lifecycle_reconciliation"]} == {
+        ("Desktop to service", "desktop-service"),
+        ("MCP/CLI to service", "mcp-service"),
+        ("Frontend isolate to worker isolate", "frontend-worker-isolate"),
+        ("Service to helper", "service-helper"),
+        ("Lock and record handoff", "launcher-service-handoff"),
+    }
+
+    def unknown(data):
+        cell(data, "Desktop to service", "Crash")["boundary_id"] = "not-a-boundary"
+
+    editable("tools/boundary_inventory.json", unknown)
+    failing(export, "boundary_id 'not-a-boundary' is not an inventory boundary")
+
+    def missing(data):
+        cell(data, "Desktop to service", "Crash").pop("boundary_id")
+
+    editable("tools/boundary_inventory.json", missing)
+    failing(export, "boundary_id None is not an inventory boundary")
+
+    def closed_and_unknown(data):
+        target = cell(data, "Desktop to service", "Crash")
+        target.update(status="closed-production", missing=None, boundary_id="not-a-boundary")
+
+    editable("tools/boundary_inventory.json", closed_and_unknown)
+    failing(export, "boundary_id 'not-a-boundary' is not an inventory boundary")  # reported, not an exception from the lookup
+
+
+def test_a_closed_cell_cannot_lean_on_a_test_that_only_an_unrelated_boundary_lists(export, editable):
+    def close(data):
+        cell(data, "Desktop to service", "Crash").update(status="closed-production", missing=None)
+
+    editable("tools/boundary_inventory.json", close)
+    assert inventory.verify(export)["lifecycle_cells"] == len(inventory.load(export)["lifecycle_reconciliation"])  # its own boundary lists the tests
+
+    def move_evidence(data):
+        close(data)
+        by_id = {boundary["id"]: boundary for boundary in data["boundaries"]}
+        moved = [entry for entry in by_id["desktop-service"]["evidence"] if entry["path"].endswith("service_crash_contract_test.dart")]
+        assert moved
+        for entry in moved:
+            by_id["desktop-service"]["evidence"].remove(entry)
+            by_id["service-helper"]["evidence"].append(entry)  # still registered, still production both sides, but under another boundary
+
+    editable("tools/boundary_inventory.json", move_evidence)
+    failing(export, "is not listed as production-both-sides evidence by boundary desktop-service")
+
+    def repoint(data):
+        close(data)
+        cell(data, "Desktop to service", "Crash")["boundary_id"] = "service-helper"
+
+    editable("tools/boundary_inventory.json", repoint)
+    failing(export, "is not listed as production-both-sides evidence by boundary service-helper")

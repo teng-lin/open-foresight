@@ -2179,6 +2179,7 @@
   "lifecycle_reconciliation": [
     {
       "boundary": "Desktop to service",
+      "boundary_id": "desktop-service",
       "transition": "Crash",
       "baseline": "F",
       "status": "partial",
@@ -2203,6 +2204,7 @@
     },
     {
       "boundary": "Desktop to service",
+      "boundary_id": "desktop-service",
       "transition": "EOF before reply",
       "baseline": "F",
       "status": "partial",
@@ -2222,6 +2224,7 @@
     },
     {
       "boundary": "Desktop to service",
+      "boundary_id": "desktop-service",
       "transition": "Slow reply (non-attach)",
       "baseline": "G",
       "status": "fixture-only",
@@ -2236,6 +2239,7 @@
     },
     {
       "boundary": "Desktop to service",
+      "boundary_id": "desktop-service",
       "transition": "Duplicate launch",
       "baseline": "G",
       "status": "partial",
@@ -2260,6 +2264,7 @@
     },
     {
       "boundary": "Desktop to service",
+      "boundary_id": "desktop-service",
       "transition": "Reconnect",
       "baseline": "P,G",
       "status": "partial",
@@ -2289,6 +2294,7 @@
     },
     {
       "boundary": "MCP/CLI to service",
+      "boundary_id": "mcp-service",
       "transition": "Slow reply",
       "baseline": "F,G",
       "status": "fixture-only",
@@ -2308,6 +2314,7 @@
     },
     {
       "boundary": "Frontend isolate to worker isolate",
+      "boundary_id": "frontend-worker-isolate",
       "transition": "Slow reply",
       "baseline": "G",
       "status": "open",
@@ -2316,6 +2323,7 @@
     },
     {
       "boundary": "Service to helper",
+      "boundary_id": "service-helper",
       "transition": "Closing",
       "baseline": "F",
       "status": "partial",
@@ -2341,6 +2349,7 @@
     },
     {
       "boundary": "Service to helper",
+      "boundary_id": "service-helper",
       "transition": "Reconnect",
       "baseline": "F",
       "status": "partial",
@@ -2360,6 +2369,7 @@
     },
     {
       "boundary": "Service to helper",
+      "boundary_id": "service-helper",
       "transition": "EOF before reply",
       "baseline": "F",
       "status": "fixture-only",
@@ -2374,6 +2384,7 @@
     },
     {
       "boundary": "Service to helper",
+      "boundary_id": "service-helper",
       "transition": "Slow reply",
       "baseline": "F",
       "status": "fixture-only",
@@ -2388,6 +2399,7 @@
     },
     {
       "boundary": "Service to helper",
+      "boundary_id": "service-helper",
       "transition": "Malformed or partial frame",
       "baseline": "G",
       "status": "fixture-only",
@@ -2413,6 +2425,7 @@
     },
     {
       "boundary": "Service to helper",
+      "boundary_id": "service-helper",
       "transition": "Duplicate launch",
       "baseline": "G",
       "status": "partial",
@@ -2432,6 +2445,7 @@
     },
     {
       "boundary": "Lock and record handoff",
+      "boundary_id": "launcher-service-handoff",
       "transition": "Duplicate launch",
       "baseline": "P,G",
       "status": "partial",

@@ -193,7 +193,11 @@ content is `git show f7c06383:docs/architecture/service-lifecycle-tests.md`. The
 inventory's `lifecycle_reconciliation` re-checks each baseline gap against
 currently registered tests, with evidence and what remains missing. A cell is
 `closed-production` only with a read test whose recorded sides say production on
-both and the cell lists no missing coverage; the guard enforces both. Of the 14
+both and the cell lists no missing coverage; the guard enforces both. Each cell
+names its `boundary_id`, and the test must be listed as production-both-sides
+evidence by that boundary, not by an unrelated one; a closed cell's note may not
+name a gap ("not covered", "no coverage", "lacks coverage", "without coverage"
+and similar). Of the 14
 baseline gaps **none is closed**. Two (desktop crash, and desktop EOF before reply)
 are now substantially proven by contract tests that kill a real service under a
 real `RemoteDomain`, but they stay partial because the remaining gaps are

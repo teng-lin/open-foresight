@@ -48,7 +48,8 @@ REQUIRED_RULE_KINDS = (
 GAP_LANGUAGE = re.compile(
     r"\bnot (?:covered|exercised|tested|proven)\b|\bnever (?:exercised|covered|tested)\b"
     r"|\buntested\b|\bunproven\b|\buncovered\b|\bno tests?\b|\b(?:does|do) not cover\b"
-    r"|\bnot yet (?:covered|tested|proven|exercised)\b",
+    r"|\bnot yet (?:covered|tested|proven|exercised)\b"
+    r"|\bno coverage\b|\b(?:lack|lacks|lacking) (?:any )?coverage\b|\bwithout (?:any )?coverage\b",
     re.I,
 )
 _PRUNE = {".git", ".venv", "build", "dist", "coverage", "test-results", ".dart_tool", "node_modules"}
@@ -510,6 +511,9 @@ def verify(root: Path = ROOT) -> dict[str, Any]:
 
     for cell in inventory.get("lifecycle_reconciliation", ()):
         label = f"lifecycle {cell.get('boundary')} / {cell.get('transition')}"
+        owner = next((boundary for boundary in boundaries if boundary.get("id") == cell.get("boundary_id")), None)
+        if owner is None:
+            fail(f"{label}: boundary_id {cell.get('boundary_id')!r} is not an inventory boundary")
         status = cell.get("status")
         evidence = cell.get("evidence", [])
         if status not in LIFECYCLE_STATUSES:
@@ -528,15 +532,15 @@ def verify(root: Path = ROOT) -> dict[str, Any]:
             if not backed:
                 fail(f"{label}: a closed cell needs evidence whose sides say production both")
             for entry in backed:
-                # The cell's claim must agree with the boundary entry that lists the same test.
-                if not any(
+                # The cell's claim must agree with the evidence of the cell's own boundary: a registered test
+                # that only an unrelated boundary lists proves nothing about this one.
+                if owner is not None and not any(
                     item["kind"] == "production-both-sides"
                     and item["path"] == entry.get("path")
                     and entry.get("test") in item.get("names", ())
-                    for boundary in boundaries
-                    for item in boundary.get("evidence", ())
+                    for item in owner.get("evidence", ())
                 ):
-                    fail(f"{label}: {entry.get('test')!r} is not listed as production-both-sides evidence by any boundary")
+                    fail(f"{label}: {entry.get('test')!r} is not listed as production-both-sides evidence by boundary {owner['id']}")
         elif not str(cell.get("missing") or "").strip():
             fail(f"{label}: {status} must say what is missing")
         for entry in evidence:
