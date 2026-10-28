@@ -1049,18 +1049,37 @@ def test_the_process_group_is_killed_when_the_run_is_interrupted(tmp_path):
 
     marker = tmp_path / "pid"
     script = f"import os,time;open({str(marker)!r},'w').write(str(os.getpid()));time.sleep(60)"
+    # nohup, a background job or a CI wrapper can leave SIGINT ignored, which makes
+    # interrupt_main a no-op; install the default handler for the test's duration.
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
     timer = threading.Timer(1.5, _thread.interrupt_main)
     timer.start()
     try:
         with pytest.raises(KeyboardInterrupt):
-            vc.run_streaming([sys.executable, "-c", script], cwd=tmp_path, env=os.environ, log_path=tmp_path / "log", timeout=60, stream=io.StringIO())
+            # Bounded: a lost interrupt fails in a few seconds, not after the entrypoint's sleep.
+            vc.run_streaming([sys.executable, "-c", script], cwd=tmp_path, env=os.environ, log_path=tmp_path / "log", timeout=8, stream=io.StringIO())
     finally:
         timer.cancel()
+        signal.signal(signal.SIGINT, previous)
     pid = int(marker.read_text())
     deadline = time.monotonic() + 10
     while alive(pid) and time.monotonic() < deadline:
         time.sleep(0.1)
     assert not alive(pid)
+
+
+def test_the_interrupt_test_passes_when_sigint_is_inherited_as_ignored(tmp_path):
+    node = "tests/test_validate_change.py::test_the_process_group_is_killed_when_the_run_is_interrupted"
+    program = (
+        "import signal, sys\n"
+        "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+        "assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN\n"
+        "import pytest\n"
+        f"sys.exit(pytest.main([{node!r}, '-q', '-p', 'no:cacheprovider', '--basetemp', {str(tmp_path / 'inner')!r}]))\n"
+    )
+    completed = subprocess.run([sys.executable, "-c", program], cwd=ROOT, capture_output=True, text=True, timeout=120, check=False)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "1 passed" in completed.stdout
 
 
 def test_start_and_log_failures_are_failed_outcomes_not_exceptions(tmp_path):
