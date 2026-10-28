@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import errno
+import http.client
 import io
 import json
 from pathlib import Path
 import subprocess
+import socket
 import tarfile
+import urllib.error
 
 import pytest
 
@@ -99,6 +103,140 @@ def test_download_requires_verified_https(tmp_path, monkeypatch):
             tmp_path, "bad", "https://fixture.invalid", "0" * 64, True
         )
     assert not (tmp_path / "bad.tar.gz").exists()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ConnectionResetError(errno.ECONNRESET, "reset"),
+        urllib.error.URLError(ConnectionResetError(errno.ECONNRESET, "reset")),
+        TimeoutError("socket timed out"),
+        socket.gaierror(socket.EAI_AGAIN, "temporary resolver failure"),
+        urllib.error.HTTPError("https://fixture.invalid", 503, "busy", {}, None),
+        http.client.IncompleteRead(b"partial", 20),
+    ],
+)
+def test_transient_download_restarts_with_original_checksum(
+    tmp_path, monkeypatch, failure
+):
+    calls = []
+    waits = []
+    data = b"complete pinned source"
+
+    def open_source(url, *, timeout):
+        calls.append((url, timeout))
+        if len(calls) == 1:
+            raise failure
+        return Download(data)
+
+    monkeypatch.setattr(media.urllib.request, "urlopen", open_source)
+    monkeypatch.setattr(media.time, "sleep", waits.append)
+    result = media.checked_archive(
+        tmp_path,
+        "fixture",
+        "https://fixture.invalid",
+        hashlib.sha256(data).hexdigest(),
+        True,
+    )
+    assert result.read_bytes() == data
+    assert len(calls) == 2 and waits == [1]
+    assert 0 < calls[1][1] <= calls[0][1] <= 120
+    assert len(list(tmp_path.glob("download-*"))) == 1
+
+
+def test_interrupted_body_is_retained_and_never_appended_to_retry(
+    tmp_path, monkeypatch
+):
+    class Interrupted(Download):
+        def read(self, size=-1):
+            if self.tell():
+                raise ConnectionResetError(errno.ECONNRESET, "reset during body")
+            return super().read(size)
+
+    replies = iter([Interrupted(b"interrupted prefix"), Download(b"complete")])
+    monkeypatch.setattr(media.urllib.request, "urlopen", lambda *a, **k: next(replies))
+    monkeypatch.setattr(media.time, "sleep", lambda _: None)
+    result = media.checked_archive(
+        tmp_path,
+        "fixture",
+        "https://fixture.invalid",
+        hashlib.sha256(b"complete").hexdigest(),
+        True,
+    )
+    assert result.read_bytes() == b"complete"
+    partials = list(tmp_path.glob("download-*"))
+    assert len(partials) == 1 and partials[0].read_bytes() == b"interrupted prefix"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        urllib.error.HTTPError("https://fixture.invalid", 404, "missing", {}, None),
+        urllib.error.URLError("certificate verification failed"),
+        urllib.error.URLError(PermissionError(errno.EACCES, "denied")),
+        socket.gaierror(socket.EAI_NONAME, "unknown host"),
+    ],
+)
+def test_permanent_download_failure_is_not_retried(tmp_path, monkeypatch, failure):
+    calls = []
+
+    def open_source(*args, **kwargs):
+        calls.append(args)
+        raise failure
+
+    monkeypatch.setattr(media.urllib.request, "urlopen", open_source)
+    monkeypatch.setattr(media.time, "sleep", lambda _: pytest.fail("unexpected retry"))
+    with pytest.raises(type(failure)):
+        media.checked_archive(
+            tmp_path, "fixture", "https://fixture.invalid", "0" * 64, True
+        )
+    assert len(calls) == 1
+    assert not (tmp_path / "fixture.tar.gz").exists()
+
+
+def test_download_retries_share_original_budget_and_stop_after_three(
+    tmp_path, monkeypatch
+):
+    now = [0]
+    timeouts = []
+
+    def open_source(*args, timeout):
+        timeouts.append(timeout)
+        raise ConnectionResetError(errno.ECONNRESET, "reset")
+
+    monkeypatch.setattr(media.urllib.request, "urlopen", open_source)
+    monkeypatch.setattr(media.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        media.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
+    )
+    with pytest.raises(ConnectionResetError):
+        media.checked_archive(
+            tmp_path, "fixture", "https://fixture.invalid", "0" * 64, True
+        )
+    assert timeouts == [120, 119, 117]
+    assert len(list(tmp_path.glob("download-*"))) == 3
+    assert not (tmp_path / "fixture.tar.gz").exists()
+
+
+def test_exhausted_download_budget_preserves_last_transport_error(
+    tmp_path, monkeypatch
+):
+    now = [0]
+    calls = []
+
+    def open_source(*args, **kwargs):
+        calls.append(args)
+        now[0] = 120
+        raise ConnectionResetError(errno.ECONNRESET, "last transport failure")
+
+    monkeypatch.setattr(media.urllib.request, "urlopen", open_source)
+    monkeypatch.setattr(media.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(media.time, "sleep", lambda _: pytest.fail("exhausted budget"))
+    with pytest.raises(ConnectionResetError, match="last transport failure"):
+        media.checked_archive(
+            tmp_path, "fixture", "https://fixture.invalid", "0" * 64, True
+        )
+    assert len(calls) == 1
 
 
 def test_build_receipt_materials_and_failure_logs(tmp_path, monkeypatch):

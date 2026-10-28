@@ -220,7 +220,9 @@ choose a new output path when retrying. To inspect a saved submission, run
 `xcrun notarytool info <submission-id> --keychain-profile open-foresight-release`.
 
 The default DMG path remains available for ad-hoc development and previews by
-omitting both signing options. Hosted releases still use that path until their
+omitting both signing options. The app and disk image are both ad-hoc signed;
+this does not establish a Developer ID identity or remove Gatekeeper warnings.
+Hosted releases still use that path until their
 signing credentials and workflow changes receive owner review. Local signing
 does not establish release acceptance: test the final downloaded, quarantined
 DMG on a separate Mac and complete the release gates below before publishing.

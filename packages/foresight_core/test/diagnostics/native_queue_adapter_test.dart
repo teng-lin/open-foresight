@@ -321,6 +321,25 @@ void main() {
         );
         addTearDown(session.close);
         final runtime = await runtimeImage();
+        // Configuration is synchronous, but an idle cold writer need not have
+        // native drain credits yet. Exercise real bootstrap admission before
+        // requiring healthy drain status; do not overwrite the configured level
+        // with emitter()'s explicit fixture configure call.
+        expect(
+          runtime.lib.lookupFunction<Int32 Function(), int Function()>(
+            'fs_test_level',
+          )(),
+          3,
+        );
+        final enqueue = runtime.lib
+            .lookupFunction<Int32 Function(Int32), int Function(int)>(
+              'fs_test_enqueue',
+            );
+        expect(enqueue(1), 1);
+        await eventually(
+          () =>
+              capture.records.any((r) => r['event'] == 'native.worker_failed'),
+        );
         try {
           await eventually(
             () => session.health.nativeReason == NativeDiagnosticHealth.healthy,

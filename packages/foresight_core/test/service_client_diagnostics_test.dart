@@ -145,6 +145,16 @@ void main() {
       )
       .toList();
 
+  void replyAfterFirstRefused(Socket socket, Map<String, dynamic> request) {
+    // These owner/correlation assertions require admitted completion records.
+    // Let the writer return the first batch's credits before completing retry.
+    if (firstRefusedRecorded.isCompleted) {
+      fixture.reply(socket, request, canary);
+    } else {
+      heldRetryReply = () => fixture.reply(socket, request, canary);
+    }
+  }
+
   test(
     'one call ID follows exactly the existing closing retry and wire IDs',
     () async {
@@ -172,11 +182,7 @@ void main() {
           } else {
             // Observe a real first-batch flush before the normal retry reply.
             // Its completion must also survive the following session close.
-            if (firstRefusedRecorded.isCompleted) {
-              fixture.reply(socket, request, canary);
-            } else {
-              heldRetryReply = () => fixture.reply(socket, request, canary);
-            }
+            replyAfterFirstRefused(socket, request);
           }
         };
         try {
@@ -519,21 +525,25 @@ void main() {
               }),
             );
           } else {
-            fixture.reply(socket, request, canary);
+            replyAfterFirstRefused(socket, request);
           }
         };
         expect(serviceDiagnosticsEnabled, false);
-        expect(
-          await (differentOwner
-              ? runWithServiceDiagnostics(
-                  session.producer,
-                  () => connection.stream('notes.list').single,
-                  component: DiagnosticComponent.mcp,
-                )
-              : connection.stream('notes.list').single),
-          canary,
-        );
-        await connection.close();
+        try {
+          expect(
+            await (differentOwner
+                ? runWithServiceDiagnostics(
+                    session.producer,
+                    () => connection.stream('notes.list').single,
+                    component: DiagnosticComponent.mcp,
+                  )
+                : connection.stream('notes.list').single),
+            canary,
+          );
+        } finally {
+          heldRetryReply = null;
+          await connection.close();
+        }
         await flush();
         expect(
           records

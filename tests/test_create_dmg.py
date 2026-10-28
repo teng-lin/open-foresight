@@ -470,6 +470,16 @@ def test_shared_dmg_sidecar_binds_bytes_source_version_architecture_and_build(
             return subprocess.CompletedProcess(arguments, 1, "", BUSY)
         if arguments[:2] == ["hdiutil", "create"]:
             Path(arguments[-1]).write_bytes(b"verified disk image")
+        if arguments[:2] == ["codesign", "--force"]:
+            assert arguments[2:6] == [
+                "--sign",
+                "-",
+                "--identifier",
+                "io.openforesight.App.diskimage",
+            ]
+            Path(arguments[-1]).write_bytes(
+                b"verified disk image with ad-hoc signature"
+            )
         return subprocess.CompletedProcess(arguments, 0, "verified\n", "")
 
     with patch.object(create_dmg.subprocess, "run", side_effect=run):
@@ -480,6 +490,8 @@ def test_shared_dmg_sidecar_binds_bytes_source_version_architecture_and_build(
         [["hdiutil", "detach", "/dev/disk5"]] if leaked_attachment else []
     )
     metadata = json.loads(Path(str(image) + ".build.json").read_text())
+    assert image.read_bytes() == b"verified disk image with ad-hoc signature"
+    assert ["codesign", "--verify", "--strict", str(image)] in commands
     assert metadata == {
         "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
         "format": "dmg",
@@ -489,6 +501,28 @@ def test_shared_dmg_sidecar_binds_bytes_source_version_architecture_and_build(
         "build_number": 42,
     }
     assert json.loads(Path(str(image) + ".manifest.json").read_text()) == identity
+
+
+def test_adhoc_signing_failure_does_not_publish_success_sidecars(
+    signed_dmg, monkeypatch
+):
+    create, _, _, manifest = signed_dmg
+    original = create_dmg.subprocess.run
+
+    def fail_signing(arguments, **kwargs):
+        if arguments[:2] == ["codesign", "--force"]:
+            return subprocess.CompletedProcess(
+                arguments, 1, "partial signature", "signing failed"
+            )
+        return original(arguments, **kwargs)
+
+    monkeypatch.setattr(create_dmg.subprocess, "run", fail_signing)
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        create(identity=None, notary_profile=None)
+    assert error.value.output == "partial signature"
+    assert error.value.stderr == "signing failed"
+    assert not list(manifest.parent.glob("dist/*.sha256"))
+    assert not list(manifest.parent.glob("dist/*.build.json"))
 
 
 def test_invalid_dmg_application_identity_is_rejected_before_building(tmp_path):

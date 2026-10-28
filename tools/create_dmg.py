@@ -427,6 +427,21 @@ def create(app, manifest, name, output, *, identity=None, notary_profile=None):
     if identity:
         sign_disk_image(destination, identity, notary_profile, app_team)
         verify_image(destination)
+    else:
+        # Sign the container too; an ad-hoc signed app alone leaves its DMG
+        # unsigned. This establishes no Developer ID identity or notarization.
+        signing_command(
+            [
+                "codesign",
+                "--force",
+                "--sign",
+                "-",
+                "--identifier",
+                "io.openforesight.App.diskimage",
+                destination,
+            ]
+        )
+        signing_command(["codesign", "--verify", "--strict", destination])
     with destination.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     Path(str(destination) + ".sha256").write_text(f"{digest}  {name}\n")
