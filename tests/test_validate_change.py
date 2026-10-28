@@ -684,16 +684,18 @@ def test_boundary_request_records_the_real_source_state_and_honors_include(capsy
 
 def test_boundary_request_without_git_records_that_nothing_was_collected(capsys, monkeypatch):
     def refuse(root, base, include):
-        raise vc.PlanError("git is not available")
+        raise vc.PlanError("git failed: fatal: not a repository: /home/secret-user/checkout")
 
     monkeypatch.setattr(vc, "collect_git", refuse)
     code, captured = cli(["--boundary", "service-helper", "--plan", "--json"], capsys)
     change = json.loads(captured.out)["plan"]["change_set"]
     assert code == 0 and change["mode"] == "boundary-request" and change["dirty"] is None
-    assert change["dirty_unknown"] == "no change set was collected: git is not available" and change["revision"] is None
+    # The note is fixed prose: git's own message and the paths in it are not copied into the packet.
+    assert change["dirty_unknown"] == "no change set was collected: git could not describe the checkout"
+    assert "secret-user" not in json.dumps(change) and change["revision"] is None
     # An explicit --base is never silently dropped.
     assert vc.main(["--skip-inventory-check", "--boundary", "service-helper", "--base", "main", "--plan"], root=ROOT, environ={}) == 2
-    assert "git is not available" in capsys.readouterr().err
+    assert "git failed" in capsys.readouterr().err
 
 
 def test_list_boundaries(capsys):
@@ -1751,15 +1753,25 @@ def test_a_prerequisite_produced_by_an_earlier_stage_is_not_shown_as_satisfied(m
 # ------------------------------------------- batch 3b-1: phases and pins in evidence
 
 
+RAN = {"started": True, "seconds": 1.0, "group_survivors": False}
+
+
 @pytest.mark.parametrize(
     ("entry", "availability", "expected"),
     [
-        ({"status": "passed", "seconds": 1.0, "returncode": 0}, "runnable", ("ok", "passed", "clean")),
-        ({"status": "failed", "seconds": 1.0, "returncode": 3}, "runnable", ("ok", "failed", "clean")),
-        ({"status": "failed", "seconds": 9.0, "timed_out": True, "reason": "timed out"}, "runnable", ("ok", "timed-out", "killed-after-timeout")),
-        ({"status": "failed", "seconds": 1.0, "leaked_descendants": True}, "runnable", ("ok", "failed", "leaked-descendants")),
-        ({"status": "failed", "seconds": 1.0, "reason": "the entrypoint did not exit after SIGKILL"}, "runnable", ("ok", "failed", "unknown")),
-        ({"status": "failed", "seconds": 1.0, "interrupted": True}, "runnable", ("ok", "failed", "clean")),
+        ({"status": "passed", "returncode": 0, **RAN}, "runnable", ("ok", "passed", "clean")),
+        ({"status": "failed", "returncode": 3, **RAN}, "runnable", ("ok", "failed", "clean")),
+        # The body is the entrypoint's own exit: unsupported JUnit evidence fails the check, not the body.
+        ({"status": "failed", "returncode": 0, "reason": "JUnit evidence does not support a pass", **RAN}, "runnable", ("ok", "passed", "clean")),
+        ({"status": "failed", "returncode": 0, "timed_out": True, "reason": "timed out", **RAN}, "runnable", ("ok", "timed-out", "killed-after-timeout")),
+        ({"status": "failed", "returncode": 0, "leaked_descendants": True, **RAN}, "runnable", ("ok", "passed", "leaked-descendants")),
+        ({"status": "passed", "returncode": 0, **{**RAN, "group_survivors": True}}, "runnable", ("ok", "passed", "group-survivors-killed")),
+        ({"status": "passed", "returncode": 0, **{**RAN, "group_survivors": None}}, "runnable", ("ok", "passed", "unknown")),
+        ({"status": "failed", "returncode": None, "reason": "the entrypoint did not exit after SIGKILL", **RAN}, "runnable", ("ok", "failed", "unknown")),
+        # Never started: no phase after setup ran, and setup did not succeed.
+        ({"status": "failed", "returncode": None, "reason": "cannot start the entrypoint: FileNotFoundError", "started": False}, "runnable", ("failed", "not-run", "not-run")),
+        ({"status": "failed", "interrupted": True, "interrupted_before_start": True, "seconds": 0.1}, "runnable", ("failed", "not-run", "not-run")),
+        ({"status": "failed", "interrupted": True, "interrupted_before_start": False, "seconds": 3.0}, "runnable", ("ok", "interrupted", "unknown")),
         ({"status": "unavailable"}, "unavailable", ("unavailable", "not-run", "not-run")),
         ({"status": "not-run"}, "runnable", ("ok", "not-run", "not-run")),
         ({"status": "ci-only"}, "ci-only", ("not-applicable", "not-run", "not-run")),
@@ -1773,6 +1785,103 @@ def test_phases_record_only_what_the_tool_observed(entry, availability, expected
     phases = vc.check_phases(entry, availability)
     assert (phases["setup"], phases["body"], phases["teardown"]) == expected
     assert all(value in vc.validation_evidence.PHASE_VALUES[name] for name, value in phases.items())
+
+
+def test_teardown_is_never_clean_when_nothing_was_observed():
+    # No fallback to "clean": an entry without any observation of the group is not clean.
+    for entry in ({"status": "failed"}, {"status": "passed"}, {"status": "failed", "seconds": 1.0}, {"status": "failed", "returncode": 1}):
+        assert vc.check_phases(entry, "runnable")["teardown"] == "not-run"
+        assert vc.check_phases(entry, "runnable")["body"] == "not-run"
+    assert vc.check_phases({"status": "passed", "returncode": 0, "started": True}, "runnable")["teardown"] == "unknown"
+
+
+def test_a_missing_entrypoint_or_log_never_records_a_clean_teardown(tmp_path):
+    missing = vc.run_streaming([str(tmp_path / "no-such-binary")], cwd=tmp_path, env={}, log_path=tmp_path / "log", timeout=5, stream=io.StringIO())
+    assert missing["started"] is False and missing["group_survivors"] is None
+    nolog = vc.run_streaming([sys.executable, "-c", "pass"], cwd=tmp_path, env=os.environ, log_path=tmp_path / "absent" / "log", timeout=5, stream=io.StringIO())
+    assert nolog["started"] is False
+    for outcome in (missing, nolog):
+        status, reason = vc._outcome_status(outcome)
+        entry = {"status": status, "reason": reason, **outcome}
+        assert vc.check_phases(entry, "runnable") == {"setup": "failed", "body": "not-run", "teardown": "not-run"}
+
+
+def test_execute_records_setup_failed_for_an_unstartable_or_interrupted_before_start_check(tmp_path, monkeypatch):
+    monkeypatch.setattr(vc.validation_evidence, "SHORT_TEMP_LIMIT", 500)
+    monkeypatch.setattr(vc.shutil, "which", lambda name: f"/usr/bin/{name}")
+    plan = plan_for(["docs/testing.md"])
+    plan["checks"] = [c for c in plan["checks"] if c["id"] == "shared-guards"]
+    first = tmp_path / "a"
+    first.mkdir(mode=0o700)
+
+    def refuse(*a, **k):
+        raise FileNotFoundError("no such interpreter")
+
+    [result], _ = vc.execute(plan, first, {}, include_long=False, runner=refuse)
+    assert result["started"] is False and result["phases"] == {"setup": "failed", "body": "not-run", "teardown": "not-run"}
+
+    second = tmp_path / "b"
+    second.mkdir(mode=0o700)
+    plan["checks"][0]["reuse"] = [{"id": "x", "path": str(tmp_path), "digest_files": [], "decision": "d", "present": True, "sha256": {}, "digest_skipped": {}, "presented_as": "p"}]
+    monkeypatch.setattr(vc, "observe_reuse", lambda record: (_ for _ in ()).throw(KeyboardInterrupt()))
+    [result], _ = vc.execute(plan, second, {}, include_long=False, runner=fake_runner({}))
+    assert result["phases"] == {"setup": "failed", "body": "not-run", "teardown": "not-run"}
+
+    third = tmp_path / "c"
+    third.mkdir(mode=0o700)
+    monkeypatch.undo()
+    monkeypatch.setattr(vc.validation_evidence, "SHORT_TEMP_LIMIT", 500)
+
+    def interrupted(*a, **k):
+        raise KeyboardInterrupt
+
+    plan["checks"][0]["reuse"] = []
+    [result], _ = vc.execute(plan, third, {}, include_long=False, runner=interrupted)
+    assert result["phases"] == {"setup": "ok", "body": "interrupted", "teardown": "unknown"}
+
+
+def test_a_same_group_survivor_is_seen_before_the_final_kill_and_the_teardown_says_so(tmp_path):
+    marker = tmp_path / "pid"
+    script = (
+        "import subprocess, sys;"
+        "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL);"
+        f"open({str(marker)!r}, 'w').write(str(c.pid))"
+    )
+    outcome = vc.run_streaming([sys.executable, "-c", script], cwd=tmp_path, env=os.environ, log_path=tmp_path / "log", timeout=30, stream=io.StringIO())
+    child = int(marker.read_text())
+    deadline = time.monotonic() + 10
+    while alive(child) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert outcome["returncode"] == 0 and outcome["started"] is True and outcome["group_survivors"] is True
+    assert not alive(child)  # the final group kill still ran
+    entry = {"status": "passed", **outcome}
+    assert vc.check_phases(entry, "runnable") == {"setup": "ok", "body": "passed", "teardown": "group-survivors-killed"}
+
+
+def test_a_clean_exit_leaves_no_group_member_and_a_failed_probe_is_unknown(tmp_path, monkeypatch):
+    outcome = vc.run_streaming([sys.executable, "-c", "print(1)"], cwd=tmp_path, env=os.environ, log_path=tmp_path / "log", timeout=30, stream=io.StringIO())
+    assert outcome["group_survivors"] is False
+    assert vc.check_phases({"status": "passed", **outcome}, "runnable")["teardown"] == "clean"
+    monkeypatch.setattr(vc, "_group_members", lambda leader: None)
+    unknown = vc.run_streaming([sys.executable, "-c", "print(1)"], cwd=tmp_path, env=os.environ, log_path=tmp_path / "log2", timeout=30, stream=io.StringIO())
+    assert unknown["group_survivors"] is None
+    assert vc.check_phases({"status": "passed", **unknown}, "runnable")["teardown"] == "unknown"
+
+
+def test_group_members_ignore_the_leader_zombies_and_other_groups(monkeypatch):
+    listing = "  100   100 S\n  101   100 S\n  102   100 Z\n  103   200 S\n  garbage\n  104   100 R+\n"
+
+    class Done:
+        stdout = listing
+
+    monkeypatch.setattr(vc.subprocess, "run", lambda *a, **k: Done())
+    assert vc._group_members(100) == [101, 104]
+
+    def broken(*a, **k):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(vc.subprocess, "run", broken)
+    assert vc._group_members(100) is None
 
 
 def test_a_run_records_phases_for_every_check_and_the_repositorys_tool_pins(private_output, accepting_junit, monkeypatch):

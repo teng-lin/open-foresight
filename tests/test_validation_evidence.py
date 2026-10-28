@@ -132,9 +132,29 @@ def test_observe_tools_records_first_line_absence_and_probe_failure():
     assert observed["ninja"] == "probe failed: TimeoutExpired"
     assert observed["protoc"] == "" and observed["git"] is None
     # A failing probe is a probe failure, never a version.
-    assert observed["dart"] == "probe failed: exit 64: dart: bad flag"
+    assert observed["dart"] == "probe failed: exit 64"
+    assert "bad flag" not in json.dumps(observed)  # a failed probe's output is not kept
     assert observed["python"]
     assert "git" in evidence.observe_tools(("git",))
+
+
+def test_the_version_bearing_line_is_recorded_not_the_banner():
+    shellcheck = "ShellCheck - shell script analysis tool\nversion: 0.9.0\nlicense: GNU General Public License, version 3\n"
+    flutter = "Flutter 3.35.7 • channel stable • https://github.com/flutter/flutter.git\nFramework • revision abc\n"
+
+    def run(argv, **kwargs):
+        text = {"/bin/shellcheck": shellcheck, "/bin/flutter": flutter, "/bin/odd": "no digits here\nnone either\n"}[argv[0]]
+        return type("R", (), {"stdout": text, "stderr": "", "returncode": 0})()
+
+    paths = {"shellcheck": "/bin/shellcheck", "flutter": "/bin/flutter", "actionlint": "/bin/odd"}
+    observed = evidence.observe_tools(("shellcheck", "flutter", "actionlint"), run=run, which=paths.get)
+    assert observed["shellcheck"] == "version: 0.9.0"
+    assert evidence.version_matches("0.9.0", observed["shellcheck"]) is True
+    assert observed["flutter"].startswith("Flutter 3.35.7")
+    assert observed["actionlint"] == "no digits here"  # no version line: the first line, which will not match a pin
+    assert evidence.version_line([]) == ""
+    assert evidence.TOOL_PROBES["flutter"] == ["flutter", "--version", "--suppress-analytics"]
+    assert set(evidence.pinned_tools()) <= set(evidence.TOOL_PROBES)  # every pin can be observed
 
 
 def test_host_identity_names_a_supported_platform_or_the_raw_one():
@@ -321,10 +341,60 @@ def test_gaps_name_every_condition_a_reader_could_not_reproduce():
     result["artifacts"] = [{"check": "x", "path": "/p", "sha256": "0" * 64, "producer": None}]
     codes = {gap["code"] for gap in evidence.derive_gaps(result)}
     assert codes == {
-        "pin-mismatch:protoc", "temp-root-noncompliant", "home-differs-from-nss", "change-set-dirty-unknown",
+        "pin-mismatch:protoc", "pin-unobserved:dart", "pin-unobserved:flutter", "pin-unobserved:actionlint", "pin-unobserved:shellcheck", "temp-root-noncompliant", "home-differs-from-nss", "change-set-dirty-unknown",
         "revision-declared-not-verified", "unexecuted-platform:linux", "check-not-passed:native-stage", "artifact-provenance-not-recorded",
     }
     assert evidence.derive_gaps(result)[0]["detail"]
+
+
+def test_an_unobserved_pin_is_a_gap_only_for_a_run_that_probed_tools():
+    probed = summary_with(tools={"python": "3.13.0", "protoc": "libprotoc 35.1", "dart": "Dart SDK version: 3.9.2", "flutter": "Flutter 3.35.7",
+                                 "actionlint": "1.7.7", "shellcheck": "version: 0.9.0"})
+    assert not [gap for gap in probed["reproduction_gaps"] if gap["code"].startswith("pin-")]
+    missing = summary_with(tools={"protoc": "libprotoc 35.1", "flutter": None})
+    codes = {gap["code"] for gap in missing["reproduction_gaps"]}
+    assert {"pin-unobserved:flutter", "pin-unobserved:dart"} <= codes and "pin-unobserved:protoc" not in codes
+    assert "pin-unobserved:flutter" in {gap["code"] for gap in evidence.derive_gaps(missing)}
+    # A plan probes nothing, so it makes no pin claim either way; its gap is that nothing ran.
+    plan = summary_with(mode="plan-only", tools=None, checks=[check("shared-guards", "planned")])
+    codes = {gap["code"] for gap in plan["reproduction_gaps"]}
+    assert "not-executed" in codes and not [code for code in codes if code.startswith("pin-")]
+
+
+def test_a_dirty_tree_is_a_gap_and_gap_prose_never_carries_a_path():
+    dirty = summary_with(tools={"python": "3"})
+    dirty["source"]["dirty"] = True
+    assert "dirty-at-recording" in {gap["code"] for gap in evidence.derive_gaps(dirty)}
+    leaky = summary_with(
+        checks=[check("native-stage", "failed", reason="cannot open /home/sentinel-user/.cache/log (see '/var/tmp/x/y.log')")],
+    )
+    leaky["source"]["dirty_unknown"] = "git failed: fatal: not a git repository: /Users/sentinel-user/src/app"
+    text = json.dumps(evidence.derive_gaps(leaky))
+    assert "sentinel-user" not in text and "/var/tmp" not in text and "<path>" in text
+    assert evidence.redact("a/b and /abs/path, then x") == "a/b and <path>, then x"
+    assert evidence.redact("CI/CD 1/2 https://example.org/x") == "CI/CD 1/2 https://example.org/x"
+
+
+def test_the_image_is_recorded_from_the_runner_variables_and_os_release():
+    release = 'NAME="Ubuntu"\nID=ubuntu\nVERSION_ID="24.04"\nPRETTY_NAME="Ubuntu 24.04"\n'
+    image = evidence.image_identity({"ImageOS": "ubuntu24", "ImageVersion": "20260101.1", "PATH": "/sentinel/path"}, lambda: release, system="linux")
+    assert image == {"runner_image": {"ImageOS": "ubuntu24", "ImageVersion": "20260101.1"}, "os_id": "ubuntu", "os_version_id": "24.04"}
+    assert evidence.image_identity({}, lambda: None, system="linux") == {"runner_image": {}, "os_id": None, "os_version_id": None}
+    assert evidence.os_release_fields("ID=\"debian\"\n# comment\nVERSION_ID=12\nOTHER=1")  == {"ID": "debian", "VERSION_ID": "12"}
+    mac = evidence.image_identity({}, lambda: release, system="darwin", mac_version=lambda: "15.1")
+    assert (mac["os_id"], mac["os_version_id"]) == ("macos", "15.1")
+    assert evidence.image_identity({}, lambda: release, system="darwin", mac_version=lambda: "")["os_version_id"] is None
+    assert "ImageOS" in evidence.ENV_ALLOWLIST and "ImageVersion" in evidence.ENV_ALLOWLIST
+
+
+def test_the_summary_carries_the_image_and_a_schema_two_summary_requires_it():
+    result = summary_with(environ={"ImageOS": "ubuntu24", "ImageVersion": "7"})
+    assert result["image"]["runner_image"] == {"ImageOS": "ubuntu24", "ImageVersion": "7"}
+    assert set(result["image"]) == {"runner_image", "os_id", "os_version_id"}
+    broken = json.loads(json.dumps(result))
+    broken.pop("image")
+    with pytest.raises(ValueError, match="schema 2 lacks: image"):
+        evidence.validate_summary(broken)
 
 
 def test_reused_outputs_and_digests_are_recorded_without_claiming_a_producer():
@@ -357,7 +427,7 @@ def test_phase_values_are_validated_and_a_forged_phase_is_rejected():
 
 def test_a_schema_two_summary_must_carry_its_new_sections_and_well_formed_gaps():
     good = summary_with()
-    for key in ("tool_pins", "concurrency", "cache", "artifacts", "reproduction_gaps"):
+    for key in ("tool_pins", "concurrency", "cache", "artifacts", "reproduction_gaps", "image"):
         broken = json.loads(json.dumps(good))
         broken.pop(key)
         with pytest.raises(ValueError, match="schema 2 lacks"):
@@ -371,7 +441,7 @@ def test_a_schema_two_summary_must_carry_its_new_sections_and_well_formed_gaps()
 def test_schema_one_summaries_remain_readable():
     legacy = json.loads(json.dumps(summary_with()))
     legacy["schema"] = 1
-    for key in ("tool_pins", "concurrency", "cache", "artifacts", "reproduction_gaps"):
+    for key in ("tool_pins", "concurrency", "cache", "artifacts", "reproduction_gaps", "image"):
         legacy.pop(key)
     evidence.validate_summary(legacy)
 

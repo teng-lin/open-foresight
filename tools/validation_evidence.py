@@ -49,6 +49,8 @@ ENV_ALLOWLIST = (
     "RUNNER_OS",
     "RUNNER_ARCH",
     "RUNNER_ENVIRONMENT",
+    "ImageOS",
+    "ImageVersion",
     "FORESIGHT_BUILD_DIR",
     "FORESIGHT_PLATFORM",
     "FORESIGHT_PYTHON",
@@ -74,6 +76,7 @@ TOOL_PROBES = {
     "ninja": ["ninja", "--version"],
     "protoc": ["protoc", "--version"],
     "dart": ["dart", "--version"],
+    "flutter": ["flutter", "--version", "--suppress-analytics"],
     "actionlint": ["actionlint", "-version"],
     "shellcheck": ["shellcheck", "--version"],
 }
@@ -171,12 +174,24 @@ def host_identity() -> dict[str, str]:
     }
 
 
+def version_line(lines: Sequence[str]) -> str:
+    """The first line that names a version; some tools print a banner first (ShellCheck)."""
+    for line in lines:
+        if re.search(r"\d+\.\d+", line):
+            return line
+    return lines[0] if lines else ""
+
+
 def observe_tools(
     names: Sequence[str] = tuple(TOOL_PROBES),
     run: Callable[..., Any] = subprocess.run,
     which: Callable[[str], str | None] = shutil.which,
 ) -> dict[str, Any]:
-    """First line of each tool's version output, or null when it is absent."""
+    """The version line of each tool's output, or null when it is absent.
+
+    A failed probe records only its exit status: its output is not a version and
+    is not kept.
+    """
     observed: dict[str, Any] = {"python": sys.version.split()[0]}
     for name in names:
         executable = which(TOOL_PROBES[name][0])
@@ -185,14 +200,56 @@ def observe_tools(
             continue
         try:
             result = run([executable, *TOOL_PROBES[name][1:]], capture_output=True, text=True, timeout=30, check=False)
-            lines = (result.stdout + result.stderr).strip().splitlines()
             if result.returncode:
-                observed[name] = f"probe failed: exit {result.returncode}" + (f": {_printable(lines[0])}" if lines else "")
+                observed[name] = f"probe failed: exit {result.returncode}"
             else:
-                observed[name] = _printable(lines[0]) if lines else ""
+                observed[name] = _printable(version_line((result.stdout + result.stderr).strip().splitlines()))
         except (OSError, subprocess.SubprocessError) as error:
             observed[name] = f"probe failed: {type(error).__name__}"
     return observed
+
+
+def os_release_fields(text: str) -> dict[str, str]:
+    """ID and VERSION_ID from os-release text."""
+    fields = {}
+    for line in text.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key in ("ID", "VERSION_ID"):
+            fields[key] = _printable(value.strip().strip("\"'"))
+    return fields
+
+
+def _read_os_release() -> str | None:
+    for candidate in ("/etc/os-release", "/usr/lib/os-release"):
+        try:
+            return Path(candidate).read_text()
+        except OSError:
+            continue
+    return None
+
+
+def image_identity(
+    environ: Mapping[str, str] | None = None,
+    read_os_release: Callable[[], str | None] = _read_os_release,
+    system: str | None = None,
+    mac_version: Callable[[], str] = lambda: platform.mac_ver()[0],
+) -> dict[str, Any]:
+    """The operating-system image the run saw: runner image variables and os-release.
+
+    On macOS the release is the system version; elsewhere os-release ID and
+    VERSION_ID. A field that cannot be observed is null, never guessed.
+    """
+    environ = os.environ if environ is None else environ
+    runner = {name: _printable(environ[name]) for name in ("ImageOS", "ImageVersion") if name in environ}
+    os_id: str | None
+    os_version: str | None
+    if (sys.platform if system is None else system) == "darwin":
+        os_id, os_version = "macos", mac_version() or None
+    else:
+        text = read_os_release()
+        fields = os_release_fields(text) if text else {}
+        os_id, os_version = fields.get("ID"), fields.get("VERSION_ID")
+    return {"runner_image": runner, "os_id": os_id, "os_version_id": os_version}
 
 
 def junit_counts(path: Path, started: float) -> dict[str, Any]:
@@ -283,9 +340,11 @@ def classify(
 # What each phase of one check may record. Anything a check cannot know stays
 # "unknown"; a phase is never inferred from another.
 PHASE_VALUES = {
-    "setup": ("ok", "unavailable", "not-applicable"),
-    "body": ("passed", "failed", "timed-out", "not-run", "not-applicable"),
-    "teardown": ("clean", "leaked-descendants", "killed-after-timeout", "not-run", "not-applicable", "unknown"),
+    "setup": ("ok", "unavailable", "failed", "not-applicable"),
+    "body": ("passed", "failed", "timed-out", "interrupted", "not-run", "not-applicable"),
+    "teardown": (
+        "clean", "leaked-descendants", "group-survivors-killed", "killed-after-timeout", "not-run", "not-applicable", "unknown",
+    ),
 }
 CONCURRENCY_ENV = ("FORESIGHT_BUILD_JOBS", "FORESIGHT_PARALLEL_GATES", "FORESIGHT_PYTEST_WORKERS")
 ROOT = Path(__file__).resolve().parents[1]
@@ -349,22 +408,36 @@ def cache_and_artifacts(checks: Sequence[Mapping[str, Any]]) -> tuple[dict[str, 
     return {"reused_outputs": reused}, artifacts
 
 
+_ABSOLUTE_PATH = re.compile(r"(?<![\w.:/-])/[^\s'\"),;:]+")
+
+
+def redact(text: str) -> str:
+    """Gap prose names conditions, not locations: absolute paths are replaced."""
+    return _ABSOLUTE_PATH.sub("<path>", text)
+
+
 def derive_gaps(summary: Mapping[str, Any]) -> list[dict[str, str]]:
     """What stands between a reader and an exact reproduction, from the packet alone."""
     gaps: list[dict[str, str]] = []
 
     def add(code: str, detail: str) -> None:
-        gaps.append({"code": code, "detail": detail})
+        gaps.append({"code": code, "detail": redact(detail)})
 
+    if summary["mode"] != "run":
+        add("not-executed", f"the packet records a {summary['mode']}; no check was executed")
     for name, record in sorted((summary.get("tool_pins") or {}).items()):
         if record.get("matches") is False:
             add(f"pin-mismatch:{name}", f"pinned {record['pinned']}, observed {record.get('observed')!r}")
+        elif record.get("matches") is None and summary["mode"] == "run" and summary.get("tools") is not None:
+            add(f"pin-unobserved:{name}", f"pinned {record['pinned']}; the tool was not observed, so the pin is unverified")
     if not summary["temp_root_policy"].get("compliant"):
         add("temp-root-noncompliant", "the temp roots were not private, canonical, owned and short")
     account = summary["account"]
     if account.get("home_env_set") and not account.get("home_matches_nss"):
         add("home-differs-from-nss", "HOME names a different directory than the NSS account home")
     source = summary["source"]
+    if source.get("dirty") is True:
+        add("dirty-at-recording", "the working tree had uncommitted changes; the change identity names them, the revision alone does not")
     if source.get("dirty") is None:
         add("change-set-dirty-unknown", str(source.get("dirty_unknown") or "the working tree was not inspected"))
     if source.get("revision_declared"):
@@ -419,6 +492,7 @@ def build_summary(
     }
     summary["tool_pins"] = tool_pins(tools, pins if pins is not None else pinned_tools())
     summary["concurrency"] = concurrency(environ)
+    summary["image"] = image_identity(environ)
     summary["cache"], summary["artifacts"] = cache_and_artifacts(checks)
     summary["reproduction_gaps"] = derive_gaps(summary)
     validate_summary(summary)
@@ -438,7 +512,7 @@ def validate_summary(summary: Mapping[str, Any]) -> None:
     if summary["schema"] not in READABLE_SCHEMAS or summary["kind"] != KIND:
         raise ValueError("Unsupported evidence summary schema")
     if summary["schema"] == 2:
-        absent = [key for key in ("tool_pins", "concurrency", "cache", "artifacts", "reproduction_gaps") if key not in summary]
+        absent = [key for key in ("tool_pins", "concurrency", "cache", "artifacts", "reproduction_gaps", "image") if key not in summary]
         if absent:
             raise ValueError("Evidence summary schema 2 lacks: " + ", ".join(absent))
         for check in summary["checks"]:

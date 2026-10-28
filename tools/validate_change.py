@@ -910,6 +910,7 @@ def run_streaming(
     started = time.monotonic()
     outcome: dict[str, Any] = {
         "returncode": None, "timed_out": False, "leaked_descendants": False, "error": None, "log": str(log_path),
+        "started": False, "group_survivors": None,
     }
     try:
         log = log_path.open("wb")
@@ -924,6 +925,7 @@ def run_streaming(
         except OSError as error:
             outcome.update(error=f"cannot start the entrypoint: {type(error).__name__}: {error}", seconds=0.0)
             return outcome
+        outcome["started"] = True
         problems: list[str] = []
         closing = threading.Event()
 
@@ -962,6 +964,10 @@ def run_streaming(
                     if not _exited(process, KILL_GRACE_SECONDS):
                         raise _Unkillable
             thread.join(timeout=READER_GRACE_SECONDS)
+            # Before anything kills the group: who is still in it besides the
+            # exited leader? None means the probe itself failed.
+            members = _group_members(process.pid)
+            outcome["group_survivors"] = None if members is None else bool(members)
             if thread.is_alive():
                 _signal_group(process, signal.SIGKILL)
                 thread.join(timeout=READER_GRACE_SECONDS)
@@ -983,6 +989,23 @@ def run_streaming(
         outcome["error"] = problems[0]
     outcome["seconds"] = round(time.monotonic() - started, 3)
     return outcome
+
+
+def _group_members(leader: int) -> list[int] | None:
+    """Live (not zombie) members of the leader's process group other than the leader."""
+    try:
+        listing = subprocess.run(
+            ["ps", "-A", "-o", "pid=,pgid=,stat="], capture_output=True, text=True, timeout=10, check=True
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    members = []
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and fields[0].isdigit() and fields[1].isdigit():
+            if int(fields[1]) == leader and int(fields[0]) != leader and not fields[2].startswith("Z"):
+                members.append(int(fields[0]))
+    return members
 
 
 def _signal_group(process: subprocess.Popen[bytes], number: int) -> None:
@@ -1018,30 +1041,38 @@ def child_environment(environ: Mapping[str, str], output: Path) -> tuple[dict[st
 def check_phases(entry: Mapping[str, Any], availability: str) -> dict[str, str]:
     """Setup, body and teardown of one check, only as far as this tool observed them.
 
-    Setup is whether the check could start here; the body is the entrypoint's
-    outcome; teardown is what happened to its process group. A phase the tool did
-    not run is "not-run" or "not-applicable", and a teardown it cannot vouch for
-    is "unknown", never "clean".
+    Setup is whether the entrypoint could be started here; the body is the
+    entrypoint's own outcome (its exit status, not later evidence checks such as
+    JUnit); teardown is what the tool saw of its process group when the
+    entrypoint ended. `clean` means no member was left in the group; it does not
+    cover a descendant that left the group, which is never observed. Anything the
+    tool could not see is `unknown`, and a phase that did not run is `not-run`.
     """
     setup = {"ci-only": "not-applicable", "manual": "not-applicable", "unavailable": "unavailable"}.get(availability, "ok")
     if entry.get("subsumed_by"):
         return {"setup": "ok", "body": "not-applicable", "teardown": "not-applicable"}
+    if entry.get("interrupted"):
+        if entry.get("interrupted_before_start"):
+            return {"setup": "failed", "body": "not-run", "teardown": "not-run"}
+        return {"setup": "ok", "body": "interrupted", "teardown": "unknown"}
+    if "started" not in entry:
+        return {"setup": setup, "body": "not-run", "teardown": "not-run"}
+    if not entry["started"]:
+        return {"setup": "failed", "body": "not-run", "teardown": "not-run"}
     if entry.get("timed_out"):
         body = "timed-out"
-    elif entry["status"] == "passed":
-        body = "passed"
-    elif entry["status"] == "failed" and entry.get("seconds") is not None:
-        body = "failed"
     else:
-        body = "not-run"
-    if body == "not-run":
-        return {"setup": setup, "body": body, "teardown": "not-run"}
+        body = "passed" if entry.get("returncode") == 0 else "failed"
     if "did not exit after SIGKILL" in str(entry.get("reason") or ""):
         teardown = "unknown"
-    elif entry.get("leaked_descendants"):
-        teardown = "leaked-descendants"
     elif entry.get("timed_out"):
         teardown = "killed-after-timeout"
+    elif entry.get("leaked_descendants"):
+        teardown = "leaked-descendants"
+    elif entry.get("group_survivors") is None:
+        teardown = "unknown"
+    elif entry["group_survivors"]:
+        teardown = "group-survivors-killed"
     else:
         teardown = "clean"
     return {"setup": setup, "body": body, "teardown": teardown}
@@ -1117,6 +1148,7 @@ def execute(
             else:
                 started = time.time()
                 log_path = logs / f"{check['id']}.log"
+                entered = False
                 try:
                     for item in result["reuse"]:
                         # The plan-time observation can be stale by now; record what is there at execution.
@@ -1125,6 +1157,7 @@ def execute(
                             for key in ("present", "sha256", "digest_skipped")
                         }
                     try:
+                        entered = True
                         outcome = runner(
                             check["entrypoint"]["argv"],
                             cwd=Path(check["entrypoint"]["cwd"]),
@@ -1134,7 +1167,7 @@ def execute(
                             **({"stream": stream} if stream is not None else {}),
                         )
                     except OSError as error:
-                        outcome = {"returncode": None, "timed_out": False, "leaked_descendants": False, "error": f"could not run the entrypoint: {type(error).__name__}: {error}", "seconds": 0.0, "log": None}
+                        outcome = {"returncode": None, "timed_out": False, "leaked_descendants": False, "error": f"could not run the entrypoint: {type(error).__name__}: {error}", "seconds": 0.0, "log": None, "started": False}
                     status, reason = _outcome_status(outcome)
                     result.update(
                         status=status,
@@ -1142,6 +1175,8 @@ def execute(
                         returncode=outcome["returncode"],
                         timed_out=bool(outcome.get("timed_out")),
                         leaked_descendants=bool(outcome.get("leaked_descendants")),
+                        started=bool(outcome.get("started", True)),
+                        group_survivors=outcome.get("group_survivors", False),
                         seconds=outcome["seconds"],
                         log=outcome["log"],
                         junit=[validation_evidence.junit_counts(Path(item), started) for item in check.get("junit", ())],
@@ -1153,7 +1188,7 @@ def execute(
                     # Ctrl-C, SIGTERM or SIGHUP during reuse observation, the entrypoint or JUnit parsing.
                     interrupted = True
                     result.update(
-                        status="failed", reason="interrupted", interrupted=True,
+                        status="failed", reason="interrupted", interrupted=True, interrupted_before_start=not entered,
                         interrupt_signal=getattr(signalled, "signum", int(signal.SIGINT)),
                         log=str(log_path) if log_path.exists() else None, seconds=round(time.time() - started, 3),
                     )
@@ -1312,10 +1347,10 @@ def _main(argv: Sequence[str] | None, root: Path, environ: Mapping[str, str] | N
         else:
             try:
                 change_set = collect_git(root, arguments.base, arguments.include)
-            except PlanError as error:
+            except PlanError:
                 if not arguments.boundary or arguments.base:
                     raise
-                change_set = empty_change_set("boundary-request", note=f"no change set was collected: {error}")
+                change_set = empty_change_set("boundary-request", note="no change set was collected: git could not describe the checkout")
         if mode == "run" or arguments.output:
             from tools import check_local_validation
 
@@ -1418,7 +1453,7 @@ def _main(argv: Sequence[str] | None, root: Path, environ: Mapping[str, str] | N
 
 
 def _evidence_check(check: Mapping[str, Any]) -> dict[str, Any]:
-    keys = ("id", "title", "kind", "scope", "platforms", "status", "reason", "returncode", "timed_out", "leaked_descendants", "interrupted", "seconds", "log", "junit", "subsumed_by", "long", "phases")
+    keys = ("id", "title", "kind", "scope", "platforms", "status", "reason", "returncode", "timed_out", "leaked_descendants", "interrupted", "seconds", "log", "junit", "subsumed_by", "long", "phases", "started", "group_survivors")
     record = {key: check[key] for key in keys if key in check}
     if "phases" not in record:
         record["phases"] = check_phases(check, check.get("availability", "runnable"))

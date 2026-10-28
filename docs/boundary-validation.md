@@ -122,40 +122,71 @@ environment:
 
 - `tool_pins`: each pinned tool (Flutter, Dart, protoc from `tools/pins.json`;
   actionlint and ShellCheck from the shared guards) beside what was observed and
-  whether the pinned version is a whole token of it. An unobserved tool matches
-  nothing; a failed probe never matches.
-- `phases` per check: setup (could it start here), body (the entrypoint's
-  outcome) and teardown (what happened to its process group: `clean`,
-  `leaked-descendants`, `killed-after-timeout`, or `unknown` when it cannot be
-  vouched for). A phase the tool did not run is `not-run`, never inferred.
+  whether the pinned version is a whole token of the version line of its output
+  (ShellCheck prints a banner first; the line that names a version is kept). An
+  unobserved tool matches nothing and, in a run that probed tools, is the gap
+  `pin-unobserved:<tool>`; a failed probe never matches and records only its exit
+  status, never its output.
+- `phases` per check: setup (could the entrypoint start here: `ok`, `unavailable`
+  or `failed` when it never started or was interrupted before it did), body (the
+  entrypoint's own outcome from its exit: `passed`, `failed`, `timed-out`,
+  `interrupted`; unsupported JUnit evidence fails the check, not the body) and
+  teardown. Teardown is observed, not assumed: after the entrypoint exits the tool
+  lists the members of its process group before killing the group. `clean` means
+  none remained; `group-survivors-killed` means some did and were killed;
+  `leaked-descendants` and `killed-after-timeout` are the tool's own findings;
+  `unknown` means it could not tell (an interrupted run, a process that survived
+  SIGKILL, a failed probe). `clean` says nothing about descendants that left the
+  group (a double fork with its own session). A phase the tool did not run is
+  `not-run`, never inferred.
 - `concurrency` (CPU count and the allowlisted parallelism settings), `cache`
   (reused outputs and whether each was present at planning and at execution) and
   `artifacts` (digests of reused products). The producer of an artifact is
   `null`: only the entrypoint verifies provenance, and the gaps say so.
+- `image`: the runner image variables (`ImageOS`, `ImageVersion`, when set) and
+  the operating-system identity (os-release `ID` and `VERSION_ID`, or the macOS
+  version). A field that cannot be observed is `null`.
 - `reproduction_gaps`: what stands between a reader and an exact reproduction,
-  derived from the packet (pin mismatches, a non-compliant temp root, `HOME`
-  differing from the NSS home, an unknown dirty state, a declared and unverified
-  revision, unexecuted platforms, checks that did not pass, unrecorded artifact
-  provenance).
+  derived from the packet (a plan that executed nothing, pin mismatches and
+  unobserved pins, a non-compliant temp root, `HOME` differing from the NSS home,
+  a dirty or unknown dirty state, a declared and unverified revision, unexecuted
+  platforms, checks that did not pass, unrecorded artifact provenance). Gap prose
+  names conditions, not locations: absolute paths are replaced, and free text from
+  failed commands is not copied. The environment allowlist concerns environment
+  variables only; reasons and notes are bounded text written by the tool.
 
 `python -m tools.validation_replay PACKET [--check] [--json]` reads a packet and
 prints the recorded invocation, each failed check's own entrypoint and retained
 log, the packet's gaps and the differences between the recorded host and this one
-(operating system and release, architecture, Python, tool versions, root versus
-non-root, NSS account name, temp roots). It runs nothing, and a replay that lists
-no gap still does not prove a hosted failure reproduces: a newer local macOS, a
-compiled-only replay, or a different container image remain gaps whenever they
-differ. `--check` exits 1 while any gap remains and 2 for an unreadable packet.
+(operating system and release, image identity, architecture, Python, tool
+versions, root versus non-root, NSS account name, temp roots, and whether this
+checkout is at the recorded revision and clean). It runs nothing and reads no
+environment. A packet cannot hide a gap by omitting it: the gaps its contents
+imply are added to the ones it recorded. A replay that lists no gap still does
+not prove a hosted failure reproduces; the recorded conditions are the ones this
+tool could observe. `--check` exits 1 while any gap remains and 2 for an
+unreadable or corrupt packet.
 
 `python -m tools.check_entrypoint_parity` (part of the shared guards) reads the
 workflows without changing them and checks that every command gate's script is
 called by some workflow step, or that the gate declares `local_only` with a
-reason, and that a `local_only` claim no workflow contradicts. It also rejects a
-workflow that calls a repository script that no longer exists and fails on any
-workflow shape it does not understand. It is script-level: it does not check that
-a workflow passes the same arguments, and inline `dart test`, `flutter test`,
-`ctest` or `pytest` invocations are listed in its `--json` output for information
-only.
+reason, and that a `local_only` claim no workflow contradicts. The `run:` text
+is split into commands the way a shell would (comments stripped, quotes honored,
+`;`, `&&`, `||`, pipes and newlines separate commands). A script is called when it
+is a whole token of a command that executes things, so launchers (`bash`, `sh`,
+`env VAR=1`, `exec`, `time`) work; a mention in `echo`, `cp`, `chmod`, `test`,
+`git add` or another non-executing command, or inside a quoted string or comment,
+is not a call. A step or job whose `if:` is literally false never runs and calls
+nothing. A call to a shell script counts for the gate scripts that script calls
+(to depth four), reported as `via <script>`; this over-approximates, since every
+branch of the called script is credited to each step that calls it. A gate with a
+`--stage` or `--suite` is satisfied by a call with that value (a `build.sh` call
+with no `--stage` or `all` covers every stage); a value read from a variable is
+reported as ambiguous, not as an exact match. It also rejects a workflow that
+calls a repository script that no longer exists and fails on any workflow shape
+it does not understand. It is script-level: it does not check that a workflow
+passes the same arguments (other than `--stage` and `--suite`), and inline `dart test`, `flutter test`, `ctest` or
+`pytest` invocations are listed in its `--json` output for information only.
 
 | Overall status | Meaning |
 | --- | --- |
