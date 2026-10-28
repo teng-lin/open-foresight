@@ -14,6 +14,7 @@ import 'dart:math' as math;
 
 import 'audio_models.dart';
 import 'capture_timeline.dart';
+import 'meeting_speaker_observer.dart';
 import 'speaker_observation.dart';
 
 const speakerAttributionPolicyVersion = 'attr-1';
@@ -689,6 +690,23 @@ final class SpeakerAttributionSession {
 
   void addUnavailable({required int sinceUs, required String reason}) =>
       history.addUnavailable(sinceUs: sinceUs, reason: reason);
+
+  /// Feed one event of a [MeetingSpeakerObserver]. A restart or failure is a
+  /// blind period that the next complete read ends, so a restarted helper's
+  /// references are never joined to the earlier helper's reads.
+  void apply(SpeakerObserverEvent event) {
+    switch (event) {
+      case ObservationEvent(:final observation):
+        addObservation(observation);
+      case UnavailableEvent(:final sinceUs, :final reason):
+        addUnavailable(sinceUs: sinceUs, reason: reason);
+      case ObserverStateEvent(:final status, :final atUs):
+        if (status == ObserverStatus.restarting ||
+            status == ObserverStatus.failed) {
+          addUnavailable(sinceUs: atUs, reason: 'observer_${status.name}');
+        }
+    }
+  }
 
   /// Latest observed time. Speech ending later than this cannot be decided yet.
   int? get observationWatermarkUs => history.latestReadEndUs;

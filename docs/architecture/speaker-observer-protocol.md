@@ -60,7 +60,7 @@ platform helpers (`zoom_observer_macos`, `zoom_observer_linux`). Design context:
 | --- | --- | --- |
 | `capabilities` | `id` | Report availability without prompting or changing settings |
 | `setup` | `id` | Explicit accessibility setup (may prompt / guide the user); reply with `capabilities` |
-| `start` | `id`, `session`, `poll_ms` (50 to 60000), `deadline_ms` (1 to 600000) | Begin observing the selected meeting for recording session `session` |
+| `start` | `id`, `session`, `poll_ms` (50 to 60000), `deadline_ms` (1 to 600000) | Begin observing the selected meeting for recording session `session`; `deadline_ms` bounds one read and the helper's shutdown |
 | `stop` | `id` | Finish the interval, emit `stopped`, exit 0 within `deadline_ms` |
 | `clock` | `id` | Reply with `clock` frame for offset measurement |
 
@@ -119,6 +119,17 @@ thread (between reads); `clock` is answered immediately.
 | `clock` | `id`, `monotonic_ms`, `uptime_ms` (optional extra) |
 | `error` | `id` (optional), `code`, `message` |
 | `stopped` | `id`, `session` |
+
+A `start` that cannot be honoured is answered with an `error` frame, or with a
+`capabilities` frame (same `id`) whose `state` is not `available`; no
+observation follows either. The service does not retry the latter.
+
+While started, the helper emits exactly one `observation` or `unavailable`
+frame per poll. An `unavailable` condition repeats with an unchanged `since_ms`
+at every poll, which doubles as the heartbeat; the service treats silence for
+longer than `poll_ms + deadline_ms` plus a slack as a stalled helper, terminates
+it and restarts it. An `error` frame without `id` while started is fatal. An
+`observation` before `started`, or for another `session`, is a protocol error.
 
 `state` is one of `available`, `needs_setup`, `permission_denied`,
 `zoom_not_running`, `no_meeting`, `unsupported_version`, `unsupported_platform`,
@@ -213,3 +224,11 @@ Per read: tree depth at most 64, nodes at most 20000, one observation at most
 an outer read deadline, terminates and reaps only the helper it started, and
 restarts it with bounded backoff (at most 5 restarts per session). The helper
 must exit when stdin closes.
+
+After a restart the service qualifies every `ref` it delivers as
+`<epoch>:<ref>` (epoch 0 for the first helper process of a session, counting
+up per restart), so a restarted helper's references can never alias the earlier
+helper's. A restarted or failed helper is a blind interval, never a continuation
+of the previous speaker. Observer timestamps are shifted onto the capture clock
+with the offset from the best of three `clock` exchanges; the shift widens each
+read by half the round trip plus one millisecond.

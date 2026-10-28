@@ -352,4 +352,9 @@ void main() {
     )!;
     expect(mapped.startUs, 59990000);
   });
+
+  test('rejects invalid bounds', () {
+    expect(() => CaptureTimeline(maxRunsPerChannel: 0), throwsArgumentError);
+    expect(() => CaptureTimeline(jitterToleranceUs: -1), throwsArgumentError);
+  });
 }

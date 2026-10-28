@@ -167,24 +167,6 @@ final class SpeakerObservation {
       speakers: speakers,
     );
   }
-
-  /// Equality of what was observed, ignoring when it was read.
-  bool sameContent(SpeakerObservation other) {
-    if (other.complete != complete ||
-        other.target != target ||
-        other.parserVersion != parserVersion ||
-        other.participants.length != participants.length ||
-        other.speakers.length != speakers.length) {
-      return false;
-    }
-    for (var i = 0; i < participants.length; i++) {
-      if (participants[i] != other.participants[i]) return false;
-    }
-    for (var i = 0; i < speakers.length; i++) {
-      if (speakers[i] != other.speakers[i]) return false;
-    }
-    return true;
-  }
 }
 
 /// A period during which the helper reported it could not observe the meeting.

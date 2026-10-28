@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:foresight_core/src/audio_models.dart';
 import 'package:foresight_core/src/capture_timeline.dart';
+import 'package:foresight_core/src/meeting_speaker_observer.dart';
 import 'package:foresight_core/src/speaker_attributor.dart';
 import 'package:foresight_core/src/speaker_observation.dart';
 import 'package:test/test.dart';
@@ -413,6 +414,51 @@ void main() {
     });
   });
 
+  group('ambiguity detail', () {
+    test('a handover next to concurrent speakers is concurrent', () {
+      reads(history, 1, 3, speakers: ['a', 'b']);
+      reads(history, 3.5, 6, speakers: ['a']);
+      expectState(
+        decide(history, audio(2.9, 3.8)),
+        AttributionState.multiple,
+        'concurrent_speakers',
+      );
+    });
+
+    test('coverage sums every stretch of the best candidate', () {
+      reads(history, 1, 2, speakers: ['a']);
+      history.addObservation(read(2.5, speakers: ['b']));
+      reads(history, 3, 5, speakers: ['a']);
+      final decision = decide(history, audio(1.5, 4));
+      expectState(decision, AttributionState.multiple, 'speaker_change');
+      // 0.5 s before the handover plus 0.97 s after it.
+      expect(decision.evidence.coveredUs, sec(1.47));
+    });
+
+    test('a blind window is reported even before the claim starts', () {
+      reads(history, 1, 3, speakers: ['a']);
+      history.addUnavailable(sinceUs: sec(3.2), reason: 'window_lost');
+      reads(history, 6, 8, speakers: ['a']);
+      // Between Ada's last read (3.0 s) and the claimed loss (3.2 s).
+      expectState(
+        decide(history, audio(3.05, 3.15)),
+        AttributionState.unavailable,
+        'window_lost',
+      );
+    });
+
+    test('a blind period without a reason still reads as unavailable', () {
+      reads(history, 1, 3, speakers: ['a']);
+      history.addUnavailable(sinceUs: sec(3.2), reason: '');
+      reads(history, 6, 8, speakers: ['a']);
+      expectState(
+        decide(history, audio(3.05, 3.15)),
+        AttributionState.unavailable,
+        'observer_unavailable',
+      );
+    });
+  });
+
   group('availability', () {
     test('an unavailable interval blocks naming and then recovers', () {
       reads(history, 1, 3, speakers: ['a']);
@@ -680,6 +726,75 @@ void main() {
       expect(session.addObservation(read(1, session: 's2')), false);
       expect(session.addObservation(read(1)), true);
       expect(session.history.readCount, 1);
+    });
+    test('applies observer events, treating restarts as blind periods', () {
+      final session = SpeakerAttributionSession(session: 's1');
+      for (var t = 1.0; t <= 3; t += .5) {
+        session.apply(ObservationEvent(0, read(t, speakers: ['a'])));
+      }
+      session.apply(
+        ObserverStateEvent(
+          0,
+          status: ObserverStatus.restarting,
+          atUs: sec(3.4),
+          restartCount: 1,
+        ),
+      );
+      session.apply(
+        const UnavailableEvent(1, sinceUs: 4000000, reason: 'window_lost'),
+      );
+      session.apply(
+        ObserverStateEvent(
+          1,
+          status: ObserverStatus.running,
+          atUs: sec(4.2),
+          restartCount: 1,
+        ),
+      );
+      // The restarted helper reports its own references for the same person.
+      for (var t = 5.0; t <= 7; t += .5) {
+        session.apply(
+          ObservationEvent(
+            1,
+            read(
+              t,
+              speakers: ['1:a'],
+              participants: const [
+                ObservedParticipant(ref: '1:a', name: 'Ada Lovelace'),
+              ],
+            ),
+          ),
+        );
+      }
+      final before = session.attributor.attribute(
+        session.history,
+        source: AudioSource.playback,
+        mapped: audio(1.5, 2.5),
+      );
+      final blind = session.attributor.attribute(
+        session.history,
+        source: AudioSource.playback,
+        mapped: audio(3.5, 4.5),
+      );
+      final after = session.attributor.attribute(
+        session.history,
+        source: AudioSource.playback,
+        mapped: audio(5.5, 6.5),
+      );
+      expect(before.participantRef, 'a');
+      expect(blind.state, AttributionState.unavailable);
+      expect(blind.evidence.reason, 'observer_restarting');
+      expect(after.participantRef, '1:a');
+      expect(session.history.segmentCount, 2);
+      session.apply(
+        ObserverStateEvent(
+          1,
+          status: ObserverStatus.stopped,
+          atUs: sec(7.5),
+          restartCount: 1,
+        ),
+      );
+      expect(session.history.unavailableIntervals, hasLength(1));
     });
   });
 }
