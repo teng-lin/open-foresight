@@ -715,7 +715,6 @@ void main() {
           profile,
           DiagnosticIdentity.random(),
           DiagnosticRole.desktop,
-          directoryReader: _streamReader,
         )!;
         final slot = first.slot;
         first.close();
@@ -739,7 +738,6 @@ void main() {
             for (var i = 0; i < 10; i++)
               if (i != slot) i,
           },
-          directoryReader: _streamReader,
         );
         final recovered = recover();
         if (recovered != null) addTearDown(recovered.close);
@@ -981,7 +979,6 @@ void main() {
           profile,
           DiagnosticIdentity.random(),
           DiagnosticRole.service,
-          directoryReader: _streamReader,
         )!;
         final slot = storage.slot;
         storage.close();
@@ -1030,7 +1027,6 @@ void main() {
           profile,
           identity,
           DiagnosticRole.service,
-          directoryReader: _streamReader,
         )!;
         addTearDown(next.close);
         expect(next.session, identity.value);
@@ -1044,7 +1040,6 @@ void main() {
             profile,
             DiagnosticIdentity.random(),
             DiagnosticRole.mcp,
-            directoryReader: _streamReader,
           ),
           throwsA(isA<DiagnosticStorageUnavailable>()),
         );
@@ -1055,7 +1050,6 @@ void main() {
             alias,
             DiagnosticIdentity.random(),
             DiagnosticRole.mcp,
-            directoryReader: _streamReader,
           ),
           throwsA(isA<DiagnosticStorageUnavailable>()),
         );
