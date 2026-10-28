@@ -110,6 +110,14 @@ Migrated for the nightly failures of
 admission-lock evidence in `storage_worker_protocol_test`, and the waits of the native close test
 in `storage_worker_session_test`. The rest is a backlog, ranked by the number
 of un-reaped or un-bounded patterns per file, not by evidence of failure.
+Already migrated by [#189](https://github.com/teng-lin/open-foresight/pull/189)
+(`2db22c9b`, `4856bf4d`) with file-local helpers, not the shared ones:
+`model_acquisition_transport_boundary_test` (`_assertHandshakeCancellation`
+joins the real worker before an entry failure escapes, and accepted sockets are
+observed) and `service_lifetime_test` (`_FixtureRpcServer` owns its listener and
+accepted RPC sockets and retires unfinished peer streams). Do not add a second
+owner to either; adopt the shared `OwnedCleanups` there only if a later failure
+implicates them.
 Migrate a file when a failure implicates it; do not rewrite them in bulk.
 
 | Rank | File | Process owner | Sockets, streams, pending work | Risk if the test fails |
