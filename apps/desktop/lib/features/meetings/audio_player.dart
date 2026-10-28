@@ -320,7 +320,7 @@ class _MeetingAudioPlayerState extends State<MeetingAudioPlayer> {
         for (final source in session.sources)
           if (source.failedJobs > 0 || source.error.isNotEmpty)
             Text('${_source(source.source)} transcription needs attention.')
-          else if (source.pendingDurationUs > 0)
+          else if (source.pendingDurationUs > 0 && !session.isRecording)
             Text(
               '${_source(source.source)} transcription is catching up: ${_time(source.pendingDurationUs)}.',
             ),
@@ -328,8 +328,9 @@ class _MeetingAudioPlayerState extends State<MeetingAudioPlayer> {
           const Text(
             'Audio compression needs attention. Available audio is kept.',
           )
-        else if (session.compression.pending > 0 ||
-            session.compression.running > 0)
+        else if (!session.isRecording &&
+            (session.compression.pending > 0 ||
+                session.compression.running > 0))
           const Text('Saving space in the background…'),
         if (exporting)
           const Text('Saving audio…', key: ValueKey('audio-export-progress'))

@@ -767,9 +767,14 @@ class ApplicationService {
     access.detach(client);
     if (wasHost) {
       unawaited(
-        application.stopRecording().catchError((Object e) {
-          stderr.writeln('Stop capture after desktop closed: $e');
-        }),
+        application
+            .stopRecording(
+              reason:
+                  'Recording stopped because the desktop connection closed.',
+            )
+            .catchError((Object e) {
+              stderr.writeln('Stop capture after desktop closed: $e');
+            }),
       );
     }
     _clients.remove(client);
@@ -904,7 +909,10 @@ class ApplicationService {
       _exitIfIdle();
     },
     onDetached: _exitIfIdle,
-    stopRecording: application.stopRecording,
+    stopRecording: () => application.stopRecording(
+      reason:
+          'Recording stopped because the desktop was hidden or disconnected.',
+    ),
     preference: domain.store.preference,
     setPreference: domain.store.setPreference,
     stopIfIdle: _stopIfIdle,

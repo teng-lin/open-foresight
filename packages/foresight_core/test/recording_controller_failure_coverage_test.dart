@@ -282,7 +282,13 @@ void main() {
       expect(gap['sample_start'], 62400);
       expect(store.rows('SELECT * FROM transcript WHERE final=0'), isEmpty);
       expect(meetingState(), 'recording');
-      await app.stopRecording();
+      await app.stopRecording(
+        reason: 'Recording stopped because the desktop was hidden.',
+      );
+      expect(
+        app.recordingState,
+        contains('Recording stopped because the desktop was hidden.'),
+      );
       expect(meetingState(), 'completed');
       final geometry = media.audio.playbackTimeline.chunk(
         gap['session_id'] as String,
@@ -330,6 +336,10 @@ void main() {
     expect(platform.routes.every((r) => r.retired), isTrue);
     expect(store.rows('SELECT * FROM transcript'), isEmpty);
     expect(app.captureState['active'], isFalse);
+    expect(
+      app.recordingState,
+      contains('Recording stopped after 0.001 minutes without audio.'),
+    );
   });
 
   test(

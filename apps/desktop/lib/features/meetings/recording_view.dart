@@ -96,3 +96,38 @@ class RecordingHeader extends StatelessWidget {
     );
   }
 }
+
+/// Terminal capture status stays visible after the native owner is released,
+/// including when recording ended while another workspace tab was open.
+class RecordingStatusNotice extends StatelessWidget {
+  const RecordingStatusNotice({
+    super.key,
+    required this.active,
+    required this.status,
+  });
+  final bool active;
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    if (active || status.isEmpty || status == 'idle') {
+      return const SizedBox.shrink();
+    }
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerHigh,
+      child: Semantics(
+        liveRegion: true,
+        child: SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: SizedBox(
+              width: double.infinity,
+              child: SelectableText(status),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

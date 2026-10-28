@@ -628,7 +628,8 @@ class Application implements ModelGate, GenerationReservationGate {
 
   Future<void> startRecording(int id) =>
       _recordingController.startRecording(id);
-  Future<void> stopRecording() => _recordingController.stopRecording();
+  Future<void> stopRecording({String? reason}) =>
+      _recordingController.stopRecording(reason: reason);
   Future<void> pauseRecording([int? id]) =>
       _recordingController.pauseRecording(id);
   Future<void> resumeRecording([int? id]) =>
