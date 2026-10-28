@@ -813,10 +813,17 @@ final class SpeakerAttributionSession {
   /// Latest observed time. Speech ending later than this cannot be decided yet.
   int? get observationWatermarkUs => history.latestReadEndUs;
 
+  /// The counter generation to record with a sample range when it is queued
+  /// (see [CaptureTimeline.generation]).
+  int sampleGeneration(AudioSource source) => timeline.generation(source);
+
+  /// [generation] is the value [sampleGeneration] returned when the range was
+  /// recorded; after a sample counter reset the range no longer exists.
   AttributionDecision attribute(
     AudioSource source, {
     required int sampleStart,
     required int sampleEnd,
+    required int generation,
   }) {
     if (sampleStart < 0 || sampleEnd <= sampleStart) {
       return const AttributionDecision(
@@ -828,6 +835,7 @@ final class SpeakerAttributionSession {
       source,
       sampleStart: sampleStart,
       sampleEnd: sampleEnd,
+      generation: generation,
     );
     return attributor.attribute(
       history,
@@ -838,6 +846,7 @@ final class SpeakerAttributionSession {
         TimelineMiss.trimmed => 'timeline_trimmed',
         TimelineMiss.notYetCaptured => 'timeline_not_captured',
         TimelineMiss.sampleGap => 'timeline_gap',
+        TimelineMiss.counterReset => 'timeline_counter_reset',
         null => 'timeline_unavailable',
       },
     );

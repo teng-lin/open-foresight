@@ -88,6 +88,10 @@ enum TimelineMiss {
 
   /// A hole in the sample counter lies inside the range.
   sampleGap,
+
+  /// The sample counter restarted after the caller captured the range, so its
+  /// numbers now belong to different audio.
+  counterReset,
 }
 
 typedef TimelineMapOutcome = ({MappedAudioRange? range, TimelineMiss? miss});
@@ -287,6 +291,12 @@ final class CaptureTimeline {
   /// How many times the channel's sample counter restarted.
   int counterResets(AudioSource source) => _channels[source]?.resets ?? 0;
 
+  /// The counter generation a sample range belongs to. Record it when a range
+  /// is captured (for example when speech is queued for recognition) and pass
+  /// it back to [mapOutcome], so that after a reset the old numbers never map
+  /// onto the new audio.
+  int generation(AudioSource source) => counterResets(source);
+
   int runCount(AudioSource source) => _channels[source]?.length ?? 0;
 
   int? oldestSample(AudioSource source) {
@@ -304,16 +314,27 @@ final class CaptureTimeline {
     AudioSource source, {
     required int sampleStart,
     required int sampleEnd,
-  }) =>
-      mapOutcome(source, sampleStart: sampleStart, sampleEnd: sampleEnd).range;
+    int? generation,
+  }) => mapOutcome(
+    source,
+    sampleStart: sampleStart,
+    sampleEnd: sampleEnd,
+    generation: generation,
+  ).range;
 
+  /// With [generation] the range is only placed if the counter has not been
+  /// reset since the caller recorded it; null accepts the current generation.
   TimelineMapOutcome mapOutcome(
     AudioSource source, {
     required int sampleStart,
     required int sampleEnd,
+    int? generation,
   }) {
     if (sampleStart < 0 || sampleEnd <= sampleStart) {
       throw ArgumentError('Invalid sample range');
+    }
+    if (generation != null && generation != this.generation(source)) {
+      return (range: null, miss: TimelineMiss.counterReset);
     }
     final channel = _channels[source];
     if (channel == null || !channel.recorded) {

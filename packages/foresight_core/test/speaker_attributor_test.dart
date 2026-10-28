@@ -865,18 +865,21 @@ void main() {
         AudioSource.playback,
         sampleStart: 48000,
         sampleEnd: 48000 * 4,
+        generation: 0,
       );
       expect(first.participantRef, 'a');
       final second = session.attribute(
         AudioSource.playback,
         sampleStart: 48000 * 6,
         sampleEnd: 48000 * 9,
+        generation: 0,
       );
       expect(second.participantRef, 'b');
       final crossing = session.attribute(
         AudioSource.playback,
         sampleStart: 48000 * 4,
         sampleEnd: 48000 * 6,
+        generation: 0,
       );
       expect(crossing.state, SpeakerDecisionState.multiple);
       expect(
@@ -885,6 +888,7 @@ void main() {
               AudioSource.playback,
               sampleStart: 48000 * 20,
               sampleEnd: 48000 * 21,
+              generation: 0,
             )
             .state,
         SpeakerDecisionState.unknown,
@@ -896,7 +900,12 @@ void main() {
     test('says why a range could not be placed', () {
       final session = SpeakerAttributionSession(session: 's1');
       String reason(int a, int b) => session
-          .attribute(AudioSource.playback, sampleStart: a, sampleEnd: b)
+          .attribute(
+            AudioSource.playback,
+            sampleStart: a,
+            sampleEnd: b,
+            generation: session.sampleGeneration(AudioSource.playback),
+          )
           .evidence
           .reason;
       expect(reason(0, 10), 'timeline_unknown_source');
@@ -922,6 +931,39 @@ void main() {
       expect(reason(1500, 3500), 'timeline_gap');
       expect(reason(5000, 6000), 'timeline_not_captured');
       expect(reason(1100, 1200), 'no_history');
+    });
+
+    test('a range recorded before a counter reset no longer exists', () {
+      final session = SpeakerAttributionSession(session: 's1');
+      for (var t = 0.0; t <= 20; t += .5) {
+        session.addObservation(read(t, speakers: [t < 10 ? 'a' : 'b']));
+      }
+      void run(int startSample, double startSecond) => session.timeline.addRun(
+        AudioSource.playback,
+        sampleStart: startSample,
+        sampleCount: 48000 * 4,
+        sampleRate: 48000,
+        startUs: sec(startSecond),
+        endUs: sec(startSecond + 4),
+      );
+      run(0, 2); // samples 0..4 s are Ada at 2..6 s
+      final queued = session.sampleGeneration(AudioSource.playback);
+      AttributionDecision ask(int generation) => session.attribute(
+        AudioSource.playback,
+        sampleStart: 48000,
+        sampleEnd: 48000 * 2,
+        generation: generation,
+      );
+      expect(ask(queued).participantRef, 'a');
+      // Device recovery restarts the counter; the new audio is Bo's, at 12 s.
+      run(0, 12);
+      expect(session.timeline.counterResets(AudioSource.playback), 1);
+      final stale = ask(queued);
+      expect(stale.state, SpeakerDecisionState.unknown);
+      expect(stale.evidence.reason, 'timeline_counter_reset');
+      expect(stale.participantRef, isNull);
+      final fresh = ask(session.sampleGeneration(AudioSource.playback));
+      expect(fresh.participantRef, 'b');
     });
 
     test('ignores observations from other sessions', () {

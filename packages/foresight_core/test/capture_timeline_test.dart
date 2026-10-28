@@ -270,6 +270,47 @@ void main() {
     },
   );
 
+  test('a reset invalidates ranges recorded before it', () {
+    final timeline = CaptureTimeline();
+    second(timeline, mic, 0, startUs: 0);
+    final before = timeline.generation(mic);
+    expect(
+      timeline
+          .mapOutcome(mic, sampleStart: 0, sampleEnd: 100, generation: before)
+          .range,
+      isNotNull,
+    );
+    timeline.addRun(
+      mic,
+      sampleStart: 0,
+      sampleCount: 48000,
+      sampleRate: 48000,
+      startUs: 9000000,
+      endUs: 10000000,
+    );
+    final stale = timeline.mapOutcome(
+      mic,
+      sampleStart: 0,
+      sampleEnd: 100,
+      generation: before,
+    );
+    expect(stale.range, isNull);
+    expect(stale.miss, TimelineMiss.counterReset);
+    expect(
+      timeline.map(mic, sampleStart: 0, sampleEnd: 100, generation: before),
+      isNull,
+    );
+    final current = timeline.mapOutcome(
+      mic,
+      sampleStart: 0,
+      sampleEnd: 100,
+      generation: timeline.generation(mic),
+    );
+    expect(current.range!.startUs, 9000000);
+    // Other channels keep their own generation.
+    expect(timeline.generation(remote), 0);
+  });
+
   test('says why a range does not map', () {
     final timeline = CaptureTimeline();
     TimelineMiss? miss(int a, int b) =>
