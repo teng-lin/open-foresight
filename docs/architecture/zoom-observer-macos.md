@@ -83,17 +83,27 @@ optional collector-assigned element id.
   fixture-covered only. The meeting locale comes only from tile statuses and the
   compact controls. If tiles disagree, a locale held by more tiles than all the
   others together wins and the outliers are dropped (incomplete read); with no
-  such majority the result is `locale_conflict`, so one participant can blank a
-  two-person meeting but not a larger one. The
+  such majority the result is `locale_conflict`. The majority rule only avoids
+  `locale_conflict`: the dropped outlier still makes the observation incomplete
+  (see below). The
   Participants-list label is shared by Spanish and Portuguese, so it never
   contributes locale evidence: the self word of the already established locale
   decides (`Joao (eu)` in a Spanish meeting is not self and not a conflict). An
   unrecognized locale produces no evidence (`no_participant_evidence`, reported as
   `no_meeting`); when the installed Zoom's preferred localization has no phrase
   set the helper reports `unavailable`/`unsupported_locale` instead.
+- **A hostile or unreadable name blanks attribution meeting-wide.** A dropped
+  tile might have been the speaker, so any participant whose tile is dropped (a
+  status or marker phrase in the name, an unnamed tile, a marker-only tile) makes
+  every observation `complete: false` for as long as they are present: names and
+  refs are still reported but no absence of a speaker can be asserted. This is
+  the deliberate fail-safe; a renamed participant can therefore make speaker
+  attribution unavailable for the rest of the meeting.
 - **Compact after dropped tiles.** Compact inference does not run when any
   tile-like node was dropped (unnamed, marker-only, ambiguous): it is only a
-  fallback for a snapshot that really has no tile.
+  fallback for a snapshot that really has no tile. A compact window that also
+  contains a nameless status tile therefore reads as `incomplete_read`
+  (fail-safe, acceptable).
 - **Windows.** Tiles in two windows, or two compact windows, are
   `ambiguous_windows`; nothing is combined. Self evidence is read from any window.
 - **Versions.** Only `7.2.x` bundle versions pass `zoom_version_supported`; others
@@ -148,24 +158,34 @@ optional collector-assigned element id.
   (`CFEqual`), so a screen element that later shows another name gets a new ref;
   scoped to a window label, so refs change if the meeting window is replaced.
   Without element identity the key is (name, ordinal), trusted only while the
-  count of that name is unchanged. Equal names mark the read `complete: false`
-  in both cases: with element identity two tiles that trade places would swap
-  refs silently. A full identity table (4096) or reference table, or
-  dropping departed people to make room (people still present are never
-  evicted), also marks the read incomplete. The identity table is pruned only
-  after a complete read.
+  count of that name is unchanged. Two people may share a display name (two
+  `iPhone` users): both stay listed with their own refs and the read stays
+  complete, unless refs may have swapped, that is, the elements behind the
+  duplicated name changed in this poll (or, without element identity, the slot's
+  occupant did). If the active-speaker candidate has a shared name, no speaker is
+  reported and the read is incomplete rather than guessed. A full identity table
+  (4096) or reference table, or dropping departed people to make room (people
+  still present are never evicted), also marks the read incomplete. The identity
+  table is pruned only after a complete read.
 - Shutdown and I/O: after `stop`, end of input, a fatal error or a broken stdout,
   queued `capabilities`/`setup`/`start` requests are answered `error`/`cancelled`.
   A broken stdout (failed write, or a hang-up the reader notices while idle) exits
   3 with `stdout_closed` on stderr. The request queue holds 64 requests; beyond
   that a request is refused `busy` and the reader keeps reading, and one request
   is handled per loop turn so polling continues. The reader thread and the stop
-  guard write with a bounded wait (about 100 ms for the writer lock and for the
-  pipe to become writable) so a consumer that stopped reading cannot delay a
-  `stop` or the exit; only the polling thread's ordinary writes may block.
+  guard write with a bounded wait (about 100 ms each for the writer lock and for
+  the pipe to be writable, then 250 ms of immediate give-up), so a wedged
+  consumer delays a `stop` by about 200 ms in total, not per queued reply; only
+  the polling thread's ordinary writes may block. If the guard's closing frame
+  cannot be written it exits 3 and may leave a torn last line. `stopped` echoes
+  the accepted `start`'s session even before its first read ran.
+- Hang-up detection watches stdout only when it is a FIFO (a regular file is
+  always readable, `/dev/null` is invalid for `POLLIN`, and a socket's half-close
+  looks like a hang-up); other kinds are noticed on the next write. Request ids
+  and sessions are limited by JSON-escaped size (128 bytes).
 - Memory: the helper loop is plain C++, so `parse_snapshot`, `comparison_key`,
   the AX reader calls and the attribute conversion each drain their own
-  autorelease pool; tests bound heap growth for the parser (20000 parses) and
+  autorelease pool; tests bound heap growth for the parser (4000 parses) and
   the conversion (200000 calls).
 
 ## Build and packaging notes
@@ -185,7 +205,8 @@ Settings names a command-line helper launched by the service is unverified.
 1. The real tree: roles and descriptions of participant tiles, the active-speaker
    marker, the compact window, and the Participants list, in English and
    Simplified Chinese, with muted and unmuted people, commas in names, and
-   duplicate names. Capture a sanitized diagnostic tree to replace the guessed
+   duplicate names and a nameless status tile in a compact window (which reads as
+   `incomplete_read`). Capture a sanitized diagnostic tree to replace the guessed
    fixtures.
 2. Whether tile descriptions carry the marker at all in gallery, speaker, and
    multi-speaker views, whether a tile without an audio status ever carries the
