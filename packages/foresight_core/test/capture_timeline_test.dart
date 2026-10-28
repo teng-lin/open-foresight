@@ -439,4 +439,62 @@ void main() {
     expect(() => CaptureTimeline(maxRunsPerChannel: 0), throwsArgumentError);
     expect(() => CaptureTimeline(jitterToleranceUs: -1), throwsArgumentError);
   });
+
+  test('a counter reset is detected after history was released or cleared', () {
+    final timeline = CaptureTimeline();
+    second(timeline, mic, 0, startUs: 0);
+    second(timeline, mic, 1, startUs: 1000000);
+    final before = timeline.generation(mic);
+    // Every run released, then the counter restarts: still a reset.
+    timeline.releaseBefore(mic, 1 << 40);
+    expect(timeline.runCount(mic), 0);
+    final result = timeline.addRun(
+      mic,
+      sampleStart: 0,
+      sampleCount: 48000,
+      sampleRate: 48000,
+      startUs: 5000000,
+      endUs: 6000000,
+    );
+    expect(result, CaptureRunResult.counterReset);
+    expect(timeline.generation(mic), before + 1);
+    // Continuing after a release is not a reset.
+    timeline.releaseBefore(mic, 1 << 40);
+    expect(
+      timeline.addRun(
+        mic,
+        sampleStart: 48000,
+        sampleCount: 48000,
+        sampleRate: 48000,
+        startUs: 6000000,
+        endUs: 7000000,
+      ),
+      CaptureRunResult.added,
+    );
+  });
+
+  test('clearing invalidates earlier ranges and generations never go back', () {
+    final timeline = CaptureTimeline();
+    second(timeline, mic, 0, startUs: 0);
+    timeline.addRun(
+      mic,
+      sampleStart: 0,
+      sampleCount: 10,
+      sampleRate: 48000,
+      startUs: 2000000,
+      endUs: 2000300,
+    );
+    final recorded = timeline.generation(mic);
+    expect(recorded, 1);
+    timeline.clear();
+    expect(timeline.generation(mic), greaterThan(recorded));
+    second(timeline, mic, 0, startUs: 9000000);
+    expect(
+      timeline
+          .mapOutcome(mic, sampleStart: 0, sampleEnd: 100, generation: recorded)
+          .miss,
+      TimelineMiss.counterReset,
+    );
+    expect(timeline.generation(mic), greaterThan(recorded));
+  });
 }

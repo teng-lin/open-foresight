@@ -109,6 +109,10 @@ final class _Channel {
   final List<_Run> runs = [];
   int head = 0;
   int resets = 0;
+
+  /// The highest sample ever recorded, kept when history is released so that a
+  /// counter reset is still recognised once every run is gone.
+  int maxSampleEnd = 0;
   bool recorded = false;
   bool pendingDiscontinuity = false;
 
@@ -186,12 +190,13 @@ final class CaptureTimeline {
     channel.recorded = true;
     var previous = channel.last;
     var result = CaptureRunResult.added;
-    if (previous != null && sampleStart < previous.sampleEnd) {
+    if (sampleStart < channel.maxSampleEnd) {
       // Never throw into the capture path: forget what the counter now aliases.
       channel.runs.clear();
       channel
         ..head = 0
         ..resets += 1
+        ..maxSampleEnd = 0
         ..pendingDiscontinuity = false;
       previous = null;
       result = CaptureRunResult.counterReset;
@@ -227,6 +232,7 @@ final class CaptureTimeline {
         gapBeforeUs: discontinuous ? gap : 0,
       ),
     );
+    channel.maxSampleEnd = sampleStart + sampleCount;
     final excess = channel.length - maxRunsPerChannel;
     if (excess > 0) channel.dropHead(excess);
     return result;
@@ -286,7 +292,18 @@ final class CaptureTimeline {
     if (drop > 0) channel.dropHead(drop);
   }
 
-  void clear() => _channels.clear();
+  /// Forget every run. Ranges recorded earlier no longer exist: each channel's
+  /// generation advances, and generations never go back for the timeline's life.
+  void clear() {
+    for (final channel in _channels.values) {
+      channel.runs.clear();
+      channel
+        ..head = 0
+        ..resets += 1
+        ..maxSampleEnd = 0
+        ..pendingDiscontinuity = false;
+    }
+  }
 
   /// How many times the channel's sample counter restarted.
   int counterResets(AudioSource source) => _channels[source]?.resets ?? 0;
