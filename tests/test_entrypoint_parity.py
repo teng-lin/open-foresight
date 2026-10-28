@@ -47,6 +47,11 @@ def inventory(**local_only):
     return result
 
 
+# Gates no workflow step names with a literal stage or suite. Each carries a reason in the inventory; the set is pinned,
+# so a new one fails the guard and a shrinking one makes its declaration stale.
+ACKNOWLEDGED = {"core-stage", "desktop-stage", "native-stage", "service-stage", "integration-virtual-audio"}
+
+
 def test_the_real_gates_and_workflows_agree():
     report = parity.check(ROOT)
     assert report["problems"] == []
@@ -55,7 +60,7 @@ def test_the_real_gates_and_workflows_agree():
     assert all(gate["called_by"] or gate["may_call"] for gate in report["gates"].values() if not gate["local_only"])
     # The one gate no step calls directly: the hosted acceptance-audio job runs it inside a container through
     # tools/linux_acceptance.sh, under a selection variable. That is reported, never counted as a pass.
-    assert report["wiring_unverified"] == ["integration-virtual-audio"]
+    assert report["wiring_unverified"] == sorted(ACKNOWLEDGED)
     assert all("tools/linux_acceptance.sh" in label for label in report["gates"]["integration-virtual-audio"]["may_call"])
     assert any("acceptance-cpu" in label for label in report["gates"]["integration-models"]["may_call"])
     assert parity.main([]) == 0
@@ -70,19 +75,19 @@ def test_a_gate_no_workflow_calls_must_say_why(tmp_path):
 
 
 def test_a_local_only_declaration_a_workflow_now_contradicts_is_stale(tmp_path):
-    root = tree(tmp_path, {"ci.yml": workflow("python tools/check_dart_bindings.py", "bash tools/build.sh")})
+    root = tree(tmp_path, {"ci.yml": workflow("python tools/check_dart_bindings.py", "bash tools/build.sh --stage native")})
     problems = parity.check(root, inventory(**{"native-stage": "never in CI"}))["problems"]
     assert problems == ["gate native-stage: declared local_only but .github/workflows/ci.yml:build calls it; remove the stale declaration"]
 
 
 @pytest.mark.parametrize("reason", ["", "   ", 7])
 def test_local_only_needs_a_reason(tmp_path, reason):
-    root = tree(tmp_path, {"ci.yml": workflow("python tools/check_dart_bindings.py", "bash tools/build.sh")})
+    root = tree(tmp_path, {"ci.yml": workflow("python tools/check_dart_bindings.py", "bash tools/build.sh --stage native")})
     assert "gate bindings-check: local_only needs a reason" in parity.check(root, inventory(**{"bindings-check": reason}))["problems"]
 
 
 def test_a_workflow_calling_a_script_that_does_not_exist_is_reported(tmp_path):
-    root = tree(tmp_path, {"ci.yml": workflow("bash tools/build.sh", "python tools/check_dart_bindings.py", "python tools/gone.py", "python -m tools.also_gone")})
+    root = tree(tmp_path, {"ci.yml": workflow("bash tools/build.sh --stage native", "python tools/check_dart_bindings.py", "python tools/gone.py", "python -m tools.also_gone")})
     problems = parity.check(root, inventory())["problems"]
     assert any("tools/gone.py, which does not exist" in problem for problem in problems)
     assert any("tools/also_gone.py, which does not exist" in problem for problem in problems)
@@ -90,7 +95,7 @@ def test_a_workflow_calling_a_script_that_does_not_exist_is_reported(tmp_path):
 
 def test_python_module_invocations_and_composite_actions_count_as_calls(tmp_path):
     action = "runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: python -m tools.check_dart_bindings\n"
-    root = tree(tmp_path, {"ci.yml": workflow("bash tools/build.sh", uses=["./.github/actions/bindings"])}, {"bindings": action})
+    root = tree(tmp_path, {"ci.yml": workflow("bash tools/build.sh --stage native", uses=["./.github/actions/bindings"])}, {"bindings": action})
     report = parity.check(root, inventory())
     assert report["problems"] == []
     assert report["gates"]["bindings-check"]["called_by"] == [".github/actions/bindings/action.yml:(action)"]
@@ -116,7 +121,7 @@ def test_anything_that_does_not_parse_into_the_expected_shape_fails_closed(tmp_p
 
 def test_a_reusable_workflow_call_has_no_steps_and_is_not_a_problem(tmp_path):
     reusable = "on: push\njobs:\n  call:\n    uses: ./.github/workflows/other.yml\n"
-    root = tree(tmp_path, {"a.yml": reusable, "b.yml": workflow("bash tools/build.sh", "python tools/check_dart_bindings.py")})
+    root = tree(tmp_path, {"a.yml": reusable, "b.yml": workflow("bash tools/build.sh --stage native", "python tools/check_dart_bindings.py")})
     assert parity.check(root, inventory())["problems"] == []
 
 
@@ -127,7 +132,7 @@ def test_a_tree_with_no_workflows_cannot_pass_vacuously(tmp_path):
 
 
 def test_inline_test_runners_are_reported_but_never_fail(tmp_path, capsys):
-    root = tree(tmp_path, {"ci.yml": workflow("bash tools/build.sh", "python tools/check_dart_bindings.py", "dart test test/a_test.dart", "flutter test && ctest --test-dir build")})
+    root = tree(tmp_path, {"ci.yml": workflow("bash tools/build.sh --stage native", "python tools/check_dart_bindings.py", "dart test test/a_test.dart", "flutter test && ctest --test-dir build")})
     report = parity.check(root, inventory())
     assert report["problems"] == []
     assert {item["runner"] for item in report["inline_runners"]} == {"dart test", "flutter test", "ctest"}
@@ -188,7 +193,6 @@ def test_mentions_comments_quoted_strings_and_other_stages_are_not_calls(tmp_pat
         "echo start && bash tools/build.sh --stage native",
         "bash tools/build.sh --stage native # trailing comment is fine",
         "bash tools/build.sh \\\n  --platform linux \\\n  --stage native",
-        "bash tools/build.sh",
         "bash tools/build.sh --stage all",
         "bash ./tools/build.sh --stage native",
     ],
@@ -345,11 +349,12 @@ def test_heredoc_bodies_and_build_only_runs_are_not_calls(tmp_path, command):
     [
         "bash <<'EOF'\nbash tools/build.sh --stage native\nEOF",
         "sh <<EOF\nbash tools/build.sh --stage native\nEOF",
-        "cat <<EOF | bash\nbash tools/build.sh --stage native\nEOF\nbash tools/build.sh --stage native",
+        "sudo bash <<-EOF\n\tbash tools/build.sh --stage native\n\tEOF",
     ],
 )
-def test_a_heredoc_fed_to_a_shell_does_run_its_body(tmp_path, command):
-    assert calling(tmp_path, command, extra=NATIVE)["gates"]["native-stage"]["called_by"]
+def test_a_heredoc_fed_to_a_shell_is_may_call_never_a_direct_call(tmp_path, command):
+    gate = calling(tmp_path, command, extra=NATIVE)["gates"]["native-stage"]
+    assert gate["called_by"] == [] and gate["may_call"] == [".github/workflows/ci.yml:build via <heredoc>"]
 
 
 def test_text_after_a_heredoc_is_still_read(tmp_path):
@@ -385,7 +390,7 @@ def dispatched(tmp_path, argument):
     root = tree(tmp_path, {"ci.yml": workflow(f"bash tools/d.sh {argument}")}, scripts=("tools/build.sh", "tools/check_dart_bindings.py"))
     (root / "tools/d.sh").write_text(DISPATCHER)
     stages = ("package", "native", "core", "desktop", "hidden", "function")
-    gates = {name: {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", name], "wiring_unverified": "dispatcher"} for name in stages}
+    gates = {name: {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", name], "wiring_unverified_reason": "dispatcher"} for name in stages}
     return parity.check(root, {"gates": gates})
 
 
@@ -404,7 +409,7 @@ def test_a_one_line_false_if_or_an_exit_in_a_case_arm_cannot_hide_later_commands
     script = "if false; then echo skipped; fi\ncase $1 in a) exit 0 ;; esac\nf() { exit 1; }\nfor i in 1; do exit 2; done\nbash tools/build.sh --stage native\n"
     root = tree(tmp_path, {"ci.yml": workflow("bash tools/d.sh a")})
     (root / "tools/d.sh").write_text(script)
-    gates = {"native-stage": {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", "native"], "wiring_unverified": "via d.sh"}}
+    gates = {"native-stage": {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", "native"], "wiring_unverified_reason": "via d.sh"}}
     report = parity.check(root, {"gates": gates})
     assert report["gates"]["native-stage"]["may_call"] == [".github/workflows/ci.yml:build via tools/d.sh"]
     assert report["wiring_unverified"] == ["native-stage"] and report["problems"] == []
@@ -492,21 +497,22 @@ def test_an_unreadable_script_is_a_problem_not_silence(tmp_path):
 def test_wiring_unverified_must_be_acknowledged_and_must_not_go_stale(tmp_path):
     undeclared = tree(tmp_path / "a", {"ci.yml": workflow('bash tools/build.sh --stage "$S"')})
     problems = parity.check(undeclared, inventory(**NATIVE))["problems"]
-    assert problems == ["gate native-stage: only a script or a variable may call it (.github/workflows/ci.yml:build); call it directly or declare wiring_unverified with a reason"]
-    declared = {"gates": {"native-stage": {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", "native"], "wiring_unverified": "reviewed"}}}
+    assert problems == ["gate native-stage: only a script or a variable may call it (.github/workflows/ci.yml:build); call it directly or declare wiring_unverified_reason"]
+    declared = {"gates": {"native-stage": {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", "native"], "wiring_unverified_reason": "reviewed"}}}
     assert parity.check(undeclared, declared)["problems"] == []
     direct = tree(tmp_path / "b", {"ci.yml": workflow("bash tools/build.sh --stage native")})
-    assert parity.check(direct, declared)["problems"] == ["gate native-stage: declared wiring_unverified but it now has direct evidence or none; remove the stale declaration"]
+    assert parity.check(direct, declared)["problems"] == ["gate native-stage: declared wiring_unverified_reason but it now has direct evidence or none; remove the stale declaration"]
     for reason in ("", "  ", 7):
-        blank = {"gates": {"native-stage": {**declared["gates"]["native-stage"], "wiring_unverified": reason}}}
-        assert "gate native-stage: wiring_unverified needs a reason" in parity.check(undeclared, blank)["problems"]
+        blank = {"gates": {"native-stage": {**declared["gates"]["native-stage"], "wiring_unverified_reason": reason}}}
+        assert "gate native-stage: wiring_unverified_reason needs a reason" in parity.check(undeclared, blank)["problems"]
 
 
 def test_the_real_tree_acknowledges_exactly_the_unverified_gates_it_has():
     report = parity.check(ROOT)
     assert report["problems"] == []
-    assert report["wiring_unverified"] == ["integration-virtual-audio"]
-    assert [name for name, gate in report["gates"].items() if gate["declared_unverified"]] == ["integration-virtual-audio"]
+    assert report["wiring_unverified"] == sorted(ACKNOWLEDGED)
+    assert sorted(name for name, gate in report["gates"].items() if gate["declared_unverified"]) == sorted(ACKNOWLEDGED)
+    assert all(report["gates"][name]["called_by"] == [] for name in ACKNOWLEDGED)
 
 
 def test_a_build_only_call_does_not_satisfy_a_stage_but_a_gate_that_asks_for_it_is_satisfied(tmp_path):
@@ -665,3 +671,120 @@ def test_may_call_evidence_is_in_the_default_output_not_only_in_json(tmp_path, c
     third = tree(tmp_path / "third", {"ci.yml": two_jobs})
     assert parity.main([], root=third) in (0, 1)
     assert "May also run (not verified): native-stage" in capsys.readouterr().out
+
+
+# ------------------------------------------------- review round 6: heads, dead code, heredoc recognition, missing stage
+
+@pytest.mark.parametrize(
+    "command",
+    ["bash tools/build.sh", "bash tools/build.sh --platform linux -G Ninja", "xvfb-run -a bash tools/build.sh --platform linux"],
+)
+def test_a_missing_stage_is_evidence_never_an_exact_call(tmp_path, command):
+    gate = calling(tmp_path, command, extra=NATIVE)["gates"]["native-stage"]
+    assert gate["called_by"] == [] and gate["may_call"] == [".github/workflows/ci.yml:build"] and gate["wiring_unverified"] is True
+    # Other discriminators never get that allowance: a missing --suite does not satisfy a suite gate.
+    suite = {"gates": {"fast": {"kind": "command", "argv": ["{python}", "tools/integration_gates.py", "--suite", "fast"]}}}
+    root = tree(tmp_path / "suite", {"ci.yml": workflow("python tools/integration_gates.py")}, scripts=("tools/integration_gates.py",))
+    assert parity.check(root, suite)["gates"]["fast"]["may_call"] == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "false && tools/build.sh --stage native",
+        "false && echo x && tools/build.sh --stage native",
+        "true || tools/build.sh --stage native",
+        ": || bash tools/build.sh --stage native",
+        "exit 0\nbash tools/build.sh --stage native",
+        "echo start\nexit 1\nbash tools/build.sh --stage native",
+        "exit 0; bash tools/build.sh --stage native",
+        "if false; then bash tools/build.sh --stage native; fi",
+        "if false\nthen\n  bash tools/build.sh --stage native\nfi",
+        "if false; then\n  if true; then bash tools/build.sh --stage native; fi\nfi",
+        "if false; then for i in 1; do bash tools/build.sh --stage native; done; fi",
+        "if x; then echo a; fi\nexit 0\nbash tools/build.sh --stage native",  # a closed block leaves the exit at the top level
+        "if false; then\n  if x; then echo a; else echo b; fi\n  bash tools/build.sh --stage native\nfi",  # a nested else does not end the dead branch
+    ],
+)
+def test_commands_that_provably_cannot_run_in_a_step_are_not_calls(tmp_path, command):
+    gate = calling(tmp_path, command, extra=NATIVE)["gates"]["native-stage"]
+    assert gate["called_by"] == [] and gate["may_call"] == [], command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "false || bash tools/build.sh --stage native",
+        "false; bash tools/build.sh --stage native",
+        "false && echo a; echo b && bash tools/build.sh --stage native",  # the short-circuit ends with its chain
+        "true && bash tools/build.sh --stage native",
+        "true; bash tools/build.sh --stage native",
+        "if [ -f x ]; then exit 0; fi\nbash tools/build.sh --stage native",
+        "test -f x || exit 1\nbash tools/build.sh --stage native",
+        "f() { exit 1; }\nbash tools/build.sh --stage native",
+        "for i in 1; do exit 2; done\nbash tools/build.sh --stage native",
+        "case $x in a) exit 0 ;; esac\nbash tools/build.sh --stage native",
+        "(exit 0)\nbash tools/build.sh --stage native",
+        "{ exit 0; }\nbash tools/build.sh --stage native",
+        "if false; then echo no; else bash tools/build.sh --stage native; fi",
+        "if false; then echo no; elif true; then bash tools/build.sh --stage native; fi",
+        "if false; then echo no; fi\nbash tools/build.sh --stage native",
+        "if true; then bash tools/build.sh --stage native; fi",
+        "if [ x ]; then if false; then echo; fi; bash tools/build.sh --stage native; fi",
+    ],
+)
+def test_dead_code_pruning_stops_at_the_branch_it_proves_and_no_further(tmp_path, command):
+    assert calling(tmp_path, command, extra=NATIVE)["gates"]["native-stage"]["called_by"] == [".github/workflows/ci.yml:build"], command
+
+
+def test_scripts_and_heredoc_bodies_are_never_pruned(tmp_path):
+    root = tree(tmp_path, {"ci.yml": workflow("bash tools/d.sh")})
+    (root / "tools/d.sh").write_text("exit 0\nfalse && bash tools/build.sh --stage native\nif false; then bash tools/build.sh --stage native; fi\n")
+    gate = parity.check(root, inventory(**NATIVE))["gates"]["native-stage"]
+    assert gate["called_by"] == [] and gate["may_call"] == [".github/workflows/ci.yml:build via tools/d.sh"]
+    assert parity.calls_in("exit 0\nbash tools/build.sh", prune=False) == [("tools/build.sh", ())]
+    assert parity.calls_in("exit 0\nbash tools/build.sh") == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'echo "a <<EOF"\nbash tools/build.sh --stage native\nEOF',
+        "echo 'a <<EOF'\nbash tools/build.sh --stage native\nEOF",
+        "echo $((1<<EOF))\nbash tools/build.sh --stage native\nEOF",
+        "(( x = 1<<EOF ))\nbash tools/build.sh --stage native\nEOF",
+        "cat <<<EOF\nbash tools/build.sh --stage native\nEOF",
+        "# cat <<EOF\nbash tools/build.sh --stage native\nEOF",
+        "echo a\\<<EOF\nbash tools/build.sh --stage native",
+        "echo 1<<2\nbash tools/build.sh --stage native",
+    ],
+)
+def test_a_heredoc_opens_only_outside_quotes_comments_and_arithmetic(tmp_path, command):
+    assert calling(tmp_path, command, extra=NATIVE)["gates"]["native-stage"]["called_by"] == [".github/workflows/ci.yml:build"], command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat <<EOF\nbash tools/build.sh --stage native\nEOF",
+        'echo "x" <<EOF\nbash tools/build.sh --stage native\nEOF',
+        "cat <<'EOF'\nbash tools/build.sh --stage native\nEOF",
+        'cat <<"EOF" > f\nbash tools/build.sh --stage native\nEOF',
+        "cat <<-EOF\n\tbash tools/build.sh --stage native\n\tEOF",
+        "echo $((1<<2)) && cat <<EOF\nbash tools/build.sh --stage native\nEOF",
+    ],
+)
+def test_a_real_heredoc_body_is_still_skipped(tmp_path, command):
+    gate = calling(tmp_path, command, extra=NATIVE)["gates"]["native-stage"]
+    assert gate["called_by"] == [] and gate["may_call"] == [], command
+
+
+def test_find_heredoc_reports_where_the_delimiter_and_tab_stripping_are():
+    assert parity._find_heredoc("cat <<EOF") == (4, False, "EOF")
+    assert parity._find_heredoc('cat <<<"x"; cat <<EOF') == (16, False, "EOF")  # a here-string does not hide a later heredoc
+    assert parity._find_heredoc("cat <<-'X Y'") == (4, True, "X Y")
+    assert parity._find_heredoc('cat <<  "EOF" | sh') == (4, False, "EOF")
+    for line in ('echo "<<EOF"', "echo <<<EOF", "echo 1<<2", "cat <<'unterminated", "x=$((1<<3))", "# <<EOF", "(( 1<<EOF ))", "echo $((1<<2"):
+        assert parity._find_heredoc(line) is None, line
+    assert parity.split_heredocs("sh <<E\nbash tools/a.sh\nE\nz") == ("sh \nz", ["bash tools/a.sh"])
+    assert parity.split_heredocs("cat <<E\nbody\nE") == ("cat ", [])

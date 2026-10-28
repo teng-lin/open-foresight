@@ -488,8 +488,8 @@ def test_local_only_must_carry_a_reason(export, editable):
 
 def test_wiring_unverified_must_carry_a_reason(export, editable):
     def blank(data):
-        data["gates"]["integration-virtual-audio"]["wiring_unverified"] = " "
+        data["gates"]["integration-virtual-audio"]["wiring_unverified_reason"] = " "
 
     editable("tools/boundary_inventory.json", blank)
-    failing(export, "gate integration-virtual-audio: wiring_unverified needs a reason")
-    assert inventory.load(ROOT)["gates"]["integration-virtual-audio"]["wiring_unverified"].strip()
+    failing(export, "gate integration-virtual-audio: wiring_unverified_reason needs a reason")
+    assert inventory.load(ROOT)["gates"]["integration-virtual-audio"]["wiring_unverified_reason"].strip()

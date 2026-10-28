@@ -144,7 +144,8 @@ def load_gates(root: Path = validation_evidence.ROOT) -> dict[str, list[str]]:
 
 
 _PLACEHOLDERS = {
-    "python": r"(?:[^\s|;&<>$`'\"]*/)?python[0-9.]*",
+    # An absolute path without `~`, or exactly the repository's virtual environment: never a relative path.
+    "python": r"/(?:[^\s|;&<>$`'\"~]*/)?python[0-9.]*|\.venv/bin/python",
     "platform": r"linux|macos",
 }
 _DEFAULT_PLACEHOLDER = r"[^\s|;&<>$`'\"]{1,512}"

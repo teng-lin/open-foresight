@@ -182,8 +182,9 @@ quote packet strings. A packet cannot forge report lines or terminal sequences. 
 command is offered only for `tools.validate_change`, the one entrypoint that
 records packets, and a failed check's entrypoint only when it matches that gate's
 definition in the boundary inventory (`{python}` must be an interpreter named
-python or python3.N with no spaces or shell metacharacters, outside the temporary
-directories (including `/var/folders` and the packet's own recorded `TMPDIR` and
+python or python3.N given as an absolute path (no `~`, no spaces or shell
+metacharacters) or exactly `.venv/bin/python`, never a relative path or a bare
+name, and outside the temporary directories (including `/var/folders` and the packet's own recorded `TMPDIR` and
 test temp root); `{platform}` linux or macos; other placeholders printable paths of
 bounded length without whitespace, shell metacharacters, `..` or a leading
 `/tmp`); otherwise the report says "unrecorded". The packet must be a regular file under 8 MiB with correctly typed
@@ -215,9 +216,17 @@ document is fed to a shell). A path with `..` is never a script. A step or job w
 never runs and calls nothing. A workflow counts only if something can trigger it (a `workflow_call`-only workflow
 counts only when a triggered workflow calls it), and a composite action only if a
 reachable workflow or action `uses:` it. A gate
-with a `--stage` or `--suite` is satisfied by a call with that value (a
-`build.sh` call with no `--stage`, or `all`, covers every stage); a `--build-only`
+with a `--stage` or `--suite` is satisfied by a call with that value (`--stage
+all` covers every stage); a `build.sh` call with no `--stage` runs every stage but
+names none, so it is `may_call` evidence, never an exact call; a `--build-only`
 call builds and runs no tests, so it satisfies no gate that does not ask for it.
+In a step's own text the guard drops commands that provably cannot run, and
+nothing else about control flow: those after a top-level `exit` (not one inside an
+`if`, `case`, loop, group, function or after `||`), those joined to a bare `false`
+by `&&` or a bare `true`/`:` by `||`, and the body of `if false`. A here-document
+opens only outside quotes, comments and arithmetic (`$(( 1<<2 ))`, `<<<`), and its
+body is skipped, except that a body fed to a shell is read as `may_call` (via
+`<heredoc>`), never as a direct call.
 
 Evidence comes in two strengths. `called_by` lists the steps that call the gate's
 script directly with its own literal `--stage`/`--suite`. `may_call` lists weaker
@@ -231,13 +240,17 @@ every step that calls it (on the current tree `acceptance-deb` and
 is read once per step however often it is reached, and heredoc bodies are
 skipped. A gate with only `may_call` evidence is **wiring unverified**: it is
 listed in the default output and in `--json`, it is never counted as a pass, and
-it must be acknowledged with a `wiring_unverified` reason in the inventory. A new
+it must be acknowledged with a `wiring_unverified_reason` on the gate in the
+inventory. A new
 unverified gate therefore fails the guard, and an acknowledged gate that gains a
-direct caller is a stale declaration. On the current tree that is
-`integration-virtual-audio` alone (a test pins the set): only
-`bash tools/linux_acceptance.sh audio` (the `acceptance-audio` job and the weekly
-audit) really runs it, inside a container and only when the audio selection
-variable allows it; the guard cannot confirm which branch runs. Gates that also
+direct caller is a stale declaration. On the current tree that is five gates (a test pins the set).
+`integration-virtual-audio` runs only through `bash tools/linux_acceptance.sh
+audio` (the `acceptance-audio` job and the weekly audit), inside a container and
+only when the audio selection variable allows it. `core-stage`, `desktop-stage`,
+`native-stage` and `service-stage` are run by `arch-drift.yml` (`build.sh
+--platform linux` with no `--stage`, so every stage) and by `macos.yml` (the stage
+comes from the matrix variable `MACOS_CHECK_STAGE`, which the guard does not
+resolve). The guard cannot confirm which branch or stage runs. Gates that also
 have a direct caller print their `may_call` entries as "May also run (not
 verified)". Hard limits (256 KiB and 5000 lines per script, 200 scripts and 5000
 calls per step, 1 MiB per workflow) are problems when hit, never silent

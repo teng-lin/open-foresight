@@ -25,7 +25,7 @@ from a shell variable. Script-mediated calls are over-approximated, not
 evaluated: every command in a called script counts, whatever branch, loop or
 function it sits in, and each script is read once per step. A gate whose only
 evidence is `may_call` is wiring-unverified: it is listed in the output and must
-be acknowledged with a `wiring_unverified` reason in the inventory, so a new
+be acknowledged with a `wiring_unverified_reason` in the inventory, so a new
 unverified gate fails the guard and an acknowledged one that gains a direct
 caller is a stale declaration. Hard limits (script size and lines, scripts and
 calls per step, workflow size) are problems when hit, never silent truncation.
@@ -61,7 +61,6 @@ _INLINE = re.compile(r"(?<![\w./-])(dart test|flutter test|ctest|pytest|python[\
 _OPERATORS = {";", "&&", "||", "|", "|&", "&", "(", ")", ";;", "{", "}"}
 _KEYWORDS = {"if", "then", "elif", "else", "do", "while", "until", "!", "fi", "done", "time"}
 _DISCRIMINATORS = ("--stage", "--suite")
-_HEREDOC = re.compile(r"<<(-?)\s*(?:'([^']+)'|\"([^\"]+)\"|([A-Za-z_][A-Za-z0-9_]*))")
 _SHELL_FEED = re.compile(r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:sudo\s+|exec\s+|env\s+)?(?:bash|sh|zsh|dash|source|\.)\b")
 _FALSE = {"false", "${{ false }}", "${{false}}", "0"}
 
@@ -232,9 +231,64 @@ def _reachable(parsed: Parsed) -> set[str]:
     return reachable
 
 
-def strip_heredocs(text: str) -> str:
-    """The text without here-document bodies, except those fed to a shell (which runs them)."""
+def _find_heredoc(line: str) -> tuple[int, bool, str] | None:
+    """(start, strips tabs, delimiter) of a here-document opened on [line], or None.
+
+    `<<` counts only outside quotes, comments and arithmetic (`$(( 1<<2 ))`,
+    `(( x<<2 ))`), and never as the here-string `<<<`.
+    """
+    quote: str | None = None
+    word_start = True
+    index = 0
+    length = len(line)
+    while index < length:
+        char = line[index]
+        if quote is not None:
+            if char == "\\" and quote == '"':
+                index += 1
+            elif char == quote:
+                quote = None
+        elif char == "\\":
+            index += 1
+            word_start = False
+        elif char in "'\"":
+            quote = char
+            word_start = False
+        elif char == "#" and word_start:
+            return None
+        elif line.startswith("$((", index) or (word_start and line.startswith("((", index)):
+            end = line.find("))", index + 2)
+            if end < 0:
+                return None
+            index = end + 1
+            word_start = False
+        elif line.startswith("<<<", index):
+            index += 2
+        elif line.startswith("<<", index):
+            cursor = index + 2
+            strip_tabs = cursor < length and line[cursor] == "-"
+            cursor += strip_tabs
+            while cursor < length and line[cursor] in " \t":
+                cursor += 1
+            if cursor < length and line[cursor] in "'\"":
+                end = line.find(line[cursor], cursor + 1)
+                return (index, strip_tabs, line[cursor + 1 : end]) if end > 0 else None
+            word = re.match(r"[A-Za-z_][A-Za-z0-9_]*", line[cursor:])
+            return (index, strip_tabs, word.group(0)) if word else None
+        else:
+            word_start = char in " \t;&|()"
+        index += 1
+    return None
+
+
+def split_heredocs(text: str) -> tuple[str, list[str]]:
+    """(the text without here-document bodies, the bodies fed to a shell).
+
+    A body fed to a shell is run by it, but only as an over-approximation: the
+    caller treats its commands as may_call, never as direct calls.
+    """
     kept: list[str] = []
+    bodies: list[str] = []
     delimiter: str | None = None
     strip_tabs = False
     feeds_shell = False
@@ -243,16 +297,20 @@ def strip_heredocs(text: str) -> str:
             if (line.lstrip("\t") if strip_tabs else line) == delimiter:
                 delimiter = None
             elif feeds_shell:
-                kept.append(line)
+                bodies.append(line)
             continue
-        found = _HEREDOC.search(line)
+        found = _find_heredoc(line)
         if found:
-            delimiter = found.group(2) or found.group(3) or found.group(4)
-            strip_tabs = found.group(1) == "-"
+            start, strip_tabs, delimiter = found
             feeds_shell = bool(_SHELL_FEED.match(line))
-            line = line[: found.start()]
+            line = line[:start]
         kept.append(line)
-    return "\n".join(kept)
+    return "\n".join(kept), ["\n".join(bodies)] if bodies else []
+
+
+def strip_heredocs(text: str) -> str:
+    """The text without here-document bodies."""
+    return split_heredocs(text)[0]
 
 
 _PUNCTUATION = ";()<>|&\n"
@@ -309,30 +367,37 @@ def strip_comments(text: str) -> str:
     return "".join(out)
 
 
-def command_segments(text: str) -> list[list[str]]:
-    """Commands of a shell text, comments stripped and quotes honored; the text is lexed once.
+def command_stream(text: str) -> list[tuple[tuple[str, ...], list[str]]]:
+    """(separators before, command) for each command of a shell text; the text is lexed once.
 
-    Line continuations are joined. Text shlex cannot read (an unclosed quote) is
-    split on whitespace and operators instead, so a hostile file costs one extra
-    linear pass and never a re-lex per line.
+    Comments are stripped and quotes honored. Line continuations are joined. Text
+    shlex cannot read (an unclosed quote) is split on whitespace and operators
+    instead, so a hostile file costs one extra linear pass and never a re-lex per
+    line.
     """
     cleaned = strip_comments(strip_heredocs(text).replace("\\\n", " "))
     try:
         tokens = _tokens(cleaned)
     except ValueError:
         tokens = _loose_tokens(cleaned)
-    segments: list[list[str]] = []
+    stream: list[tuple[tuple[str, ...], list[str]]] = []
     current: list[str] = []
+    separators: list[str] = []
     for token in tokens:
         if token in _OPERATORS or ("\n" in token and set(token) <= set(_PUNCTUATION)):
             if current:
-                segments.append(current)
-            current = []
+                stream.append((tuple(separators), current))
+                current, separators = [], []
+            separators.append(token.strip("\n") or "\n")
         else:
             current.append(token)
     if current:
-        segments.append(current)
-    return segments
+        stream.append((tuple(separators), current))
+    return stream
+
+
+def command_segments(text: str) -> list[list[str]]:
+    return [segment for _separators, segment in command_stream(text)]
 
 
 _SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
@@ -388,16 +453,63 @@ def _runs_script(segment: Sequence[str], index: int) -> bool:
     return runner.rsplit("/", 1)[-1] in _WRAPPERS
 
 
-def calls_in(text: str) -> list[tuple[str, tuple[str, ...]]]:
-    """(script, arguments after it) for each repository script a command executes."""
-    found = []
-    for segment in command_segments(text):
+_OPENERS = {"if", "case", "for", "while", "until", "select"}
+_CLOSERS = {"fi", "esac", "done"}
+
+
+def calls_in(text: str, prune: bool = True) -> list[tuple[str, tuple[str, ...]]]:
+    """(script, arguments after it) for each repository script a command executes.
+
+    With [prune] (the state below only ever changes then), commands that provably cannot run are dropped: those after a
+    top-level `exit`, those joined to a bare `false` by `&&` or to a bare `true`
+    by `||`, and the body of `if false`. That is all the guard decides about
+    control flow; it is for a step's own text. A called script is read with
+    [prune] off, because over-approximating is the contract there.
+    """
+    found: list[tuple[str, tuple[str, ...]]] = []
+    depth = 0
+    open_groups = {"(": 0, "{": 0}
+    dead = False
+    skip_joiner: str | None = None
+    false_if_depth: int | None = None
+    for separators, segment in command_stream(text):
+        for separator in separators:
+            if separator in open_groups:
+                open_groups[separator] += 1
+                depth += 1
+            elif separator in (")", "}"):
+                opener = "(" if separator == ")" else "{"
+                if open_groups[opener]:  # an unmatched `)` ends a case pattern, not a group
+                    open_groups[opener] -= 1
+                    depth = max(0, depth - 1)
+        head = segment[0]
+        joiner = separators[-1] if separators and separators[-1] in ("&&", "||") else None
+        if false_if_depth is not None and depth == false_if_depth and head in ("fi", "else", "elif"):
+            false_if_depth = None  # the dead branch ends; an else or elif may run
+        if head in _CLOSERS:
+            depth = max(0, depth - 1)
+            continue
+        opens = head in _OPENERS
+        if dead or false_if_depth is not None or (skip_joiner is not None and joiner == skip_joiner):
+            depth += opens
+            continue
+        skip_joiner = None
         for index, token in enumerate(segment):
             path = _PATH.match(token)
             if path and ".." not in path.group(1).split("/") and _runs_script(segment, index):
                 found.append((path.group(1), tuple(segment[index + 1 :])))
             elif index and segment[index - 1] == "-m" and _MODULE.match(token) and _runs_script(segment, index - 1):
                 found.append((token.replace(".", "/") + ".py", tuple(segment[index + 1 :])))
+        if prune:
+            if segment == ["false"]:
+                skip_joiner = "&&"
+            elif segment in (["true"], [":"]):
+                skip_joiner = "||"
+            elif head == "exit" and depth == 0 and joiner is None:
+                dead = True
+            elif segment == ["if", "false"]:
+                false_if_depth = depth + 1
+        depth += opens
     return found
 
 
@@ -438,10 +550,12 @@ def collect(runs: Sequence[Run], root: Path = ROOT) -> tuple[list[Call], list[st
     for run in runs:
         found = 0
         scripts: set[str] = set()
-        queue: deque[tuple[str, str | None]] = deque([(run.text, None)])
+        main, bodies = split_heredocs(run.text)
+        # A step's own text is pruned; a script and a here-document fed to a shell are not (over-approximation).
+        queue: deque[tuple[str, str | None, bool]] = deque([(main, None, True), *((body, "<heredoc>", False) for body in bodies)])
         while queue:
-            text, via = queue.popleft()
-            for script, args in calls_in(text):
+            text, via, prune = queue.popleft()
+            for script, args in calls_in(text, prune):
                 if found >= MAX_CALLS_PER_STEP:
                     problems.append(f"{run.job}: step {run.step!r} makes more than {MAX_CALLS_PER_STEP} calls; the analysis stopped (wiring unverified)")
                     queue.clear()
@@ -459,7 +573,9 @@ def collect(runs: Sequence[Run], root: Path = ROOT) -> tuple[list[Call], list[st
                 if problem:
                     problems.append(f"{run.job}: step {run.step!r}: {script} {problem} (wiring unverified)")
                 else:
-                    queue.append((cast(str, body), script))
+                    main, bodies = split_heredocs(cast(str, body))
+                    queue.append((main, script, False))
+                    queue.extend((fed, script, False) for fed in bodies)
     return calls, problems
 
 
@@ -499,7 +615,8 @@ def satisfies(call: Call, script: str, argv: Sequence[str]) -> str | None:
         given = _flag_values(call.args, flag)
         if not given:
             if script == "tools/build.sh" and flag == "--stage":
-                continue  # build.sh runs every stage when none is named
+                result = "ambiguous"  # build.sh runs every stage when none is named: evidence, never an exact call
+                continue
             return None
         if wanted[0] in given or (script == "tools/build.sh" and "all" in given):
             continue
@@ -534,17 +651,17 @@ def check(root: Path = ROOT, inventory: Mapping[str, Any] | None = None) -> dict
         may_call = sorted(label for label, direct in evidence.items() if not direct)
         local_only = gate.get("local_only")
         unverified = local_only is None and not called_by and bool(may_call)
-        declared = gate.get("wiring_unverified")
+        declared = gate.get("wiring_unverified_reason")
         gates[name] = {
             "scripts": scripts, "called_by": called_by, "may_call": may_call,
             "wiring_unverified": unverified, "local_only": local_only, "declared_unverified": declared,
         }
         if declared is not None and (not isinstance(declared, str) or not declared.strip()):
-            problems.append(f"gate {name}: wiring_unverified needs a reason")
+            problems.append(f"gate {name}: wiring_unverified_reason needs a reason")
         elif declared is not None and not unverified:
-            problems.append(f"gate {name}: declared wiring_unverified but it now has direct evidence or none; remove the stale declaration")
+            problems.append(f"gate {name}: declared wiring_unverified_reason but it now has direct evidence or none; remove the stale declaration")
         elif unverified and declared is None:
-            problems.append(f"gate {name}: only a script or a variable may call it ({may_call[0]}); call it directly or declare wiring_unverified with a reason")
+            problems.append(f"gate {name}: only a script or a variable may call it ({may_call[0]}); call it directly or declare wiring_unverified_reason")
         if local_only is not None and (not isinstance(local_only, str) or not local_only.strip()):
             problems.append(f"gate {name}: local_only needs a reason")
         elif local_only is not None and called_by:
