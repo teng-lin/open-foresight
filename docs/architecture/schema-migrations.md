@@ -66,8 +66,9 @@ the schema.
 | 22 | Meeting transcript index outbox: source mapping, progress, changes, segments, deletes, batches, triggers, `source_contents` view and lookup indexes |
 | 23 | Typed answer metadata, conversation and proactive scopes, and ordered source selections with foreign keys; malformed and orphan legacy values use a bounded compatibility quarantine |
 | 24 | Durable recording sessions/spans, preallocated chunk publication identities, representations, segmentation cursors, ASR leases/jobs, transcript audio links, reader references and media deletion/generation fences |
+| 25 | Meeting-local `meeting_participants`, nullable `transcript_attributions` (participant reference, display-name snapshot, state, method, parser/policy version, bounded timing evidence, manual flag), attribution revision/reprojection/erasure triggers and a `source_contents` view that renders supported names; historical meetings gain no rows |
 
-`ApplicationMigrations.run` defines steps 1–24 and throws for any other
+`ApplicationMigrations.run` defines steps 1–25 and throws for any other
 version. `Store.schemaVersion` aliases `applicationSchemaVersion` from
 `persistence/application_schema.dart`; `tools/check_architecture_facts.py`
 checks this table against the defined steps.
@@ -90,6 +91,25 @@ closure, refresh/rebase rather than choosing an older source. After introduction
 CI executes the reviewed-main checker and preserves the existing main manifest
 prefix. `tool/migration_guard.dart` uses already locked analyzer 12.1.0 and crypto
 3.0.7; the exact direct development promotion changes no resolved SDK/tool version.
+
+Step 25 stores Zoom speaker attribution beside, never inside, transcript rows.
+`transcript.source` and the public `speaker_id` keep meaning the audio channel.
+An attribution is optional (historical rows have none) and is written with its
+transcript row in the existing retry transaction; a rejected attribution rolls
+back only itself. Automatic observation can neither replace nor, through a
+database trigger, downgrade a manual row; only a manual write or an explicit
+reset changes it. A changed attribution bumps the meeting revision, and a
+changed rendered name also marks the source pending, retires the row's derived
+pieces and journals only that row for reprojection, using the same invalidation
+as a transcript edit. Roster refreshes touch only `meeting_participants` and
+reindex nothing; an observed rename updates the participant and its rename
+tracking but leaves each row's name snapshot unchanged. Names are untrusted:
+`rendered_name` is a one-line derived label (brackets replaced, whitespace
+collapsed, 120 characters) shared by the view and the projection, while
+`display_name` stays verbatim. Deleting a transcript row cascades its
+attribution, deleting a participant clears only the reference, and workspace
+clear and backup erasure treat both tables as workspace content. The
+pre-upgrade snapshot of a version-24 profile contains neither table.
 
 Step 17 keeps legacy JSON names in first-occurrence order, intentionally removes
 duplicates, and appends structured-only names in label-name order. Matching rows

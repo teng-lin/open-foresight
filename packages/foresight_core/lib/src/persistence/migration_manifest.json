@@ -160,6 +160,14 @@
       "symbols": [
         "_createRecordingAudio"
       ]
+    },
+    "25": {
+      "sha256": "5abfe536f797f1fd9e5c90d811161d399e587f5556869ecd9126f07f6371b17e",
+      "symbols": [
+        "_attributionReproject",
+        "_attributionRevisionBump",
+        "_createMeetingAttribution"
+      ]
     }
   },
   "fixtures": {

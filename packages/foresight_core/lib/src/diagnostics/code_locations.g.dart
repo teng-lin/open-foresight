@@ -161,6 +161,7 @@ const diagnosticCodeLocations = <String>[
   'src/mcp/operation_tool_projection.dart',
   'src/mcp/rpc_tools.dart',
   'src/meeting_actions.dart',
+  'src/meeting_attribution.dart',
   'src/meeting_preparation.dart',
   'src/meeting_speakers.dart',
   'src/meeting_workflow_store.dart',

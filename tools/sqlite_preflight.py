@@ -13,7 +13,7 @@ import tempfile
 
 # Keep the standalone, Git-free migration entrypoint self-contained. A source
 # guard checks this limit against Dart's application schema authority.
-APPLICATION_SCHEMA_MAXIMUM = 24
+APPLICATION_SCHEMA_MAXIMUM = 25
 
 
 def identity(path):

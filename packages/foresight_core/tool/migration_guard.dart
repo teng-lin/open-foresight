@@ -63,6 +63,11 @@ const migrationClosures = <int, List<String>>{
   21: ['_routeBackupErasure'],
   22: ['_createMeetingIndex'],
   24: ['_createRecordingAudio'],
+  25: [
+    '_createMeetingAttribution',
+    '_attributionRevisionBump',
+    '_attributionReproject',
+  ],
   23: [
     '_migratePreferenceEntities',
     '_legacyPreferenceEntityKey',
