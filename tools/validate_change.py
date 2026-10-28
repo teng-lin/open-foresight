@@ -25,9 +25,10 @@ by `tools/boundary_inventory.json`; it copies none of their commands.
 Exit status: 0 for a plan or a run in which every selected check passed on every
 needed platform, 1 when a check failed, 2 for invalid input, an inconsistent
 inventory or unwritable evidence, 3 for an incomplete run (unavailable, not-run,
-manual, CI-only, unexecuted-platform or empty-change-set requirements) and 130
-after an interruption. --allow-partial turns 3 into 0 and --baseline-only accepts
-an empty change set; neither changes the recorded evidence of what was exercised.
+manual, CI-only, unexecuted-platform or empty-change-set requirements) and 128
+plus the signal number after an interruption (130 for Ctrl-C, 143 for SIGTERM,
+129 for SIGHUP). --allow-partial turns 3 into 0 and --baseline-only accepts an
+empty change set; neither changes the recorded evidence of what was exercised.
 """
 
 from __future__ import annotations
