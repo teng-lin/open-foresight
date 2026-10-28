@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:io';
 
 import '../meeting_attribution.dart';
 import '../meeting_workflow_store.dart';
@@ -27,7 +28,10 @@ final class RecordingTranscriptSegment {
   /// Set after the commit that saved this segment.
   int? transcriptId;
   bool attributionSaved = false;
-  Object? attributionError;
+
+  /// SQLite extended result code when the attribution was rejected. Only the
+  /// number is kept: an exception would carry participant names.
+  int? attributionErrorCode;
   int attempts = 0;
   final age = Stopwatch()..start();
   late final int bytes = utf8
@@ -54,14 +58,21 @@ final class RecordingTranscriptPersistence {
     required this.committed,
     required this.retrying,
     required this.exhausted,
-  });
+    void Function(String)? report,
+  }) : _report = report ?? stderr.writeln;
   final Store store;
   final int meeting;
   final Timer Function(Duration, void Function()) createTimer;
   final void Function(RecordingTranscriptSegment) committed;
   final void Function() retrying, exhausted;
+  final void Function(String) _report;
   final _queue = ListQueue<RecordingTranscriptSegment>();
   int _bytes = 0, _overflow = 0, finalCommitted = 0;
+
+  /// Segments saved without their requested attribution, and the latest
+  /// rejection's extended result code. The text of each was committed.
+  int attributionRejections = 0;
+  int? lastAttributionRejectionCode;
   Timer? _retry;
   Completer<void>? _settlement;
   bool failed = false, _disposed = false;
@@ -113,7 +124,7 @@ final class RecordingTranscriptPersistence {
         segment
           ..transcriptId = written.transcriptId
           ..attributionSaved = written.attributionSaved
-          ..attributionError = written.attributionError;
+          ..attributionErrorCode = written.attributionErrorCode;
       } catch (error, stack) {
         failure ??= error;
         failureStack ??= stack;
@@ -132,6 +143,17 @@ final class RecordingTranscriptPersistence {
       }
       _queue.removeFirst();
       _bytes -= segment.bytes;
+      final rejected = segment.attributionErrorCode;
+      if (rejected != null) {
+        attributionRejections++;
+        lastAttributionRejectionCode = rejected;
+        // Never the exception or the segment: both can contain names.
+        try {
+          _report('Transcript attribution rejected (SQLite code $rejected)');
+        } catch (_) {
+          // A diagnostic sink failure cannot undo a committed transcript.
+        }
+      }
       if (segment.finalText) finalCommitted++;
       // Post-commit UI/derived work is outside the retry boundary: a callback
       // failure cannot cause an already committed transcript to be duplicated.

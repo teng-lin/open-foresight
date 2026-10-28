@@ -1,8 +1,10 @@
 import 'sql_support_test_bootstrap.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:foresight_core/src/application_services/recording_transcript_persistence.dart';
+import 'package:foresight_core/src/client_projection_results.dart';
 import 'package:foresight_core/src/meeting_attribution.dart';
 import 'package:foresight_core/src/meeting_speakers.dart';
 import 'package:foresight_core/src/meeting_workflow_store.dart';
@@ -133,7 +135,7 @@ void main() {
         expect(
           () => TranscriptAttribution(
             state: AttributionState.unknown,
-            evidence: {'blob': 'x' * 3000},
+            evidence: {'blob': 'x' * 5000},
           ),
           throwsArgumentError,
         );
@@ -337,7 +339,7 @@ void main() {
         attribution: automatic(ada.id, 'Ada'),
       );
       expect(write.attributionSaved, isTrue);
-      expect(write.attributionError, isNull);
+      expect(write.attributionErrorCode, isNull);
       expect(revision(), greaterThan(before));
       store.close();
       open();
@@ -383,7 +385,7 @@ void main() {
           'microphone',
         );
         expect(write.attributionSaved, isFalse);
-        expect(write.attributionError, isNull);
+        expect(write.attributionErrorCode, isNull);
         expect(rowsOf('SELECT * FROM transcript_attributions'), 0);
       },
     );
@@ -412,10 +414,10 @@ void main() {
         'playback',
         attribution: automatic(999999, 'Nobody'),
       );
-      for (final write in [crossMeeting, missing]) {
-        expect(write.attributionSaved, isFalse);
-        expect(write.attributionError, isA<SqliteException>());
-      }
+      expect(crossMeeting.attributionSaved, isFalse);
+      expect(crossMeeting.attributionErrorCode, sqliteConstraintTrigger);
+      expect(missing.attributionSaved, isFalse);
+      expect(missing.attributionErrorCode, sqliteConstraintForeignKey);
       expect(store.meetingQueries.finalTranscriptText(meeting), [
         'kept text',
         'kept again',
@@ -512,6 +514,7 @@ void main() {
         committed: (_) {},
         retrying: () {},
         exhausted: () => fail('must not exhaust'),
+        report: (_) {},
       );
       addTearDown(persistence.dispose);
       final bare = RecordingTranscriptSegment(
@@ -533,7 +536,7 @@ void main() {
       persistence.add(named);
       expect(persistence.pending, 0);
       expect(named.attributionSaved, isFalse);
-      expect(named.attributionError, isA<SqliteException>());
+      expect(named.attributionErrorCode, sqliteConstraintForeignKey);
       expect(store.meetingQueries.finalTranscriptText(meeting), ['abc']);
     });
   });
@@ -913,52 +916,42 @@ void main() {
       expect(row.source, 'playback');
     });
 
-    test(
-      'non-rendering changes bump revision only and evidence-only changes nothing',
-      () {
-        mapSource();
-        final id = finalRow('quiet');
-        final projection = MeetingTranscriptProjection(store);
-        projection.acknowledge(
-          meeting,
-          store.workspaceEpoch,
-          projection.prepare(meeting, store.workspaceEpoch, 0)!,
-        );
-        var before = revision();
-        // A segment attributed to nobody is information-free.
-        store.saveAutomaticAttribution(
-          id,
-          TranscriptAttribution(state: AttributionState.unknown),
-        );
-        expect(revision(), before);
-        expect(rowsOf('SELECT * FROM meeting_transcript_changes'), 0);
-        // A meaningful non-name state changes consumers but not indexed text.
-        store.saveAutomaticAttribution(
-          id,
-          TranscriptAttribution(state: AttributionState.multiple, method: 'x'),
-        );
-        expect(revision(), before + 1);
-        expect(rowsOf('SELECT * FROM meeting_transcript_changes'), 0);
-        expect(
-          rowsOf('SELECT * FROM meeting_index_segments WHERE acknowledged=0'),
-          0,
-        );
-        before = revision();
-        // Evidence-only update rewrites no text and invalidates no cache.
-        store.saveAutomaticAttribution(
-          id,
-          TranscriptAttribution(
-            state: AttributionState.multiple,
-            method: 'x',
-            evidence: {'covered_ms': 1},
-          ),
-        );
-        expect(revision(), before);
-        expect(store.meetingQueries.attribution(id)!.revision, 3);
-      },
-    );
+    test('changes that do not alter the rendered name invalidate nothing', () {
+      mapSource();
+      final id = finalRow('quiet');
+      final projection = MeetingTranscriptProjection(store);
+      projection.acknowledge(
+        meeting,
+        store.workspaceEpoch,
+        projection.prepare(meeting, store.workspaceEpoch, 0)!,
+      );
+      final before = revision();
+      final sources = store.rows(
+        "SELECT revision FROM sources WHERE id='meeting-$meeting'",
+      );
+      for (final attribution in [
+        TranscriptAttribution(state: AttributionState.unknown),
+        TranscriptAttribution(state: AttributionState.multiple, method: 'x'),
+        TranscriptAttribution(
+          state: AttributionState.stale,
+          method: 'y',
+          evidence: {'covered_ms': 1},
+        ),
+      ]) {
+        store.saveAutomaticAttribution(id, attribution);
+      }
+      store.setManualAttribution(id, TranscriptAttribution.manualUnnamed());
+      expect(revision(), before, reason: 'summaries stay valid');
+      expect(rowsOf('SELECT * FROM meeting_transcript_changes'), 0);
+      expect(
+        store.rows("SELECT revision FROM sources WHERE id='meeting-$meeting'"),
+        sources,
+      );
+      expect(store.meetingQueries.attribution(id)!.revision, 4);
+      expect(store.meetingQueries.attribution(id)!.manual, isTrue);
+    });
 
-    test('only replaced or removed names mark backup erasure', () {
+    test('only user-driven or deleted names schedule backup erasure', () {
       bool pending() => store
           .rows(
             "SELECT 1 FROM preferences WHERE key='internal.backupErasurePending'",
@@ -974,24 +967,95 @@ void main() {
       clear();
       store.saveAutomaticAttribution(id, automatic(person.id, 'Ada'));
       expect(pending(), isFalse, reason: 'creating a name erases nothing');
-      store.saveAutomaticAttribution(
-        id,
-        automatic(person.id, 'Ada', evidence: const {'covered_ms': 1}),
-      );
-      expect(pending(), isFalse, reason: 'evidence is not a name');
       store.saveAutomaticAttribution(id, automatic(person.id, 'Ada L.'));
-      expect(pending(), isTrue);
-      clear();
+      store.saveMeetingParticipants(meeting, [
+        participant('ax:1', 'Ada B', last: 200),
+        participant('ax:1', 'Ada C', last: 300),
+      ]);
+      expect(
+        pending(),
+        isFalse,
+        reason: 'machine revisions of observed names keep rollback snapshots',
+      );
       store.renameMeetingParticipant(person.id!, 'Ada Lovelace');
-      expect(pending(), isTrue);
+      expect(pending(), isTrue, reason: 'a user rename');
+      clear();
+      store.setManualAttribution(
+        id,
+        TranscriptAttribution.manual(displayName: 'Dr. Ada'),
+      );
+      expect(pending(), isTrue, reason: 'a user correction replaces a name');
       clear();
       store.resetAttribution(id);
-      expect(pending(), isTrue);
+      expect(pending(), isTrue, reason: 'removing a name');
       clear();
-      store.saveMeetingParticipants(meeting, [participant('ax:1', 'Other')]);
-      expect(pending(), isFalse, reason: 'manual participant name is kept');
-      store.renameMeetingParticipant(person.id!, 'Ada Again');
-      expect(pending(), isTrue, reason: 'an older previous name was dropped');
+      store.db.execute('DELETE FROM meeting_participants WHERE id=?', [
+        person.id,
+      ]);
+      expect(pending(), isTrue, reason: 'deleting a participant');
+    });
+
+    test('an erasure marker never fails a statement that already has one', () {
+      final person = store.saveMeetingParticipants(meeting, [
+        participant('ax:1', 'Ada'),
+      ]).single;
+      final id = finalRow('replaced');
+      store.setManualAttribution(
+        id,
+        TranscriptAttribution.manual(displayName: 'First'),
+      );
+      store.db.execute(
+        "INSERT INTO preferences(key,value) VALUES('internal.backupErasurePending','1') ON CONFLICT(key) DO NOTHING",
+      );
+      // Outer statements with their own conflict policies fire the markers.
+      store.db.execute(
+        'INSERT OR REPLACE INTO transcript_attributions(transcript_id,display_name,rendered_name,state,method,manual,updated_ms) '
+        "VALUES(?,'Second','Second','attributed','manual',1,1)",
+        [id],
+      );
+      expect(store.meetingQueries.attribution(id)!.displayName, 'Second');
+      // An upsert's own ABORT policy overrides an OR IGNORE written in a
+      // trigger, so the marker statement must tolerate an existing marker.
+      store.db.execute(
+        'INSERT INTO meeting_participants(meeting_id,scope,identity_key,display_name,first_seen_ms,last_seen_ms) VALUES(?,?,?,?,0,5) '
+        'ON CONFLICT(meeting_id,scope,identity_key) DO UPDATE SET display_name=excluded.display_name,name_manual=1',
+        [meeting, 'session-1/window-1', 'ax:1', 'Raw Upsert Name'],
+      );
+      expect(
+        store.meetingQueries.participants(meeting).single.displayName,
+        'Raw Upsert Name',
+      );
+      // The roster upsert path, twice with a manual rename, then observed renames.
+      store.renameMeetingParticipant(person.id!, 'One');
+      store.renameMeetingParticipant(person.id!, 'Two');
+      final observed = store.saveMeetingParticipants(meeting, [
+        participant('ax:1', 'Three', last: 900),
+      ]).single;
+      expect(observed.displayName, 'Two');
+      final other = store.saveMeetingParticipants(meeting, [
+        participant('ax:2', 'A'),
+      ]).single;
+      store.db.execute(
+        "INSERT INTO preferences(key,value) VALUES('internal.backupErasurePending','1') ON CONFLICT(key) DO NOTHING",
+      );
+      for (final name in ['B', 'C', 'D']) {
+        expect(
+          store
+              .saveMeetingParticipants(meeting, [
+                participant('ax:2', name, last: 100 + name.codeUnitAt(0)),
+              ])
+              .single
+              .displayName,
+          name,
+        );
+      }
+      expect(
+        store.meetingQueries
+            .participants(meeting)
+            .firstWhere((p) => p.id == other.id)
+            .renameCount,
+        3,
+      );
     });
 
     test('interim rows and uncommitted text are never invalidated', () {
@@ -1192,6 +1256,549 @@ void main() {
         MeetingIndexJobs.forStore(store).recover().single.meeting,
         meeting,
       );
+    });
+  });
+
+  group('batch 2 hardening', () {
+    test('an out-of-order or retried roster batch cannot regress a name', () {
+      store.saveMeetingParticipants(meeting, [
+        participant('ax:1', 'A', last: 100),
+      ]);
+      store.saveMeetingParticipants(meeting, [
+        participant('ax:1', 'C', last: 300),
+      ]);
+      final late = store.saveMeetingParticipants(meeting, [
+        participant('ax:1', 'B', last: 200),
+      ]).single;
+      expect(late.displayName, 'C');
+      expect(late.renameCount, 1);
+      expect(late.previousDisplayName, 'A');
+      expect(late.lastSeenMs, 300);
+      // A same-time re-delivery of the current spelling changes nothing.
+      expect(
+        store
+            .saveMeetingParticipants(meeting, [
+              participant('ax:1', 'C', last: 300),
+            ])
+            .single
+            .renameCount,
+        1,
+      );
+    });
+
+    test('reprojection marks an indexed source pending exactly once', () {
+      mapSource();
+      final id = finalRow('indexed row');
+      final projection = MeetingTranscriptProjection(store);
+      projection.acknowledge(
+        meeting,
+        store.workspaceEpoch,
+        projection.prepare(meeting, store.workspaceEpoch, 0)!,
+      );
+      store.db.execute(
+        "UPDATE sources SET state='indexed' WHERE id='meeting-$meeting'",
+      );
+      store.db.execute(
+        'UPDATE source_details SET changed=0 WHERE source_id=?',
+        ['meeting-$meeting'],
+      );
+      final source =
+          store
+                  .rows(
+                    "SELECT revision FROM sources WHERE id='meeting-$meeting'",
+                  )
+                  .single['revision']
+              as int;
+      store.saveAutomaticAttribution(id, automatic(null, 'Ada'));
+      final after = store
+          .rows(
+            "SELECT revision,state FROM sources WHERE id='meeting-$meeting'",
+          )
+          .single;
+      expect(after, {'revision': source + 1, 'state': 'pending'});
+      expect(
+        store.rows('SELECT changed FROM source_details WHERE source_id=?', [
+          'meeting-$meeting',
+        ]).single['changed'],
+        greaterThan(0),
+      );
+      expect(
+        store.rows('SELECT projected FROM meeting_transcript_changes').single,
+        {'projected': 0},
+      );
+    });
+
+    test('a downstream failure is retryable, not an attribution rejection', () {
+      mapSource();
+      final id = finalRow('projected row');
+      MeetingTranscriptProjection(store).acknowledge(
+        meeting,
+        store.workspaceEpoch,
+        MeetingTranscriptProjection(
+          store,
+        ).prepare(meeting, store.workspaceEpoch, 0)!,
+      );
+      store.db.execute(
+        'CREATE TRIGGER fail_invalidation BEFORE UPDATE ON sources '
+        "BEGIN SELECT RAISE(ABORT,'downstream failure'); END",
+      );
+      final before = revision();
+      expect(
+        () => store.saveAutomaticAttribution(id, automatic(null, 'Ada')),
+        throwsA(isA<SqliteException>()),
+      );
+      expect(rowsOf('SELECT * FROM transcript_attributions'), 0);
+      expect(revision(), before);
+      store.db.execute('DROP TRIGGER fail_invalidation');
+      expect(
+        store.saveAutomaticAttribution(id, automatic(null, 'Ada')),
+        AttributionWriteOutcome.written,
+      );
+    });
+
+    test('a failure while saving the pair rolls back the text for retry', () {
+      store.db.execute(
+        'CREATE TRIGGER fail_revision BEFORE UPDATE ON meetings '
+        "WHEN (SELECT count(*) FROM transcript_attributions)>0 "
+        "BEGIN SELECT RAISE(ABORT,'downstream failure'); END",
+      );
+      expect(
+        () => store.workflowTransaction(
+          () => store.transcriptWithAttribution(
+            meeting,
+            'must retry',
+            true,
+            1,
+            2,
+            'playback',
+            attribution: automatic(null, 'Ada'),
+          ),
+        ),
+        throwsA(isA<SqliteException>()),
+      );
+      expect(rowsOf('SELECT * FROM transcript'), 0);
+      expect(rowsOf('SELECT * FROM transcript_attributions'), 0);
+    });
+
+    test('the retry queue counts and reports a rejection without names', () {
+      final reports = <String>[];
+      final persistence = RecordingTranscriptPersistence(
+        store: store,
+        meeting: meeting,
+        createTimer: (_, __) => throw StateError('no retry expected'),
+        committed: (_) {},
+        retrying: () {},
+        exhausted: () => fail('must not exhaust'),
+        report: reports.add,
+      );
+      addTearDown(persistence.dispose);
+      persistence
+        ..add(
+          RecordingTranscriptSegment(
+            'Secret words',
+            1,
+            2,
+            'playback',
+            finalText: true,
+            attribution: automatic(31337, 'Private Person'),
+          ),
+        )
+        ..add(
+          RecordingTranscriptSegment(
+            'plain',
+            3,
+            4,
+            'playback',
+            finalText: true,
+          ),
+        );
+      expect(persistence.attributionRejections, 1);
+      expect(persistence.lastAttributionRejectionCode, 787);
+      expect(reports, ['Transcript attribution rejected (SQLite code 787)']);
+      expect(reports.single, isNot(contains('Private')));
+      expect(store.meetingQueries.finalTranscriptText(meeting), [
+        'Secret words',
+        'plain',
+      ]);
+    });
+
+    test('evidence is a deep snapshot taken at construction', () {
+      final nested = <String, Object?>{
+        'windows': <Object?>[
+          <String, Object?>{'start': 1},
+        ],
+      };
+      final attribution = TranscriptAttribution(
+        state: AttributionState.unknown,
+        evidence: nested,
+      );
+      ((nested['windows'] as List).first as Map)['start'] = 'x' * 9000;
+      (nested['windows'] as List).add(double.nan);
+      expect(attribution.evidenceJson, '{"windows":[{"start":1}]}');
+      expect(
+        () => (attribution.evidence['windows'] as List).add(1),
+        throwsUnsupportedError,
+      );
+      expect(
+        () => ((attribution.evidence['windows'] as List).first as Map)['k'] = 1,
+        throwsUnsupportedError,
+      );
+      final write = store.transcriptWithAttribution(
+        meeting,
+        'stored',
+        true,
+        1,
+        2,
+        'playback',
+        attribution: attribution,
+      );
+      expect(write.attributionSaved, isTrue);
+      expect(store.meetingQueries.attribution(write.transcriptId)!.evidence, {
+        'windows': [
+          {'start': 1},
+        ],
+      });
+      expect(
+        () => TranscriptAttribution(
+          state: AttributionState.unknown,
+          evidence: {'v': double.nan},
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => TranscriptAttribution(
+          state: AttributionState.unknown,
+          evidence: {'v': Object()},
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('limits count code points and fit core\'s largest inputs', () {
+      final emoji = '😀' * 256;
+      final big = TranscriptAttribution(
+        state: AttributionState.attributed,
+        displayName: '😀' * maxParticipantNameLength,
+      );
+      expect(big.displayName.runes, hasLength(500));
+      expect(
+        () => TranscriptAttribution(
+          state: AttributionState.attributed,
+          displayName: '😀' * 501,
+        ),
+        throwsArgumentError,
+      );
+      // Eight 128-code-point non-ASCII references plus an epoch prefix.
+      final refs = [for (var i = 0; i < 8; i++) 'é' * 120 + '$i'];
+      final evidence = {
+        'candidate_refs': [for (final r in refs) 'epoch-1:$r'],
+      };
+      final id = finalRow('large evidence');
+      final person = store.saveMeetingParticipants(meeting, [
+        participant('k', emoji),
+      ]).single;
+      expect(person.displayName.runes, hasLength(256));
+      store.saveAutomaticAttribution(
+        id,
+        TranscriptAttribution(
+          participantId: person.id,
+          displayName: emoji,
+          state: AttributionState.attributed,
+          evidence: evidence,
+        ),
+      );
+      expect(
+        store.meetingQueries.attribution(id)!.displayName.runes,
+        hasLength(256),
+      );
+      expect(
+        utf8.encode(jsonEncode(evidence)).length,
+        lessThanOrEqualTo(maxAttributionEvidenceBytes),
+      );
+      expect(
+        () => TranscriptAttribution(
+          state: AttributionState.unknown,
+          evidence: {'v': 'x' * maxAttributionEvidenceBytes},
+        ),
+        throwsArgumentError,
+      );
+      expect(() => participant('k', '😀' * 501), throwsArgumentError);
+    });
+
+    test('clamped and tryCreate never throw and degrade safely', () {
+      final truncated = TranscriptAttribution.clamped(
+        displayName: 'n' * 900,
+        state: AttributionState.attributed,
+        method: 'participant_status',
+      );
+      expect(truncated.state, AttributionState.attributed);
+      expect(truncated.displayName.runes, hasLength(500));
+      for (final unusable in [
+        TranscriptAttribution.clamped(
+          displayName: '\u200b\u202e',
+          state: AttributionState.attributed,
+        ),
+        TranscriptAttribution.clamped(
+          displayName: 'Ada',
+          state: AttributionState.attributed,
+          evidence: {'v': double.infinity},
+        ),
+        TranscriptAttribution.clamped(
+          displayName: 'Ada',
+          state: AttributionState.attributed,
+          evidence: {'v': 'x' * 9000},
+        ),
+        TranscriptAttribution.clamped(
+          displayName: 'Ada',
+          state: AttributionState.attributed,
+          method: 'm' * 65,
+          evidence: {'keep': 1},
+        ),
+      ]) {
+        expect(unusable.state, AttributionState.unknown);
+        expect(unusable.displayName, isEmpty);
+        expect(unusable.evidence, isEmpty);
+      }
+      expect(
+        MeetingParticipant.tryCreate(
+          scope: 's',
+          identityKey: 'k',
+          displayName: 'n' * 900,
+          firstSeenMs: 0,
+          lastSeenMs: 1,
+        )!.displayName.runes,
+        hasLength(500),
+      );
+      for (final bad in [
+        MeetingParticipant.tryCreate(
+          scope: '',
+          identityKey: 'k',
+          displayName: 'n',
+          firstSeenMs: 0,
+          lastSeenMs: 1,
+        ),
+        MeetingParticipant.tryCreate(
+          scope: 's',
+          identityKey: 'k' * 513,
+          displayName: 'n',
+          firstSeenMs: 0,
+          lastSeenMs: 1,
+        ),
+        MeetingParticipant.tryCreate(
+          scope: 's',
+          identityKey: 'k',
+          displayName: '\u200b',
+          firstSeenMs: 0,
+          lastSeenMs: 1,
+        ),
+        MeetingParticipant.tryCreate(
+          scope: 's',
+          identityKey: 'k',
+          displayName: 'n',
+          firstSeenMs: 5,
+          lastSeenMs: 1,
+        ),
+      ]) {
+        expect(bad, isNull);
+      }
+    });
+
+    test('invisible-only names are rejected and format controls stripped', () {
+      for (final name in [
+        '\u200b',
+        '\u200c\u200d',
+        '\u202e\u00ad',
+        ' \ufeff ',
+      ]) {
+        expect(renderedAttributionName(name), isEmpty, reason: name);
+        expect(() => participant('k', name), throwsArgumentError);
+        expect(
+          () => TranscriptAttribution(
+            state: AttributionState.attributed,
+            displayName: name,
+          ),
+          throwsArgumentError,
+        );
+      }
+      expect(
+        renderedAttributionName('Ev\u202Ee\u00ADl\u2066 \u2069X'),
+        'Evel X',
+      );
+      expect(renderedAttributionName('a\u200db'), 'a\u200db');
+    });
+
+    test('read rows and the wire carry only explicit validated fields', () {
+      final person = store.saveMeetingParticipants(meeting, [
+        participant('ax:1', 'Ada'),
+      ]).single;
+      final named = finalRow('named');
+      final unnamed = finalRow('unnamed');
+      final historical = finalRow('historical');
+      store.saveAutomaticAttribution(named, automatic(person.id, 'Ada'));
+      store.saveAutomaticAttribution(
+        unnamed,
+        TranscriptAttribution(
+          displayName: 'Hidden Candidate',
+          state: AttributionState.multiple,
+          method: 'x',
+        ),
+      );
+      final rows = {
+        for (final r in MeetingOperationsQueries(store).transcript(meeting))
+          r.id: r.toRow(),
+      };
+      const legacy = {
+        'id', 'meeting_id', 'text', 'final', 'start_ms', 'end_ms', 'source', //
+      };
+      const attribution = {
+        'participant_id',
+        'participant_name',
+        'attribution_state',
+        'attribution_method',
+        'attribution_manual',
+      };
+      for (final row in rows.values) {
+        expect(row.keys.toSet(), {...legacy, ...attribution});
+        expect(row.keys, isNot(contains('attribution_display_name')));
+        expect(
+          () => transcriptResult({...row, 'speaker_id': 1}),
+          returnsNormally,
+        );
+      }
+      expect(rows[named]!['participant_name'], 'Ada');
+      expect(rows[named]!['participant_id'], person.id);
+      expect(
+        rows[unnamed]!['participant_name'],
+        isNull,
+        reason: 'a name is exposed only for an attributed row',
+      );
+      expect(rows[unnamed]!['attribution_state'], 'multiple');
+      expect(rows[historical]!['attribution_state'], isNull);
+      expect(
+        () => transcriptResult({...rows[named]!, 'participant_name': 5}),
+        throwsFormatException,
+      );
+      expect(
+        () => transcriptResult({...rows[named]!, 'participant_id': 'x'}),
+        throwsFormatException,
+      );
+      expect(
+        () => transcriptResult({...rows[named]!, 'attribution_manual': 'yes'}),
+        throwsFormatException,
+      );
+      expect(
+        () => transcriptResult({...rows[named]!, 'channel': 7}),
+        throwsFormatException,
+      );
+    });
+
+    test('the database refuses unsafe direct writes', () {
+      final id = finalRow('guarded');
+      store.setManualAttribution(
+        id,
+        TranscriptAttribution.manual(displayName: 'Ada'),
+      );
+      for (final verb in ['INSERT OR REPLACE', 'INSERT OR IGNORE']) {
+        expect(
+          () => store.db.execute(
+            '$verb INTO transcript_attributions(transcript_id,display_name,rendered_name,state,manual,updated_ms) '
+            "VALUES(?,'Robot','Robot','attributed',0,1)",
+            [id],
+          ),
+          throwsA(isA<SqliteException>()),
+          reason: verb,
+        );
+      }
+      expect(store.meetingQueries.attribution(id)!.displayName, 'Ada');
+      expect(store.meetingQueries.attribution(id)!.manual, isTrue);
+      final other = finalRow('shape');
+      for (final values in [
+        "'multiple','Spoof','Spoof'",
+        "'attributed','',''",
+        "'unknown','Spoof','Spoof'",
+      ]) {
+        final parts = values.split(',');
+        expect(
+          () => store.db.execute(
+            'INSERT INTO transcript_attributions(transcript_id,state,display_name,rendered_name,updated_ms) '
+            'VALUES(?,${parts[0]},${parts[1]},${parts[2]},1)',
+            [other],
+          ),
+          throwsA(isA<SqliteException>()),
+          reason: values,
+        );
+      }
+    });
+
+    test('write amplification stays bounded', () {
+      mapSource();
+      final person = store.saveMeetingParticipants(meeting, [
+        participant('ax:1', 'Ada'),
+      ]).single;
+      final before = revision();
+      store.transcriptWithAttribution(
+        meeting,
+        'live row',
+        true,
+        1,
+        2,
+        'playback',
+        attribution: automatic(person.id, 'Ada'),
+      );
+      expect(revision(), before + 1, reason: 'text and name bump once');
+      final journal = store.rows(
+        'SELECT version FROM meeting_transcript_changes',
+      );
+      expect(journal.single['version'], 1, reason: 'no second reprojection');
+      // Settle, then give many rows the participant and delete it.
+      final projection = MeetingTranscriptProjection(store);
+      projection.acknowledge(
+        meeting,
+        store.workspaceEpoch,
+        projection.prepare(meeting, store.workspaceEpoch, 0)!,
+      );
+      for (var i = 0; i < 20; i++) {
+        final id = finalRow('row $i');
+        store.saveAutomaticAttribution(id, automatic(person.id, 'Ada'));
+      }
+      final settled = revision();
+      store.db.execute('DELETE FROM meeting_participants WHERE id=?', [
+        person.id,
+      ]);
+      expect(revision(), settled, reason: 'no bump per referencing row');
+      expect(
+        rowsOf(
+          'SELECT * FROM transcript_attributions WHERE participant_id IS NULL',
+        ),
+        21,
+      );
+    });
+
+    test('an unmapped meeting is not reprojected', () {
+      final id = finalRow('unmapped');
+      store.saveAutomaticAttribution(id, automatic(null, 'Ada'));
+      expect(rowsOf('SELECT * FROM meeting_index_segments'), 0);
+      expect(rowsOf('SELECT * FROM meeting_index_deletes'), 0);
+    });
+
+    test('rosters of any size save in atomic batches', () {
+      final roster = [
+        for (var i = 0; i < maxParticipantBatch + 44; i++)
+          participant('ax:$i', 'Person $i'),
+      ];
+      expect(
+        () => store.saveMeetingParticipants(meeting, roster),
+        throwsArgumentError,
+      );
+      expect(rowsOf('SELECT * FROM meeting_participants'), 0);
+      final saved = store.meetingStore.saveParticipantsInBatches(
+        meeting,
+        roster,
+      );
+      expect(saved.map((p) => p.identityKey), [
+        for (final p in roster) p.identityKey,
+      ]);
+      expect(rowsOf('SELECT * FROM meeting_participants'), roster.length);
     });
   });
 }

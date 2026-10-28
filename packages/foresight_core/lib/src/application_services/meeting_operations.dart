@@ -61,6 +61,7 @@ final class MeetingOperations {
             ...segment.toRow(),
             'speaker_id': MeetingSpeaker.fromSource(segment.source).id,
             'speaker_label': MeetingSpeaker.fromSource(segment.source).label,
+            'channel': MeetingSpeaker.fromSource(segment.source).name,
           },
       ],
       'artifacts': detail.artifacts.map((row) => row.toRow()).toList(),

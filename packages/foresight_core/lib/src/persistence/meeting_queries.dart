@@ -75,9 +75,12 @@ class MeetingQueries {
     'SELECT text FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
     [id],
   );
-  // The attribution join is nullable: historical rows have no attribution.
+  // The attribution join is nullable: historical rows have no attribution. Only
+  // explicit fields are projected, and a name is exposed only when the row
+  // actually names a person.
   static const _attributedTranscript =
-      'SELECT t.*,a.participant_id,a.display_name AS attribution_display_name,'
+      'SELECT t.*,a.participant_id,'
+      "CASE WHEN a.state='attributed' THEN a.display_name END AS participant_name,"
       'a.state AS attribution_state,a.method AS attribution_method,'
       'a.manual AS attribution_manual FROM transcript t '
       'LEFT JOIN transcript_attributions a ON a.transcript_id=t.id '

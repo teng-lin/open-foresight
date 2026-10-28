@@ -16,9 +16,6 @@ typedef DerivedSourceWriter =
       bool locallyEdited,
     });
 
-/// SQLITE_CONSTRAINT primary result code.
-const sqliteConstraint = 19;
-
 class MeetingStore {
   final Database db;
   final int supportedVersion;
@@ -171,9 +168,17 @@ class MeetingStore {
   }
 
   /// Save a transcript row and, when supplied, its attribution in one
-  /// transaction. Attribution is optional metadata: a rejected attribution
-  /// rolls back only itself, so recognized text is never lost to it. Any other
-  /// failure propagates to the caller's retry boundary with nothing written.
+  /// transaction. Attribution is optional metadata and is checked before it is
+  /// written: an unknown participant, or one from another meeting, is reported
+  /// as [TranscriptWrite.attributionErrorCode] and the text is kept. Any
+  /// exception from the write itself, whether a busy, I/O or full-disk error
+  /// or a failure in a downstream invalidation trigger, is not an attribution
+  /// problem: it propagates with nothing committed so the caller's bounded
+  /// retry boundary reruns the whole row. The attribution and the text bump the
+  /// meeting revision once between them. This atomic pairing holds for this
+  /// path (used by `RecordingTranscriptPersistence`); rows committed by other
+  /// writers, such as the durable-audio ASR commit, are attributed afterwards
+  /// with [saveAutomaticAttribution].
   TranscriptWrite transcriptWithAttribution(
     int meeting,
     String text,
@@ -186,25 +191,41 @@ class MeetingStore {
     transcript(meeting, text, finalText, start, end, source);
     final id = db.lastInsertRowId;
     if (attribution == null) return TranscriptWrite(id);
-    try {
-      _savepoint(
-        'save_attribution_row',
-        () => _writeAttribution(
-          id,
-          attribution,
-          overwriteManual: attribution.manual,
-        ),
-      );
-    } on SqliteException catch (error) {
-      // Only a rejected value (constraint or trigger abort) is attribution's
-      // own failure. Full-disk, I/O, busy or corruption errors make the whole
-      // transaction suspect, so they reach the retry boundary with nothing
-      // committed rather than saving text beside a broken attribution.
-      if (error.resultCode != sqliteConstraint) rethrow;
-      return TranscriptWrite(id, attributionError: error);
+    final rejection = _attributionRejection(meeting, attribution);
+    if (rejection != null) {
+      return TranscriptWrite(id, attributionErrorCode: rejection);
+    }
+    final afterText = _meetingRevision(meeting);
+    _writeAttribution(id, attribution, overwriteManual: attribution.manual);
+    // Nobody can observe this transaction's middle, so one bump covers the
+    // text and its attribution together.
+    if (_meetingRevision(meeting) > afterText) {
+      db.execute('UPDATE meetings SET revision=? WHERE id=?', [
+        afterText,
+        meeting,
+      ]);
     }
     return TranscriptWrite(id, attributionSaved: true);
   });
+
+  int _meetingRevision(int meeting) =>
+      _rows('SELECT revision FROM meetings WHERE id=?', [
+            meeting,
+          ]).single['revision']
+          as int;
+
+  /// The extended result code the database would report for an attribution
+  /// that cannot be stored, or null when it can.
+  int? _attributionRejection(int meeting, TranscriptAttribution attribution) {
+    final participant = attribution.participantId;
+    if (participant == null) return null;
+    final owner = _rows(
+      'SELECT meeting_id FROM meeting_participants WHERE id=?',
+      [participant],
+    ).firstOrNull;
+    if (owner == null) return sqliteConstraintForeignKey;
+    return owner['meeting_id'] == meeting ? null : sqliteConstraintTrigger;
+  }
 
   T _savepoint<T>(String name, T Function() write) {
     db.execute('SAVEPOINT $name');
@@ -221,12 +242,15 @@ class MeetingStore {
     }
   }
 
-  /// Upsert a meeting's observed roster in one transaction and return the saved
-  /// participants in input order. Observations never merge by display name. An
-  /// observed rename is recorded on the participant but never rewrites the name
-  /// snapshots already attached to transcript rows, and cannot replace a name
-  /// the user assigned. Participants do not touch transcript invalidation, so a
-  /// roster refresh reindexes nothing.
+  /// Upsert a meeting's observed roster in one transaction (at most
+  /// [maxParticipantBatch]; larger rosters use [saveParticipantsInBatches]) and
+  /// return the saved participants in input order. Observations never merge by
+  /// display name. A name change applies only when it is at least as recent as
+  /// the participant's latest observation, so a delayed or retried batch cannot
+  /// regress a name; an observed rename is recorded on the participant but never
+  /// rewrites the name snapshots already attached to transcript rows, and
+  /// cannot replace a name the user assigned. Participants do not touch
+  /// transcript invalidation, so a roster refresh reindexes nothing.
   List<MeetingParticipant> saveParticipants(
     int meeting,
     List<MeetingParticipant> participants,
@@ -238,16 +262,18 @@ class MeetingStore {
         'at most $maxParticipantBatch per batch',
       );
     }
+    const applies = 'name_manual=0 AND excluded.last_seen_ms>=last_seen_ms';
+    const renamed = '$applies AND display_name IS NOT excluded.display_name';
     return _savepoint('save_meeting_participants', () {
       final saved = <MeetingParticipant>[];
       for (final p in participants) {
         db.execute(
           'INSERT INTO meeting_participants(meeting_id,scope,identity_key,display_name,is_self,first_seen_ms,last_seen_ms) '
           'VALUES(?,?,?,?,?,?,?) ON CONFLICT(meeting_id,scope,identity_key) DO UPDATE SET '
-          'previous_display_name=CASE WHEN name_manual=0 AND display_name IS NOT excluded.display_name THEN meeting_participants.display_name ELSE previous_display_name END,'
-          'rename_count=rename_count+(name_manual=0 AND display_name IS NOT excluded.display_name),'
-          'name_changed_ms=CASE WHEN name_manual=0 AND display_name IS NOT excluded.display_name THEN excluded.last_seen_ms ELSE name_changed_ms END,'
-          'display_name=CASE WHEN name_manual=0 THEN excluded.display_name ELSE meeting_participants.display_name END,'
+          'previous_display_name=CASE WHEN $renamed THEN meeting_participants.display_name ELSE previous_display_name END,'
+          'rename_count=rename_count+($renamed),'
+          'name_changed_ms=CASE WHEN $renamed THEN excluded.last_seen_ms ELSE name_changed_ms END,'
+          'display_name=CASE WHEN $applies THEN excluded.display_name ELSE meeting_participants.display_name END,'
           'is_self=MAX(is_self,excluded.is_self),'
           'first_seen_ms=MIN(first_seen_ms,excluded.first_seen_ms),'
           'last_seen_ms=MAX(last_seen_ms,excluded.last_seen_ms)',
@@ -273,6 +299,25 @@ class MeetingStore {
       return List.unmodifiable(saved);
     });
   }
+
+  /// Save a roster of any size in consecutive batches. Each batch is atomic
+  /// and committed in order; a failure leaves the earlier batches saved, which
+  /// is safe because the upsert is idempotent. Callers retry the whole roster.
+  List<MeetingParticipant> saveParticipantsInBatches(
+    int meeting,
+    List<MeetingParticipant> participants,
+  ) => [
+    for (var i = 0; i < participants.length; i += maxParticipantBatch)
+      ...saveParticipants(
+        meeting,
+        participants.sublist(
+          i,
+          i + maxParticipantBatch > participants.length
+              ? participants.length
+              : i + maxParticipantBatch,
+        ),
+      ),
+  ];
 
   /// Persist an automatic observation. A manual row is never replaced, and an
   /// identical observation writes nothing (so retries are idempotent).

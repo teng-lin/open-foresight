@@ -25,50 +25,87 @@ abstract final class AttributionMethod {
   static const layoutInference = 'layout_inference';
 }
 
+/// Every text limit counts Unicode code points, in Dart and in SQLite alike.
 const maxParticipantNameLength = 500;
 const maxParticipantKeyLength = 512;
 const maxAttributionTokenLength = 64;
-const maxAttributionEvidenceBytes = 2048;
+
+/// Compact timing evidence. The cap covers the largest core evidence (eight
+/// candidate references of 128 code points each, plus an epoch prefix, about
+/// 3.1 KB when non-ASCII) with margin; it remains a bound, not a tree dump.
+const maxAttributionEvidenceBytes = 4096;
 const maxRenderedNameLength = 120;
 const maxParticipantBatch = 256;
 
+/// SQLite extended result codes a rejected attribution reports. Only these
+/// numbers are surfaced for a rejection, never the exception or its bound
+/// parameters (which can contain participant names).
+const sqliteConstraintForeignKey = 787;
+const sqliteConstraintTrigger = 1811;
+
+int _runeCount(String value) => value.runes.length;
+
+String _truncateRunes(String value, int maximum) => _runeCount(value) <= maximum
+    ? value
+    : String.fromCharCodes(value.runes.take(maximum));
+
+/// Format and bidirectional controls that are removed from rendered names:
+/// soft hyphen, zero-width space, directional marks and embeddings/isolates,
+/// the word joiner and the byte-order mark.
+bool _stripped(int rune) =>
+    rune == 0x00ad ||
+    rune == 0x200b ||
+    (rune >= 0x200e && rune <= 0x200f) ||
+    (rune >= 0x202a && rune <= 0x202e) ||
+    rune == 0x2060 ||
+    (rune >= 0x2066 && rune <= 0x2069) ||
+    rune == 0xfeff;
+
+bool _whitespace(int rune) =>
+    rune <= 0x20 ||
+    (rune >= 0x7f && rune <= 0xa0) ||
+    rune == 0x2028 ||
+    rune == 0x2029;
+
+/// Joiners are kept in rendered text (they are part of some names) but never
+/// count as visible content.
+bool _joiner(int rune) => rune == 0x200c || rune == 0x200d;
+
 /// Collapse an untrusted participant name into the one-line label used inside
 /// the indexed `[label start–end ms]` prefix. The stored display name is never
-/// changed; only this derived form removes line breaks and the prefix bracket
-/// characters that could forge another transcript prefix.
+/// changed. This derived form removes line breaks, format and bidirectional
+/// controls and the prefix bracket characters that could forge another
+/// transcript prefix; it is empty when no visible character remains.
 String renderedAttributionName(String displayName) {
   final buffer = StringBuffer();
-  var pendingSpace = false;
+  var pendingSpace = false, visible = false;
   for (final rune in displayName.runes) {
-    final isBreak =
-        rune <= 0x20 ||
-        (rune >= 0x7f && rune <= 0xa0) ||
-        rune == 0x2028 ||
-        rune == 0x2029 ||
-        rune == 0x200b ||
-        rune == 0xfeff;
-    if (isBreak) {
+    if (_stripped(rune)) continue;
+    if (_whitespace(rune)) {
       pendingSpace = buffer.isNotEmpty;
       continue;
     }
     if (pendingSpace) buffer.write(' ');
     pendingSpace = false;
+    if (!_joiner(rune)) visible = true;
     buffer.write(switch (rune) {
       0x5b => '(',
       0x5d => ')',
       _ => String.fromCharCode(rune),
     });
   }
-  final runes = buffer.toString().runes.toList();
-  return runes.length <= maxRenderedNameLength
-      ? String.fromCharCodes(runes)
-      : String.fromCharCodes(runes.take(maxRenderedNameLength)).trimRight();
+  if (!visible) return '';
+  final text = buffer.toString();
+  return _runeCount(text) <= maxRenderedNameLength
+      ? text
+      : _truncateRunes(text, maxRenderedNameLength).trimRight();
 }
 
 void _bounded(String name, String value, int maximum, {bool required = false}) {
-  if (value.length > maximum || (required && value.isEmpty)) {
+  final count = _runeCount(value);
+  if (count > maximum || (required && count == 0)) {
     throw ArgumentError.value(
-      value.length,
+      count,
       name,
       required
           ? 'must contain 1–$maximum characters'
@@ -76,6 +113,38 @@ void _bounded(String name, String value, int maximum, {bool required = false}) {
     );
   }
 }
+
+/// Validate and canonicalize evidence once, at construction, so later changes
+/// to the caller's map or its nested values cannot alter what is stored.
+String _canonicalEvidence(Map<String, Object?> evidence) {
+  final String encoded;
+  try {
+    encoded = jsonEncode(evidence);
+  } on JsonUnsupportedObjectError catch (_) {
+    throw ArgumentError.value(
+      'evidence',
+      'evidence',
+      'Evidence must be finite JSON values',
+    );
+  }
+  if (utf8.encode(encoded).length > maxAttributionEvidenceBytes) {
+    throw ArgumentError.value(
+      'evidence',
+      'evidence',
+      'Timing evidence exceeds $maxAttributionEvidenceBytes bytes',
+    );
+  }
+  return encoded;
+}
+
+Object? _freeze(Object? value) => switch (value) {
+  Map() => Map<String, Object?>.unmodifiable({
+    for (final entry in value.entries)
+      entry.key as String: _freeze(entry.value),
+  }),
+  List() => List<Object?>.unmodifiable(value.map(_freeze)),
+  _ => value,
+};
 
 /// A person observed in one meeting. Identity is meeting-local: [scope] names
 /// the recording-session/window the observer read and [identityKey] is that
@@ -109,6 +178,13 @@ final class MeetingParticipant {
       maxParticipantNameLength,
       required: true,
     );
+    if (renderedAttributionName(displayName).isEmpty) {
+      throw ArgumentError.value(
+        displayName,
+        'displayName',
+        'A participant requires a visible name',
+      );
+    }
     if (previousDisplayName != null) {
       _bounded(
         'previousDisplayName',
@@ -118,6 +194,32 @@ final class MeetingParticipant {
     }
     if (firstSeenMs < 0 || lastSeenMs < firstSeenMs) {
       throw ArgumentError('Participant seen interval is not ordered');
+    }
+  }
+
+  /// Non-throwing entry point for observed data: truncates the name to the
+  /// limit and returns null when the participant cannot be stored (empty or
+  /// oversized key, no visible name, unordered times). Keys are never
+  /// truncated, because that could merge two identities.
+  static MeetingParticipant? tryCreate({
+    required String scope,
+    required String identityKey,
+    required String displayName,
+    bool isSelf = false,
+    required int firstSeenMs,
+    required int lastSeenMs,
+  }) {
+    try {
+      return MeetingParticipant(
+        scope: scope,
+        identityKey: identityKey,
+        displayName: _truncateRunes(displayName, maxParticipantNameLength),
+        isSelf: isSelf,
+        firstSeenMs: firstSeenMs,
+        lastSeenMs: lastSeenMs,
+      );
+    } on ArgumentError {
+      return null;
     }
   }
 
@@ -205,7 +307,7 @@ final class TranscriptAttribution {
     this.transcriptId,
     this.revision,
     this.updatedMs,
-  }) : evidence = Map.unmodifiable(evidence) {
+  }) : evidenceJson = _canonicalEvidence(evidence) {
     _bounded('displayName', displayName, maxParticipantNameLength);
     _bounded('method', method, maxAttributionTokenLength);
     _bounded('parserVersion', parserVersion, maxAttributionTokenLength);
@@ -221,12 +323,36 @@ final class TranscriptAttribution {
     if (manual && method != AttributionMethod.manual) {
       throw ArgumentError.value(method, 'method', 'Manual rows use "manual"');
     }
-    if (utf8.encode(evidenceJson).length > maxAttributionEvidenceBytes) {
-      throw ArgumentError.value(
-        evidence,
-        'evidence',
-        'Timing evidence exceeds $maxAttributionEvidenceBytes bytes',
+  }
+
+  /// Non-throwing entry point for observed data, so a limit can never stop a
+  /// transcript from being saved. Names are truncated to the limit. Anything
+  /// else out of bounds (oversized method or version, evidence that is too
+  /// large or not finite JSON, or an attributed name with no visible
+  /// character) downgrades the result to [AttributionState.unknown], dropping
+  /// the evidence and name rather than guessing.
+  factory TranscriptAttribution.clamped({
+    int? participantId,
+    String displayName = '',
+    required AttributionState state,
+    String method = '',
+    String parserVersion = '',
+    String policyVersion = '',
+    Map<String, Object?> evidence = const {},
+  }) {
+    try {
+      return TranscriptAttribution(
+        participantId: participantId,
+        displayName: _truncateRunes(displayName, maxParticipantNameLength),
+        state: state,
+        method: method,
+        parserVersion: parserVersion,
+        policyVersion: policyVersion,
+        evidence: evidence,
       );
+    } on Object {
+      // Any construction failure, including an unencodable evidence value.
+      return TranscriptAttribution(state: AttributionState.unknown);
     }
   }
 
@@ -292,15 +418,19 @@ final class TranscriptAttribution {
   final String method;
   final String parserVersion, policyVersion;
 
-  /// Compact, bounded JSON object explaining the timing match (coverage,
-  /// uncertainty and the like). Never a desktop tree.
-  final Map<String, Object?> evidence;
+  /// Canonical JSON text of the compact, bounded timing evidence (coverage,
+  /// uncertainty and the like; never a desktop tree). It is captured once at
+  /// construction, so it cannot change afterwards.
+  final String evidenceJson;
   final bool manual;
 
   /// Populated only on values read back from storage.
   final int? transcriptId, revision, updatedMs;
 
-  String get evidenceJson => jsonEncode(evidence);
+  /// Deeply immutable view of [evidenceJson].
+  late final Map<String, Object?> evidence = Map<String, Object?>.from(
+    _freeze(jsonDecode(evidenceJson)) as Map,
+  );
 
   /// One-line label used in indexed text; empty means "use the channel label".
   String get renderedName => state == AttributionState.attributed
@@ -347,18 +477,21 @@ final class TranscriptAttribution {
 enum AttributionWriteOutcome { written, unchanged, protectedByManual }
 
 /// Result of saving a transcript row with its optional attribution. An
-/// attribution failure never rolls back the text.
+/// attribution rejection never rolls back the text.
 final class TranscriptWrite {
   const TranscriptWrite(
     this.transcriptId, {
     this.attributionSaved = false,
-    this.attributionError,
+    this.attributionErrorCode,
   });
   final int transcriptId;
 
   /// True only when an attribution was requested and committed with the text.
   final bool attributionSaved;
 
-  /// Non-null when an attribution was requested but could not be saved.
-  final Object? attributionError;
+  /// Set when an attribution was requested but rejected: the SQLite extended
+  /// result code of the rejection ([sqliteConstraintForeignKey] for an unknown
+  /// participant, [sqliteConstraintTrigger] for another meeting's). It is a
+  /// number on purpose; an exception would carry participant names.
+  final int? attributionErrorCode;
 }

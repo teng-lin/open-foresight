@@ -203,9 +203,7 @@ final class TranscriptSegment extends ReadProjection {
   bool get attributionManual => _flag('attribution_manual');
 
   /// The observed name snapshot, present only when the row names a person.
-  String? get participantName => attributionState == 'attributed'
-      ? _optionalText('attribution_display_name')
-      : null;
+  String? get participantName => _optionalText('participant_name');
 }
 
 final class MeetingQuestion extends ReadProjection {
