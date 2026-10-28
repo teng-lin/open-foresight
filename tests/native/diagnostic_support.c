@@ -255,11 +255,10 @@ static void run_case(const char *launcher, const char *self, const char *mode) {
                                                                 : 100;
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)
-  // TSan's existing default exit instrumentation sleeps 1000ms
-  // with another live thread, after the real watcher calls _exit.
-  if (strcmp(mode, "hold") == 0 || strcmp(mode, "bootstrap") == 0 ||
-      bootstrap_idle || preinit_deadline)
-    polls += 100;
+  // Every mode starts a watcher thread. TSan's default exit instrumentation
+  // can sleep 1000ms while it remains live, including after RETIRED is sent.
+  // Allow that instrumentation delay without changing the runtime's default.
+  polls += 100;
 #endif
 #endif
 #ifdef __APPLE__
