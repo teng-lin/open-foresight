@@ -67,6 +67,7 @@ enum DiagnosticCaptureStopReason {
   inactivity,
   desktopDisconnected,
   desktopDetached,
+  desktopHiddenBeforeStart,
   applicationClosing,
   captureFailure,
   transcriptStorageFailure,

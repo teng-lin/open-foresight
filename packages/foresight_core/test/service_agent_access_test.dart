@@ -133,7 +133,7 @@ void main() {
       await logging.producer.ready;
       try {
         await runWithServiceDiagnostics(logging.producer, () async {
-        expect(captureServiceDiagnosticEmitter(), isNotNull);
+          expect(captureServiceDiagnosticEmitter(), isNotNull);
           await restartService(longGrace);
           await attach();
           CountingRecording begin() {
@@ -162,8 +162,8 @@ void main() {
         });
         await service.close();
         await logging.close();
-      expect(logging.health.admitted, greaterThan(0));
-      expect(logging.producer.rejected, 0);
+        expect(logging.health.admitted, greaterThan(0));
+        expect(logging.producer.rejected, 0);
         await output.closed.future.timeout(const Duration(seconds: 5));
         final records = output.records;
         final requested = records.where(
