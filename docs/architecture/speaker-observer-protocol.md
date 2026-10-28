@@ -28,8 +28,9 @@ platform helpers (`zoom_observer_macos`, `zoom_observer_linux`). Design context:
   are never processed. A well-formed request of a known type with invalid fields
   is not fatal: it gets `error` with `code` `invalid_request` (and the request
   `id` when it was valid) and the session continues.
-- If stdout can no longer be written the helper stops reading Zoom, writes the
-  token `stdout_closed` to stderr and exits 3.
+- If stdout can no longer be written (a failed write, or a hang-up noticed while
+  idle) the helper stops reading Zoom, writes the token `stdout_closed` to stderr
+  and exits 3. An invalid helper configuration exits 64 before any frame.
 - The helper is launched as `<helper> --protocol 1`; any other arguments exit 64
   with a usage line on stderr.
 - All observed strings (names, window titles) are untrusted source data.
@@ -56,17 +57,22 @@ Zoom is running and `null` for either otherwise (the window is only known from
 observations). Until a meeting can be read it reports `unavailable`, and the
 session continues, so a recording that begins before the call does is not
 refused. A second `start` is answered with `error` / `already_started`; it never changes
-the running session's id or `deadline_ms`. A request that arrives after
-shutdown began (`stop`, end of input, a fatal error, a broken stdout) is
+the running session's id or `deadline_ms`. Requests that were already queued when
+shutdown began (`stop`, end of input, a fatal error, a broken stdout) are
 answered with `error` / `cancelled` instead of a state the cancelled read could
-not establish; a `setup` in that position never prompts. End of input uses the
-session's `deadline_ms` for the same stall guard as `stop`.
+not establish; a `setup` in that position never prompts. Requests sent after
+`stop` are never read. End of input uses the session's `deadline_ms` for the same
+stall guard as `stop`. The helper queues at most 64 requests; a request that
+finds the queue full is refused with `error` / `busy` (the reader never blocks
+on queue space, so `stop` is always seen).
 
 `stop` before any `start` is answered with `stopped` whose `session` is `null`.
 `stop` is honored while an accessibility read is stalled: the read is abandoned
 and, if the helper has not finished within `deadline_ms`, its reader thread
-writes `stopped` itself and exits 0. A stalled read never outlives the
-deadline. `capabilities`, `setup` and `start` are answered by the polling
+writes `stopped` itself and exits 0, naming the session only if one had actually
+started. A stalled read never outlives the deadline, and the guard does not wait
+on a stdout the consumer has stopped reading: its write waits at most about
+100 ms for the pipe and lock before giving up and exiting. `capabilities`, `setup` and `start` are answered by the polling
 thread (between reads); `clock` is answered immediately.
 
 ## Frames (helper to service)

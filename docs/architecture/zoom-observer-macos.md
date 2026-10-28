@@ -17,13 +17,14 @@ at the end passes on a real Zoom 7.2.2 (88465) call.
 | File | Role |
 | --- | --- |
 | `native/zoom_ax_parser.{h,mm}` | Pure parser. Snapshot tree in, participants and speakers out. Uses Foundation string folding only; no Accessibility API, no permission. |
-| `native/zoom_observer_core.{h,cpp}`, `zoom_ref_table.h` | Platform-neutral protocol: NDJSON framing, `seq`, bounded reader, polling session, reference table, stop deadline. Links no parser and no OS framework: the platform passes its parse function and parser version through `ObserverConfig`, and supplies a `Source`. A Linux helper reuses this library and the snapshot types in `zoom_ax_parser.h`. |
+| `native/zoom_observer_core.{h,cpp}`, `zoom_ref_table.h` | Platform-neutral protocol: NDJSON framing, `seq`, bounded reader, polling session, reference table, stop deadline. Links no parser and no OS framework: the platform passes its parse function and parser version through `ObserverConfig`, and supplies a `Source`. A Linux helper reuses this library and the snapshot types in `zoom_ax_parser.h`. `ObserverConfig` has no macOS defaults; `run_observer` refuses to start (exit 64) without `parse`, `helper`, `platform` and `parser_version`. In this branch the target sits inside `if(APPLE)` with the macOS-only targets; the Linux change hoists `foresight_zoom_observer_core` to `APPLE OR Linux`, so the CMake move is deliberately not made here. |
+| `native/zoom_ax_convert.{h,mm}` | Attribute values to plain types (string, error wrapper, status mapping), testable with ordinary CoreFoundation objects. |
 | `native/zoom_collector.{h,cpp}` | Bounded traversal behind an `AxReader` interface: limits, absence versus failure, identity registry, cancellation. |
 | `native/zoom_mac_source.{h,cpp}` | The macOS `Source`: the gate order and trust transitions, over an `Environment` and an `AxReader`. Tested with fakes. |
 | `native/zoom_observer_macos.mm` | Only the OS bindings (`NSRunningApplication`, Info.plist, `AXUIElement`) and `main`. |
 | `native/zoom_observer_macos_info.plist` | Embedded `__info_plist` giving the helper the stable identifier `org.openforesight.zoom-observer`. |
-| `tests/fixtures/zoom_ax/` | Synthetic scenarios (76) and the 17-locale phrase set; controlled names only. |
-| `tests/native/zoom_ax_parser.cpp`, `zoom_observer_core.cpp`, `zoom_mac_source.cpp`, `zoom_observer_protocol.py` | CTest `zoom_ax_parser`, `zoom_observer_core`, `zoom_mac_source`, `zoom_observer_protocol`. |
+| `tests/fixtures/zoom_ax/` | Synthetic scenarios (81) and the 17-locale phrase set; controlled names only. |
+| `tests/native/zoom_ax_parser.cpp`, `zoom_ax_convert.cpp`, `zoom_observer_core.cpp`, `zoom_mac_source.cpp`, `zoom_observer_protocol.py` | CTest `zoom_ax_parser`, `zoom_ax_convert`, `zoom_observer_core`, `zoom_mac_source`, `zoom_observer_protocol`. The core test links the real parser for realistic observations rather than a fake. |
 
 The helper is built only on macOS and installed to `bin/` like `foresight-audio`
 (arm64, deployment target from the build, `-fobjc-arc`). Packaging is not wired.
@@ -36,9 +37,12 @@ optional collector-assigned element id.
 
 - **Tile.** Role exactly `AXTabGroup`; the description is
   `<name>, <audio status>[, <active marker>][, other details]`. The audio status
-  anchors on its LAST occurrence, so a name that itself contains a status phrase
-  (of the same or another locale) is kept whole; the research rule took the
-  earliest phrase. Trailing whitespace and ASCII, fullwidth and ideographic
+  anchors on its LAST occurrence (the research rule took the earliest). If the
+  text before it still contains any locale's status or marker phrase, the name is
+  ambiguous (`Mallory, Computer audio unmuted, Active speaker, <real status>`): the
+  tile is dropped, the read is incomplete, and it is never locale evidence. A
+  description made entirely of attacker-controlled text with no real status is
+  structurally identical to a genuine tile and cannot be detected. Trailing whitespace and ASCII, fullwidth and ideographic
   commas are removed from the name. A matched tile's descendants are not
   searched; an unmatched `AXTabGroup` is searched through.
 - **Unnamed and marker-only tiles.** A status with a name that is empty or only
@@ -77,13 +81,19 @@ optional collector-assigned element id.
   `Localizable.strings` of the installed Zoom 7.2.2 (88465). English and
   Simplified Chinese are the intended first live targets; the rest are
   fixture-covered only. The meeting locale comes only from tile statuses and the
-  compact controls; two locales among them are `locale_conflict`. The
+  compact controls. If tiles disagree, a locale held by more tiles than all the
+  others together wins and the outliers are dropped (incomplete read); with no
+  such majority the result is `locale_conflict`, so one participant can blank a
+  two-person meeting but not a larger one. The
   Participants-list label is shared by Spanish and Portuguese, so it never
   contributes locale evidence: the self word of the already established locale
   decides (`Joao (eu)` in a Spanish meeting is not self and not a conflict). An
   unrecognized locale produces no evidence (`no_participant_evidence`, reported as
   `no_meeting`); when the installed Zoom's preferred localization has no phrase
   set the helper reports `unavailable`/`unsupported_locale` instead.
+- **Compact after dropped tiles.** Compact inference does not run when any
+  tile-like node was dropped (unnamed, marker-only, ambiguous): it is only a
+  fallback for a snapshot that really has no tile.
 - **Windows.** Tiles in two windows, or two compact windows, are
   `ambiguous_windows`; nothing is combined. Self evidence is read from any window.
 - **Versions.** Only `7.2.x` bundle versions pass `zoom_version_supported`; others
@@ -138,15 +148,25 @@ optional collector-assigned element id.
   (`CFEqual`), so a screen element that later shows another name gets a new ref;
   scoped to a window label, so refs change if the meeting window is replaced.
   Without element identity the key is (name, ordinal), trusted only while the
-  count of that name is unchanged, and duplicate names there mark the read
-  `complete: false`. A full identity table (4096) or reference table, or
-  dropping departed people to make room, also marks the read incomplete.
+  count of that name is unchanged. Equal names mark the read `complete: false`
+  in both cases: with element identity two tiles that trade places would swap
+  refs silently. A full identity table (4096) or reference table, or
+  dropping departed people to make room (people still present are never
+  evicted), also marks the read incomplete. The identity table is pruned only
+  after a complete read.
 - Shutdown and I/O: after `stop`, end of input, a fatal error or a broken stdout,
   queued `capabilities`/`setup`/`start` requests are answered `error`/`cancelled`.
-  A broken stdout exits 3 with `stdout_closed` on stderr. The request queue holds
-  64 requests (the reader stops reading beyond that) and one request is handled
-  per loop turn so polling continues. The stop guard only try-locks the writer,
-  so a stdout wedged by a slow consumer cannot delay the exit.
+  A broken stdout (failed write, or a hang-up the reader notices while idle) exits
+  3 with `stdout_closed` on stderr. The request queue holds 64 requests; beyond
+  that a request is refused `busy` and the reader keeps reading, and one request
+  is handled per loop turn so polling continues. The reader thread and the stop
+  guard write with a bounded wait (about 100 ms for the writer lock and for the
+  pipe to become writable) so a consumer that stopped reading cannot delay a
+  `stop` or the exit; only the polling thread's ordinary writes may block.
+- Memory: the helper loop is plain C++, so `parse_snapshot`, `comparison_key`,
+  the AX reader calls and the attribute conversion each drain their own
+  autorelease pool; tests bound heap growth for the parser (20000 parses) and
+  the conversion (200000 calls).
 
 ## Build and packaging notes
 
