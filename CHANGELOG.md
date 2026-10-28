@@ -14,6 +14,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
   and activity updates, and remove the remaining-originals switch. Show the final
   recording status after capture stops, including failures and the reason for
   inactivity or desktop-visibility stops.
+- Skip the full registered-model content scan during service startup. Model
+  downloads and registration continue to verify their checksums.
 
 ## [0.1.5] - 2026-10-28
 

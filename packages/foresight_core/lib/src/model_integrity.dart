@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 
-/// The same digest contract is used at registration and every service startup.
+/// The same digest contract is used at registration and explicit verification.
 Future<String> modelAssetDigest(String path) async {
   if (!await Directory(path).exists()) {
     return (await sha256.bind(File(path).openRead()).first).toString();

@@ -371,7 +371,8 @@ class ApplicationService {
       await clearStaleServiceSocket(path);
       sweepStaleSpeechAudio(profile.data);
       store = Store('${profile.data}/application.db', configuration: owned);
-      await store.verifyRegisteredModels(rejectInvalidRegistrations: true);
+      // Downloads and registration verify model contents. Opening the service
+      // must not reread every multi-gigabyte asset before publishing its socket.
       store.meetingStore.interruptActiveCaptures();
       helper = Helper(
         '${profile.runtime}/helper.sock',
