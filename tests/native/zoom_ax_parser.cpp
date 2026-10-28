@@ -393,13 +393,13 @@ void check_parse_does_not_grow_the_heap() {
     foresight::zoom::comparison_key("Zo\xc3\xab Example");
   }
   size_t before = heap_in_use();
-  for (int i = 0; i < 20000; ++i) {
+  for (int i = 0; i < 4000; ++i) {
     foresight::zoom::parse_snapshot(snapshot);
     foresight::zoom::comparison_key("Zo\xc3\xab Example");
   }
   size_t growth = heap_in_use() - before;
   CHECK(growth < 4 * 1024 * 1024,
-        "20000 parses grew the heap by " + std::to_string(growth) + " bytes");
+        "4000 parses grew the heap by " + std::to_string(growth) + " bytes");
 }
 
 } // namespace

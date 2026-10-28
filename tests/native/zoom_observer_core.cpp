@@ -18,6 +18,7 @@
 #include <optional>
 #include <poll.h>
 #include <set>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -455,12 +456,11 @@ void check_duplicate_start_keeps_session() {
                                end == std::string::npos ? std::string::npos
                                                         : end - begin);
   }
-  // The first start is still inside its stalled read, so no session was
-  // started; the guard reports none and never the refused S2.
-  CHECK(line.find("\"session\":null") != std::string::npos &&
+  // The first start was accepted, even though its read is still stalled, so
+  // the guard echoes S1 and never the refused S2.
+  CHECK(line.find("\"session\":\"S1\"") != std::string::npos &&
             line.find("S2") == std::string::npos,
-        "stopped reports no started session and never the refused one: " +
-            line);
+        "stopped names the accepted session: " + line);
   CHECK(child.reap() == 0, "exits 0");
 }
 
@@ -507,29 +507,43 @@ void check_guard_survives_a_full_stdout() {
               {"poll_ms", 100},
               {"deadline_ms", 100}});
   ::usleep(300000); // the first read fills the pipe, then stalls
+  // Replies queued ahead of the stop must not add a wait each.
+  for (int i = 0; i < 30; ++i)
+    child.send({{"type", "clock"}, {"id", i}});
+  auto begin = steady_clock::now();
   child.send({{"type", "stop"}, {"id", "b"}});
   bool timed_out = false;
   int code = child.reap_within(3000, timed_out);
   CHECK(!timed_out, "the guard exits although stdout is full and wedged");
-  CHECK(code == 0, "exit 0 after stop");
+  // Without the give-up window each of the 30 replies would add ~200 ms (6 s);
+  // sanitizer builds process the backlog several times slower.
+  long limit = 1000;
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer) || __has_feature(address_sanitizer)
+  limit = 2500;
+#endif
+#endif
+  CHECK(elapsed_ms(begin) < limit,
+        "a burst of replies cannot delay the stop (" +
+            std::to_string(elapsed_ms(begin)) + " ms)");
+  CHECK(code == 3, "the closing frame could not be written: exit 3, not 0");
 }
 
-// Requests that never started must not be reported as a session.
-void check_guard_reports_only_a_started_session() {
+// A start that was accepted but has not run yet is still the session: the
+// consumer needs its id back in `stopped`.
+void check_guard_echoes_the_accepted_session() {
   Child child = spawn_stalled(6000);
   child.send({{"type", "capabilities"}, {"id", "k"}}); // main loop stalls here
   ::usleep(150000);
   child.send({{"type", "start"},
               {"id", "a"},
-              {"session", "never"},
+              {"session", "accepted"},
               {"poll_ms", 100},
               {"deadline_ms", 300}});
   child.send({{"type", "stop"}, {"id", "b"}});
   CHECK(child.wait_output("\"stopped\"", 3000), "stopped arrives");
-  CHECK(child.output.find("never") == std::string::npos,
-        "a start that never ran is not reported: " + child.output);
-  CHECK(child.output.find("\"session\":null") != std::string::npos,
-        "stopped carries a null session");
+  CHECK(child.output.find("\"session\":\"accepted\"") != std::string::npos,
+        "stopped echoes the accepted session: " + child.output);
   CHECK(child.reap() == 0, "exits 0");
 }
 
@@ -759,37 +773,54 @@ void check_session() {
   CHECK(h.join() == 0, "stop exits 0");
 }
 
-void check_identity_flags_incomplete() {
-  // Without element identity, duplicate names cannot be told apart across
-  // polls: refs stay distinct but the read is flagged incomplete.
-  SnapshotOutcome twins =
-      meeting({tile("Twin Example" + kUnmuted),
-               tile("Twin Example" + kUnmuted + ", Active speaker")});
-  SnapshotOutcome solo = meeting({tile("Solo Example" + kUnmuted)});
+void check_equal_names_policy() {
+  auto twins = [](bool active, uint64_t a, uint64_t b) {
+    return meeting(
+        {tile("Twin Example" + kUnmuted, a),
+         tile("Twin Example" + kUnmuted + (active ? ", Active speaker" : ""),
+              b),
+         tile("Solo Example" + kUnmuted, 9)});
+  };
+  SnapshotOutcome quiet = twins(false, 1, 2);
+  SnapshotOutcome swapped_elements = twins(false, 1, 3);
+  SnapshotOutcome speaking = twins(true, 1, 2);
+  SnapshotOutcome id_less_quiet = meeting(
+      {tile("Twin Example" + kUnmuted), tile("Twin Example" + kUnmuted)});
   SnapshotOutcome no_ids = meeting({tile("Ada Example" + kUnmuted, 5)});
   no_ids.identity_incomplete = true;
-  ScriptedSource source({twins, twins, solo, solo, no_ids});
+  ScriptedSource source({quiet, quiet, swapped_elements, swapped_elements,
+                         speaking, id_less_quiet, id_less_quiet, no_ids});
   Harness h(source);
   h.expect("hello");
   h.send({{"type", "start"}, {"id", "a"}, {"session", "s"}, {"poll_ms", 100}});
   h.expect("started");
-  json one = h.expect("observation");
-  json two = h.expect("observation");
-  CHECK(one["participants"].size() == 2, "both twins reported");
-  CHECK(one["participants"][0]["ref"] != one["participants"][1]["ref"],
+  json first = h.expect("observation");
+  CHECK(first["participants"].size() == 3,
+        "both twins and the third are listed");
+  CHECK(first["participants"][0]["ref"] != first["participants"][1]["ref"],
         "equal names have different refs");
-  CHECK(one["complete"] == false,
-        "duplicate names without identity: incomplete");
-  CHECK(one["participants"][0]["ref"] == two["participants"][0]["ref"],
-        "ordinal refs are stable while the set is unchanged");
-  CHECK(one["speakers"][0]["ref"] == one["participants"][1]["ref"],
-        "the speaker is the marked twin");
-  json solo_one = h.expect("observation");
-  CHECK(solo_one["complete"] == true, "a unique name without identity is fine");
-  json solo_two = h.expect("observation");
-  CHECK(solo_one["participants"][0]["ref"] ==
-            solo_two["participants"][0]["ref"],
-        "unique-name refs are stable");
+  CHECK(first["complete"] == false,
+        "a duplicated name that just appeared may have swapped refs");
+  json second = h.expect("observation");
+  CHECK(second["complete"] == true,
+        "stable equal names do not blank attribution");
+  CHECK(first["participants"][0]["ref"] == second["participants"][0]["ref"] &&
+            first["participants"][1]["ref"] == second["participants"][1]["ref"],
+        "refs are stable");
+  json changed = h.expect("observation");
+  CHECK(changed["complete"] == false,
+        "the elements behind a duplicated name changed");
+  json settled = h.expect("observation");
+  CHECK(settled["complete"] == true, "and settles again");
+  json ambiguous = h.expect("observation");
+  CHECK(ambiguous["speakers"].empty() && ambiguous["complete"] == false,
+        "a speaker with a shared name is withheld, not guessed");
+  json bare_first = h.expect("observation");
+  CHECK(bare_first["complete"] == false, "id-less twins start uncertain");
+  json bare_second = h.expect("observation");
+  CHECK(bare_second["complete"] == true &&
+            bare_second["participants"].size() == 2,
+        "stable id-less twins are certain");
   json flagged = h.expect("observation");
   CHECK(flagged["complete"] == false,
         "a source that lost identity marks the read incomplete");
@@ -851,14 +882,19 @@ void check_ref_table() {
     CHECK(!third.uncertain, "stable and unique: certain");
   }
   {
-    // Equal names are never certain, even with element identity: if their
-    // tiles trade places the references would swap silently.
+    // Equal names keep distinct refs; they are uncertain only when the elements
+    // behind the name change.
     RefTable table;
     auto first = table.assign("w", {person(1, "ann"), person(2, "ann")});
     CHECK(first.refs[0] != first.refs[1] && first.uncertain,
-          "twins with identity are distinct but uncertain");
-    auto traded = table.assign("w", {person(2, "ann"), person(1, "ann")});
-    CHECK(traded.uncertain, "traded twin tiles stay flagged");
+          "twins that just appeared are distinct but uncertain");
+    auto again = table.assign("w", {person(1, "ann"), person(2, "ann")});
+    CHECK(!again.uncertain && again.refs == first.refs,
+          "stable twins are certain with the same refs");
+    auto changed = table.assign("w", {person(1, "ann"), person(3, "ann")});
+    CHECK(changed.uncertain, "a different element behind the name: uncertain");
+    CHECK(changed.refs[0] == first.refs[0] && changed.refs[1] != first.refs[1],
+          "the surviving element keeps its ref, the new one gets its own");
   }
   {
     RefTable table(4);
@@ -1020,6 +1056,18 @@ void check_boundaries() {
   CHECK(reply({{"type", "clock"}, {"id", std::string(129, 'i')}},
               "error")["code"] == "invalid_request",
         "a 129-byte id is refused");
+  // The limit is on the escaped size: a control character costs six bytes.
+  CHECK(reply({{"type", "clock"}, {"id", std::string(21, '\x01')}},
+              "clock")["id"] == std::string(21, '\x01'),
+        "an id of 21 control characters (126 escaped bytes) is accepted");
+  CHECK(reply({{"type", "clock"}, {"id", std::string(22, '\x01')}},
+              "error")["code"] == "invalid_request",
+        "an id of 22 control characters (132 escaped bytes) is refused");
+  CHECK(reply({{"type", "start"},
+               {"id", "ctl"},
+               {"session", std::string(22, '\x02')}},
+              "error")["id"] == "ctl",
+        "a session that escapes past the limit is refused");
   CHECK(reply({{"type", "clock"}, {"id", ""}}, "error")["code"] ==
             "invalid_request",
         "an empty id is refused");
@@ -1156,7 +1204,8 @@ void check_cooperative_cancellation() {
     CHECK(refused["id"] == "s" && refused["code"] == "cancelled",
           "start cancelled during its first read");
     json stopped = h.expect("stopped");
-    CHECK(stopped["session"].is_null(), "no session was started");
+    CHECK(stopped["session"] == "S",
+          "stopped echoes the accepted session although it never ran");
     CHECK(!h.read(300).has_value(), "nothing after stopped");
     CHECK(h.join() == 0, "exit 0");
   }
@@ -1292,6 +1341,128 @@ void check_invalid_configuration_is_refused() {
     ::close(fd);
 }
 
+// A start refused as busy must change nothing, so a retry can succeed.
+void check_busy_start_can_be_retried() {
+  ScriptedSource source({meeting({tile("Ada Example" + kUnmuted, 1)})});
+  source.pause_ms = 40; // keeps the queue full for a few seconds
+  Harness h(source);
+  h.expect("hello");
+  std::string burst;
+  for (int i = 0; i < 70; ++i)
+    burst +=
+        json{{"v", 1}, {"seq", i}, {"type", "capabilities"}, {"id", i}}.dump() +
+        "\n";
+  burst += json{{"v", 1},          {"seq", 70},      {"type", "start"},
+                {"id", "refused"}, {"session", "S"}, {"deadline_ms", 100}}
+               .dump() +
+           "\n";
+  h.send_raw(burst);
+  for (int i = 0; i < 71; ++i)
+    h.skip_seq();
+  bool refused = false;
+  for (int guard = 0; guard < 200 && !refused; ++guard) {
+    auto frame = h.read(5000);
+    if (!frame)
+      break;
+    refused = (*frame)["type"] == "error" && (*frame)["id"] == "refused" &&
+              (*frame)["code"] == "busy";
+  }
+  CHECK(refused, "the start found the queue full and was refused as busy");
+  bool started = false;
+  for (int attempt = 0; attempt < 100 && !started; ++attempt) {
+    h.send({{"type", "start"}, {"id", 1000 + attempt}, {"session", "S"}});
+    for (int guard = 0; guard < 200; ++guard) {
+      auto frame = h.read(5000);
+      if (!frame)
+        break;
+      if ((*frame)["type"] == "started" && (*frame)["id"] == 1000 + attempt) {
+        started = true;
+        break;
+      }
+      if ((*frame)["type"] == "error" && (*frame)["id"] == 1000 + attempt) {
+        CHECK((*frame)["code"] == "busy",
+              "a retry is refused only as busy, never as already_started: " +
+                  frame->dump());
+        ::usleep(100000);
+        break;
+      }
+    }
+  }
+  CHECK(started, "a retry after the queue drained starts the session");
+  h.close_input();
+  h.join();
+}
+
+// A stdout the helper cannot watch (not a FIFO) must not look closed or spin.
+struct Detached {
+  std::thread thread;
+  std::atomic<bool> finished{false};
+  std::atomic<int> code{-1};
+  int input_write = -1, error_read = -1;
+};
+
+void run_with_output(Detached &run, ScriptedSource &source, int out_fd) {
+  int in[2], err[2];
+  if (::pipe(in) || ::pipe(err))
+    std::abort();
+  run.input_write = in[1];
+  run.error_read = err[0];
+  ObserverConfig config = test_config(in[0], out_fd, err[1]);
+  run.thread = std::thread([&run, &source, config, in0 = in[0], err1 = err[1]] {
+    run.code = run_observer(source, config);
+    run.finished = true;
+    ::close(in0);
+    ::close(err1);
+  });
+}
+
+double cpu_seconds() {
+  rusage usage{};
+  ::getrusage(RUSAGE_SELF, &usage);
+  auto seconds = [](timeval t) { return t.tv_sec + t.tv_usec / 1e6; };
+  return seconds(usage.ru_utime) + seconds(usage.ru_stime);
+}
+
+void check_unwatchable_stdout() {
+  struct Case {
+    const char *label;
+    int fd;
+  };
+  const char *root = std::getenv("FORESIGHT_TEST_TEMP_ROOT");
+  std::string file_template =
+      std::string(root ? root : "/var/tmp") + "/zoom-out-XXXXXX";
+  std::vector<char> buffer(file_template.begin(), file_template.end());
+  buffer.push_back('\0');
+  int file_fd = ::mkstemp(buffer.data());
+  CHECK(file_fd >= 0, "temporary output file");
+  ::unlink(buffer.data());
+  for (Case entry : {Case{"/dev/null", ::open("/dev/null", O_WRONLY)},
+                     Case{"a regular file", file_fd}}) {
+    ScriptedSource source({gated("zoom_not_running", "zoom_not_running")});
+    Detached run;
+    run_with_output(run, source, entry.fd);
+    double before = cpu_seconds();
+    ::usleep(600000);
+    double used = cpu_seconds() - before;
+    CHECK(!run.finished, std::string(entry.label) +
+                             ": a stdout that cannot be watched is not closed");
+    CHECK(used < 0.15, std::string(entry.label) +
+                           ": idle watching does not spin (" +
+                           std::to_string(used) + " s of CPU)");
+    char chunk[256];
+    pollfd descriptor{run.error_read, POLLIN, 0};
+    CHECK(::poll(&descriptor, 1, 0) == 0 &&
+              ::read(run.error_read, chunk, 0) == 0,
+          std::string(entry.label) + ": no stdout_closed diagnostic");
+    ::close(run.input_write); // end of input is still a clean exit
+    run.thread.join();
+    CHECK(run.code == 0,
+          std::string(entry.label) + ": exits 0 on end of input");
+    ::close(run.error_read);
+    ::close(entry.fd);
+  }
+}
+
 } // namespace
 
 // ZOOM_TEST_TRACE=1 names each test before it runs, to find a hang.
@@ -1316,7 +1487,7 @@ int main(int argc, char **argv) {
   trace("check_guard_survives_a_full_stdout");
   check_guard_survives_a_full_stdout();
   trace("check_guard_reports_only_a_started_session");
-  check_guard_reports_only_a_started_session();
+  check_guard_echoes_the_accepted_session();
   trace("check_hello_and_clock");
   check_hello_and_clock();
   trace("check_capabilities");
@@ -1324,7 +1495,7 @@ int main(int argc, char **argv) {
   trace("check_session");
   check_session();
   trace("check_identity_flags_incomplete");
-  check_identity_flags_incomplete();
+  check_equal_names_policy();
   trace("check_ref_table");
   check_ref_table();
   trace("check_max_observation_fits_and_oversize_recovers");
@@ -1347,6 +1518,10 @@ int main(int argc, char **argv) {
   check_stop_is_not_queued_behind_a_full_queue();
   trace("check_idle_hangup_is_detected");
   check_idle_hangup_is_detected();
+  trace("check_unwatchable_stdout");
+  check_unwatchable_stdout();
+  trace("check_busy_start_can_be_retried");
+  check_busy_start_can_be_retried();
   trace("check_invalid_configuration_is_refused");
   check_invalid_configuration_is_refused();
   std::printf("zoom_observer_core: %d checks, %d failures\n", checks, failures);

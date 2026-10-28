@@ -14,6 +14,7 @@
 #include <map>
 #include <mutex>
 #include <poll.h>
+#include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
 #include <utility>
@@ -79,7 +80,17 @@ public:
   }
 
   Result emit_bounded(const char *type, json frame, bool terminal = false) {
-    return write_frame(type, std::move(frame), terminal, true);
+    // After one bounded wait times out the consumer is wedged: further bounded
+    // frames give up at once for a while, so a burst of replies ahead of a
+    // `stop` cannot add a wait each.
+    if (bounded_blocked_until_.load() > Clock::now().time_since_epoch().count())
+      return Result::Busy;
+    Result result = write_frame(type, std::move(frame), terminal, true);
+    if (result == Result::Busy)
+      bounded_blocked_until_ = (Clock::now() + std::chrono::milliseconds(250))
+                                   .time_since_epoch()
+                                   .count();
+    return result;
   }
 
   // The reader polls stdout for a hang-up while idle.
@@ -165,6 +176,7 @@ private:
     return Result::Written;
   }
 
+  std::atomic<Clock::rep> bounded_blocked_until_{0};
   std::timed_mutex mutex_;
   int fd_;
   uint64_t seq_ = 0;
@@ -200,9 +212,10 @@ struct Shared {
   // Set by the reader when it accepts the one start request (the stall guard
   // must honor it even while the main loop is stuck before starting).
   std::atomic<int> deadline_ms{kDefaultDeadlineMs};
-  // The session the main loop has actually started; the guard reports only
-  // this.
-  std::string started_session;
+  // The session id of the accepted `start` request (empty before one). The main
+  // loop and the shutdown guard both echo it in `stopped`, even if the first
+  // read never completed; null is only for a stop before any start.
+  std::string accepted_session;
   int wake_fd = -1; // write end of the reader's wake pipe
 
   // Terminal wake-up used when the main loop exits or output breaks.
@@ -236,10 +249,27 @@ bool nesting_exceeds(const std::string &line, int limit) {
   return false;
 }
 
+// Request ids and sessions are echoed in small bounded frames, so the limit is
+// on their JSON-escaped size: control characters count six bytes each.
+bool fits_escaped(const std::string &text, size_t limit) {
+  return json(text).dump().size() <= limit + 2; // the two quotes
+}
+
+// stdout can be watched for a hang-up only when it is a FIFO. A regular file is
+// always "readable", /dev/null is not readable at all, and a socket reports a
+// half-shutdown as a hang-up; for those a closed consumer is only seen on
+// write.
+int watchable_output(int out_fd, int in_fd) {
+  struct stat info{};
+  if (out_fd == in_fd || ::fstat(out_fd, &info) != 0 || !S_ISFIFO(info.st_mode))
+    return -1;
+  return out_fd;
+}
+
 bool valid_id(const json &value) {
   return value.is_number_integer() ||
          (value.is_string() && !value.get_ref<const std::string &>().empty() &&
-          value.get_ref<const std::string &>().size() <= kMaxIdBytes);
+          fits_escaped(value.get_ref<const std::string &>(), kMaxIdBytes));
 }
 
 // Reads an optional bounded integer field. Returns false if present but
@@ -263,7 +293,7 @@ public:
   Reader(Shared &shared, Writer &writer, Source &source, Diagnostics &diag,
          int fd, int wake_fd, int out_fd)
       : shared_(shared), writer_(writer), source_(source), diag_(diag), fd_(fd),
-        wake_fd_(wake_fd), watch_out_(out_fd == fd ? -1 : out_fd) {}
+        wake_fd_(wake_fd), watch_out_(watchable_output(out_fd, fd)) {}
 
   void run() {
     std::string line;
@@ -282,9 +312,14 @@ public:
       }
       if (fds[1].revents)
         return; // the main loop is finishing
-      if (fds[2].revents & (POLLERR | POLLHUP | POLLNVAL)) {
-        watch_out_ = -1; // report once
-        writer_.mark_failed();
+      if (fds[2].revents) {
+        // Only a hang-up is a failure. Anything else (POLLNVAL, or readable
+        // without a hang-up) means stdout cannot be watched: stop watching it
+        // rather than spin.
+        bool hangup = fds[2].revents & (POLLERR | POLLHUP);
+        watch_out_ = -1;
+        if (hangup)
+          writer_.mark_failed();
       }
       if (!fds[0].revents)
         continue;
@@ -325,14 +360,15 @@ private:
     return shared_.deadline_ms.load();
   }
 
+  enum class Pushed { Accepted, Busy, Done };
+
   // Never blocks on queue space: a reader stuck behind a full queue could not
   // see `stop`. A request that finds the queue full is refused with `busy`.
-  // Returns false when the session is ending and nothing more should be read.
-  bool push(Request request) {
+  Pushed push(Request request) {
     {
       std::unique_lock<std::mutex> lock(shared_.mutex);
       if (shared_.done)
-        return false;
+        return Pushed::Done;
       if (shared_.queue.size() >= kMaxQueuedRequests) {
         lock.unlock();
         if (writer_.emit_bounded("error",
@@ -341,12 +377,12 @@ private:
                                   {"message", "request queue full"}}) ==
             Writer::Result::Busy)
           diag_.note("busy_reply_dropped");
-        return true;
+        return Pushed::Busy;
       }
       shared_.queue.push_back(std::move(request));
     }
     shared_.requests.notify_all();
-    return true;
+    return Pushed::Accepted;
   }
 
   // Delivers a terminal event, then guards it: if the polling thread does not
@@ -364,19 +400,25 @@ private:
     if (shared_.finished.wait_for(lock, std::chrono::milliseconds(deadline_ms),
                                   [&] { return shared_.done; }))
       return;
-    std::string session = shared_.started_session;
+    std::string session = shared_.accepted_session;
     lock.unlock();
     diag_.note("shutdown_deadline");
+    // A closing frame that could not be written (a wedged or broken stdout, or
+    // an oversize one) means the consumer never saw it: exit 3, not 0. A write
+    // can also be cut short by this exit, leaving a torn last line.
+    Writer::Result written = Writer::Result::Written;
     if (kind == Request::Kind::Stop)
-      writer_.emit_bounded(
+      written = writer_.emit_bounded(
           "stopped",
           {{"id", request.id},
            {"session", session.empty() ? json(nullptr) : json(session)}},
           true);
     else if (kind == Request::Kind::Fatal)
-      writer_.emit_bounded(
+      written = writer_.emit_bounded(
           "error", {{"code", request.code}, {"message", "protocol error"}},
           true);
+    if (written != Writer::Result::Written)
+      ::_exit(kExitOutput);
     ::_exit(kind == Request::Kind::Fatal ? kExitProtocol : 0);
   }
 
@@ -391,7 +433,7 @@ private:
     request.kind = Request::Kind::Reject;
     request.id = valid_id(id) ? id : json(nullptr);
     request.code = code;
-    return push(std::move(request));
+    return push(std::move(request)) != Pushed::Done;
   }
 
   bool handle_line(const std::string &raw) {
@@ -455,7 +497,8 @@ private:
       int deadline = kDefaultDeadlineMs;
       if (session == request.end() || !session->is_string() ||
           session->get_ref<const std::string &>().empty() ||
-          session->get_ref<const std::string &>().size() > kMaxSessionBytes ||
+          !fits_escaped(session->get_ref<const std::string &>(),
+                        kMaxSessionBytes) ||
           !optional_int(request, "poll_ms", kMinPollMs, kMaxPollMs,
                         out.poll_ms) ||
           !optional_int(request, "deadline_ms", kMinDeadlineMs, kMaxDeadlineMs,
@@ -463,14 +506,21 @@ private:
         return reject(id, "invalid_request");
       if (started_)
         return reject(id, "already_started"); // never touches the live session
-      started_ = true;
       out.session = session->get<std::string>();
-      shared_.deadline_ms = deadline;
+      // A start refused as busy changes nothing, so it can be retried.
+      Pushed pushed = push(out);
+      if (pushed == Pushed::Accepted) {
+        started_ = true;
+        shared_.deadline_ms = deadline;
+        std::lock_guard<std::mutex> lock(shared_.mutex);
+        shared_.accepted_session = out.session;
+      }
+      return pushed != Pushed::Done;
     } else {
       terminate(Request::Kind::Stop, out, session_deadline());
       return false;
     }
-    return push(std::move(out));
+    return push(std::move(out)) != Pushed::Done;
   }
 
   Shared &shared_;
@@ -551,10 +601,6 @@ public:
     session_ = request.session;
     poll_ms_ = request.poll_ms;
     started_ = true;
-    {
-      std::lock_guard<std::mutex> lock(shared_.mutex);
-      shared_.started_session = session_;
-    }
     json target = {{"pid", outcome.pid > 0 ? json(outcome.pid) : json(nullptr)},
                    {"zoom_version", nullable(outcome.zoom_version)}};
     writer_.emit(
@@ -611,14 +657,27 @@ private:
       participants.push_back({{"ref", refs.refs[i]},
                               {"name", parsed.participants[i].name},
                               {"self", parsed.participants[i].self}});
+    // Two people may share a display name and both stay listed with their own
+    // refs. But a speaker whose name is shared cannot be attributed with
+    // confidence (the marker may belong to either), so that speaker is withheld
+    // and the read is incomplete rather than guessed.
+    std::map<std::string, int> name_counts;
+    for (const auto &participant : parsed.participants)
+      ++name_counts[participant.key];
+    bool speaker_withheld = false;
     json speakers = json::array();
-    for (const auto &speaker : parsed.speakers)
+    for (const auto &speaker : parsed.speakers) {
+      if (name_counts[parsed.participants[speaker.participant].key] > 1) {
+        speaker_withheld = true;
+        continue;
+      }
       speakers.push_back({{"ref", refs.refs[speaker.participant]},
                           {"method", speaker.method == Method::ParticipantStatus
                                          ? "participant_status"
                                          : "compact_talking_label"}});
-    bool complete =
-        parsed.complete && !outcome.identity_incomplete && !refs.uncertain;
+    }
+    bool complete = parsed.complete && !outcome.identity_incomplete &&
+                    !refs.uncertain && !speaker_withheld;
     json frame = {
         {"session", session_},
         {"read_start_ms", start_ms},
@@ -735,6 +794,11 @@ int run_observer(Source &source, const ObserverConfig &config) {
   Session session(source, writer, shared, diag, config);
   int exit_code = 0;
   bool running = true;
+  auto accepted_session = [&]() -> json {
+    std::lock_guard<std::mutex> lock(shared.mutex);
+    return shared.accepted_session.empty() ? json(nullptr)
+                                           : json(shared.accepted_session);
+  };
   auto refuse_if_cancelled = [&](const Request &request) {
     if (!shared.cancel)
       return false;
@@ -795,9 +859,7 @@ int run_observer(Source &source, const ObserverConfig &config) {
         break;
       case Request::Kind::Stop:
         if (writer.emit("stopped",
-                        {{"id", request.id},
-                         {"session", session.started() ? json(session.session())
-                                                       : json(nullptr)}},
+                        {{"id", request.id}, {"session", accepted_session()}},
                         true) == Writer::Result::Failed)
           exit_code = kExitOutput;
         running = false;
