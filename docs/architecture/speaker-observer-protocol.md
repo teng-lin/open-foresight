@@ -15,7 +15,18 @@ platform helpers (`zoom_observer_macos`, `zoom_observer_linux`). Design context:
   a protocol error.
 - Every frame has `v` (protocol version, `1`), `type`, and `seq` (a per-direction
   counter from 0, incremented by one per frame). A gap or repeat in `seq` is a
-  protocol error.
+  protocol error. The helper's first frame is `hello` (`seq` 0); the service's
+  first request is `seq` 0 independently.
+- A protocol error is fatal: the helper writes one `error` frame without `id`
+  (`code` is one of `malformed_json`, `protocol_version`, `protocol_seq`,
+  `protocol_type`, `line_too_long`), then exits 2. Malformed JSON, a non-object
+  line, a blank line, invalid UTF-8, nesting deeper than 16 levels, a missing or
+  wrong `v`, a missing or wrong `seq`, and an unknown `type` are all protocol
+  errors. A well-formed request of a known type with invalid fields is not: it
+  gets `error` with `code` `invalid_request` (and the request `id` when it was
+  valid) and the session continues.
+- The helper is launched as `<helper> --protocol 1`; any other arguments exit 64
+  with a usage line on stderr.
 - All observed strings (names, window titles) are untrusted source data.
 
 ## Requests (service to helper)
@@ -28,8 +39,25 @@ platform helpers (`zoom_observer_macos`, `zoom_observer_linux`). Design context:
 | `stop` | `id` | Finish the interval, emit `stopped`, exit 0 within `deadline_ms` |
 | `clock` | `id` | Reply with `clock` frame for offset measurement |
 
-`id` is a service-chosen request identifier echoed in the reply. `session` is
-an opaque recording-session identifier echoed in every observation.
+`id` is a service-chosen request identifier echoed in the reply: an integer or a
+non-empty string of at most 128 bytes, required on every request. `session` is
+an opaque recording-session identifier (non-empty string, at most 128 bytes)
+echoed in every observation. `poll_ms` is an integer from 100 to 5000 (default
+500); `deadline_ms` an integer from 100 to 30000 (default 2000).
+
+`start` is accepted whether or not a meeting exists. The helper answers
+`started` and keeps polling; `target` carries `pid` and `zoom_version` when
+Zoom is running and `null` for either otherwise (the window is only known from
+observations). Until a meeting can be read it reports `unavailable`, and the
+session continues, so a recording that begins before the call does is not
+refused. A second `start` is answered with `error` / `already_started`.
+
+`stop` before any `start` is answered with `stopped` whose `session` is `null`.
+`stop` is honored while an accessibility read is stalled: the read is abandoned
+and, if the helper has not finished within `deadline_ms`, its reader thread
+writes `stopped` itself and exits 0. A stalled read never outlives the
+deadline. `capabilities`, `setup` and `start` are answered by the polling
+thread (between reads); `clock` is answered immediately.
 
 ## Frames (helper to service)
 
@@ -40,13 +68,25 @@ an opaque recording-session identifier echoed in every observation.
 | `started` | `id`, `session`, `target` |
 | `observation` | see below |
 | `unavailable` | `session`, `reason`, `since_ms` |
-| `clock` | `id`, `monotonic_ms` |
+| `clock` | `id`, `monotonic_ms`, `uptime_ms` (optional extra) |
 | `error` | `id` (optional), `code`, `message` |
 | `stopped` | `id`, `session` |
 
 `state` is one of `available`, `needs_setup`, `permission_denied`,
 `zoom_not_running`, `no_meeting`, `unsupported_version`, `unsupported_platform`,
-`unavailable`. `reason` is a short stable token, never user content.
+`unavailable`. `reason` is a short stable token, never user content. `zoom_version`
+and `locale` are `null` when unknown. `unavailable` frames report a change, not
+every failed poll: one frame when an unavailable interval begins and another if
+its `reason` changes (`since_ms` stays at the start of the interval). Observed
+reason tokens include `zoom_not_running`, `accessibility_not_trusted`,
+`zoom_version_unsupported`, `no_meeting_window`, `no_participant_evidence`,
+`ambiguous_windows`, `ambiguous_processes`, `locale_conflict`,
+`unsupported_locale`, `ax_read_failed`, `frame_too_large`. `needs_setup` means
+accessibility was never granted to this helper; after an explicit `setup` that
+is still not granted, or after a grant is lost, the state is `permission_denied`.
+`clock.uptime_ms` is the same instant on the sleep-excluding uptime clock
+(`mach_absolute_time` on macOS), provided because native capture timestamps may
+be derived from a steady clock that does not count system sleep.
 
 ### Observation
 
@@ -69,6 +109,10 @@ an opaque recording-session identifier echoed in every observation.
 - `ref` is meeting-local and valid only within `session`/`window`; it is not a
   durable user identifier. Equal display names with different `ref`s stay
   separate participants.
+- `target.window` is a meeting-local label (`w1`, `w2`, ...) assigned in order of
+  first sight; `target.locale` is the pattern-set id that produced the evidence
+  or `null`. `self` is true only when exactly one participant carries the
+  observed self name.
 - `speakers` empty with `complete: true` means an observed absence of an active
   speaker. A failed or partial read is reported as `unavailable` or with
   `complete: false` and never extends a previous speaker.
