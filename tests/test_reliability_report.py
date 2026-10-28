@@ -18,7 +18,7 @@ START = datetime(2026, 10, 1, 12, 0, 0)
 
 INVENTORY = {
     "gates": {
-        "alpha-stage": {"kind": "command"},
+        "alpha-stage": {"kind": "command", "timeout_seconds": 100},
         "beta-stage": {"kind": "command"},
         "manual-probe": {"kind": "manual"},
     },
@@ -700,7 +700,7 @@ def test_packets_created_in_the_same_second_are_ordered_by_their_recorded_start_
 
 def many_checks(count, **kwargs):
     item = packet(0, **kwargs)
-    item["checks"] = [check("alpha-stage", "passed", seconds=1.0) for _ in range(count)]
+    item["checks"] = [check(f"check-{index}", "passed", seconds=1.0) for index in range(count)]
     return item
 
 
@@ -822,3 +822,135 @@ def test_a_rerun_attempt_of_a_hosted_run_is_a_distinct_source(tmp_path):
     for item, (run, attempt) in zip(items, (("100", "1"), ("100", "2"), ("101", "1")), strict=True):
         item["environment"].update(GITHUB_RUN_ID=run, GITHUB_RUN_ATTEMPT=attempt)
     assert build(tmp_path, items, minimum=1)["sources"] == {"hosted_runs": 3, "local_origins": 0}
+
+
+# ------------------------------------------------------------------ review round: self-reported provenance, links, durations
+
+def test_a_check_id_listed_many_times_in_one_packet_counts_once(tmp_path):
+    item = packet(0, "failed")  # a failed packet may list passed checks beside its failure
+    item["checks"] = [check("alpha-stage", "passed", seconds=1.0) for _ in range(200)] + [check("beta-stage", "failed", seconds=1.0)]
+    result = build(tmp_path, [item], minimum=1)
+    assert count(result, "duplicate-check") == 199 and totals(result)["all_observations"]["observations"] == 2
+    assert totals(result)["all_observations"]["rate"] == 0.5  # not 1 / 201
+    assert result["complete"] is True  # forged repeats lose nothing real
+
+
+def test_the_first_listing_of_a_repeated_check_id_is_the_one_kept(tmp_path):
+    item = packet(0, "failed")
+    item["checks"] = [check("alpha-stage", "failed", seconds=1.0), check("alpha-stage", "passed", seconds=1.0)]
+    result = build(tmp_path, [item], minimum=1)
+    assert totals(result)["all_observations"]["failed"] == 1 and count(result, "duplicate-check") == 1
+
+
+def test_one_identity_at_two_revisions_on_the_same_platform_does_not_decide_the_first_run(tmp_path):
+    same = "a" * 64
+    real, forged = packet(0, "failed", identity=same), packet(1, identity=same)
+    real["source"]["revision"], forged["source"]["revision"] = "r" * 40, "s" * 40
+    result = build(tmp_path, [real, forged], minimum=1)
+    assert result["anomalies"] == {"identities_with_conflicting_revisions": 1}
+    assert {row["key"]["attempt"] for row in result["by_check"]} == {"unidentified"}
+    text = report_module.render(result)
+    assert "Anomaly: 1 change identities appear at more than one revision" in text and "r" * 40 not in text
+
+
+@pytest.mark.parametrize("variant", ["same-revision", "other-platform", "no-revision", "other-origin"])
+def test_the_ordinary_ways_an_identity_repeats_are_not_anomalies(tmp_path, variant):
+    same = "a" * 64
+    first, second = packet(0, "failed", identity=same), packet(1, identity=same)
+    first["source"]["revision"] = "r" * 40
+    second["source"]["revision"] = "r" * 40
+    if variant == "other-platform":
+        second["source"]["revision"], second["host"]["platform"] = "s" * 40, "linux"  # the same change validated on both platforms
+    elif variant == "no-revision":
+        second["source"]["revision"] = None
+    elif variant == "other-origin":
+        second["source"]["revision"], second["environment"]["GITHUB_ACTIONS"] = "s" * 40, "true"
+    result = build(tmp_path, [first, second], minimum=1)
+    assert result["anomalies"] == {"identities_with_conflicting_revisions": 0}
+    assert "Anomaly:" not in report_module.render(result)
+
+
+def test_the_report_states_that_packet_provenance_is_self_reported(tmp_path):
+    notes = " ".join(build(tmp_path, [packet(0)])["notes"])
+    assert "self-reported and not authenticated" in notes and "describes the packets it was given" in notes
+
+
+def test_a_symlink_swapped_in_after_the_scan_is_refused_not_followed(tmp_path, monkeypatch):
+    target = write(tmp_path, "real.json", packet(0))
+    link = tmp_path / "link.json"
+    link.symlink_to(target)
+    with pytest.raises(ValueError, match="symbolic link"):
+        report_module.validation_replay.read_packet_bytes(link)
+    assert report_module.read_packet(link) == (None, "not-a-regular-file")
+    inside = tmp_path / "scan"
+    inside.mkdir()
+    (inside / "swapped.json").symlink_to(target)
+    monkeypatch.setattr(report_module, "collect_files", lambda directory: ([inside / "swapped.json"], report_module.Counter(), True))
+    result = report_module.build_report(inside, INVENTORY, 1)
+    assert count(result, "not-a-regular-file") == 1 and result["inputs"]["run_packets_used"] == 0
+
+
+def test_the_replay_refuses_a_symlinked_packet(tmp_path, capsys):
+    from tools import validation_replay as replay
+
+    real = write(tmp_path, "real.json", packet(0))
+    (tmp_path / "link.json").symlink_to(real)
+    assert replay.main([str(tmp_path / "link.json")]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("validation_replay: Cannot read packet") and "Traceback" not in err
+
+
+def test_the_baseline_is_never_clobbered_even_when_it_appears_after_the_check(tmp_path, monkeypatch):
+    destination = tmp_path / "baseline.json"
+    destination.write_text("someone else's file")
+    monkeypatch.setattr(Path, "exists", lambda self: False)  # the check-then-write window: the file is created just after it
+    with pytest.raises(ValueError, match="already exists"):
+        report_module.publish({"kind": "x"}, destination)
+    assert destination.read_text() == "someone else's file"
+    assert not [name for name in os.listdir(tmp_path) if name.startswith(".reliability-")]
+    monkeypatch.undo()
+    report_module.publish({"kind": "mine"}, destination, replace=True)
+    assert json.loads(destination.read_text()) == {"kind": "mine"}
+
+
+def test_a_fresh_baseline_is_linked_into_place_and_the_temp_file_is_gone(tmp_path):
+    destination = tmp_path / "out" / "baseline.json"
+    report_module.publish({"kind": "x"}, destination)
+    assert destination.stat().st_nlink == 1 and os.listdir(destination.parent) == ["baseline.json"]
+
+
+def test_the_descriptor_is_closed_when_it_cannot_become_a_stream(tmp_path, monkeypatch):
+    closed = []
+    real_close = os.close
+    monkeypatch.setattr(report_module.os, "fdopen", lambda *a, **k: (_ for _ in ()).throw(OSError("no memory")))
+    monkeypatch.setattr(report_module.os, "close", lambda descriptor: closed.append(descriptor) or real_close(descriptor))
+    with pytest.raises(OSError, match="no memory"):
+        report_module.publish({"kind": "x"}, tmp_path / "b.json")
+    assert len(closed) == 1 and os.listdir(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    ("seconds", "kept"),
+    [(1.0, True), (100.0, True), (159.0, True), (160.0, True), (161.0, False), (9_999_999.0, False), (-1.0, False), (float("nan"), False),
+     (float("inf"), False), (True, False), ("5", False), ([1], False)],
+)
+def test_a_duration_beyond_the_gates_own_timeout_plus_a_margin_is_left_out_and_counted(tmp_path, seconds, kept):
+    items = [packet(0, seconds=10.0), packet(1, seconds=10.0)]
+    items[1]["checks"][0]["seconds"] = seconds
+    row = one(build(tmp_path, items, minimum=2)["by_check"], check="alpha-stage")
+    assert row["seconds_excluded"] == (0 if kept else 1)
+    assert row["seconds"]["n"] == (2 if kept else 1)
+    if kept:
+        assert row["seconds"]["p90"] <= 160.0
+    else:
+        assert row["seconds"] == {"n": 1, "p50": 10.0, "p90": 10.0}  # a forged duration moves neither percentile
+
+
+def test_a_missing_duration_is_not_a_refused_one_and_an_unlisted_gate_gets_the_default_limit(tmp_path):
+    items = [packet(0), packet(1, check_id="beta-stage", seconds=30_000.0)]
+    items[0]["checks"][0].pop("seconds")
+    result = build(tmp_path, items, minimum=1)
+    assert one(result["by_check"], check="alpha-stage")["seconds_excluded"] == 0
+    assert one(result["by_check"], check="beta-stage")["seconds_excluded"] == 1  # beta has no timeout: 6 hours is the ceiling
+    assert report_module.gate_timeouts(INVENTORY) == {"alpha-stage": 100.0}
+    assert report_module.gate_timeouts({"gates": {"x": {"timeout_seconds": True}, "y": {"timeout_seconds": "9"}}}) == {}

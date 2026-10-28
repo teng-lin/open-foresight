@@ -338,7 +338,16 @@ What it refuses to do is the point:
   `created_utc` before 2026-01-01 or more than a day in the future is rejected as
   implausible, so a back-dated forgery cannot take a real failure's first-run slot;
   that is a cheap check, not authentication, and a plausibly dated forgery still
-  counts. A change identity is used only if it is a lowercase SHA-256 hex digest.
+  counts. Packet provenance (`created_utc`, `identity_sha256`, the revision) is
+  self-reported and not authenticated. A change identity is used only if it is a
+  lowercase SHA-256 hex digest. A check id listed twice in one packet counts once
+  (the first listing; the excess is the `duplicate-check` rejection), so a packet
+  cannot inflate its own denominator. A change identity seen at more than one
+  revision on the same platform and origin is reported as an anomaly and its runs
+  are labelled `unidentified`, so they cannot decide which run is first; the same
+  identity on two platforms is normal and is keyed apart. A duration beyond the
+  gate's own `timeout_seconds` plus 60 seconds (6 hours for a gate with none) is
+  left out of the percentiles and counted as `seconds_excluded`.
 - **Packets are untrusted.** Only regular files (never symlinks) up to 8 MiB are
   read, to a depth of 6 directories (a `gh run download` layout nests an artifact
   four deep), with caps of 5000 files, 500 directories and 256 MiB in total. Each
@@ -352,7 +361,11 @@ What it refuses to do is the point:
   observations in all. Each packet is reduced to its observations at once and
   dropped, so memory is bounded by the observation cap, not by the bytes read. An
   incomplete report is printed with that marked, the exit
-  status is 3, and no baseline is written from it. Content that is invalid, a
+  status is 3, and no baseline is written from it. A baseline is written without
+  clobbering: a fresh file is hard-linked into place (it fails if the destination
+  exists at that moment), and only `--replace` renames over an existing one. Packet
+  files are opened without following a final symbolic link, so a link swapped in
+  after the scan is refused. Content that is invalid, a
   duplicate, a symlink or a pipe loses nothing and leaves it complete.
 - **Nothing a packet wrote is printed.** Groups use gate ids (of any kind, so manual
   and CI-only gates are attributed and excluded from rates) and boundary ids from

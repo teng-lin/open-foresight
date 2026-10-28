@@ -74,9 +74,11 @@ MAX_CHECKS_PER_PACKET = 256  # a real packet records fewer than 30 checks
 MAX_OBSERVATIONS = 200_000  # rows kept in memory for the whole report
 EPOCH = datetime(2026, 1, 1)  # no packet can predate the project's evidence format
 FUTURE_SLACK = timedelta(days=1)
+SECONDS_MARGIN = 60  # added to a gate's own timeout: a check cannot honestly outlast the deadline that kills it
+DEFAULT_SECONDS_LIMIT = 6 * 3600  # for a check id with no timeout in the inventory
 REJECTIONS = (
     "not-a-regular-file", "too-large", "unreadable", "not-json", "not-an-evidence-summary", "invalid-evidence",
-    "bad-timestamp", "implausible-timestamp", "duplicate", "file-cap", "byte-budget", "depth-cap", "too-many-checks",
+    "bad-timestamp", "implausible-timestamp", "duplicate", "duplicate-check", "file-cap", "byte-budget", "depth-cap", "too-many-checks",
     "observation-cap",
 )
 # Data that exists but was not read: the report cannot claim to be complete. (Content that is invalid, a duplicate or
@@ -151,10 +153,27 @@ def known_ids(inventory: Mapping[str, Any]) -> tuple[dict[str, tuple[str, ...]],
     return {name: tuple(sorted(set(ids))) for name, ids in served.items()}, boundaries
 
 
-def finite_seconds(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return float(value) if math.isfinite(value) and 0 <= value < 10**7 else None
+def usable_seconds(value: Any, limit: float) -> tuple[float | None, bool]:
+    """(seconds, excluded): a duration kept for the percentiles, or None with whether one was present and refused.
+
+    A duration beyond [limit] (the gate's own timeout plus a margin), negative,
+    not finite or not a number is refused and counted, so one forged check cannot
+    move p50 or p90.
+    """
+    if value is None:
+        return None, False
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= limit:
+        return None, True
+    return float(value), False
+
+
+def gate_timeouts(inventory: Mapping[str, Any]) -> dict[str, float]:
+    """Each command gate's own timeout from the inventory; a gate without one is not in the result."""
+    return {
+        name: float(gate["timeout_seconds"])
+        for name, gate in inventory["gates"].items()
+        if isinstance(gate.get("timeout_seconds"), (int, float)) and not isinstance(gate["timeout_seconds"], bool)
+    }
 
 
 def cache_state(check: Mapping[str, Any]) -> str:
@@ -195,6 +214,8 @@ class Row:
     outcome: str
     excluded: str | None
     seconds: float | None
+    seconds_excluded: bool = False
+    revision: str | None = None  # a short digest of the recorded revision, compared and never shown
     attempt: str = "unidentified"
 
     def __getitem__(self, name: str) -> Any:
@@ -204,16 +225,34 @@ class Row:
         setattr(self, name, value)
 
 
-def observations(packet: Mapping[str, Any], created: datetime, services: Mapping[str, tuple[str, ...]]) -> list[Row]:
-    """One observation per recorded check of a run packet, with only closed-vocabulary fields."""
+def observations(
+    packet: Mapping[str, Any], created: datetime, services: Mapping[str, tuple[str, ...]], timeouts: Mapping[str, float] | None = None
+) -> tuple[list[Row], int]:
+    """(one observation per distinct check of a run packet, how many repeated check ids were dropped).
+
+    A check id listed twice in one packet counts once, so a packet cannot inflate
+    its own denominator.
+    """
     platform = packet["host"].get("platform")
     environment = packet["environment"]
     selection = (packet.get("selection") or {}).get("conservative")
-    identity = (packet["source"] or {}).get("identity_sha256")
+    source = packet["source"] or {}
+    identity = source.get("identity_sha256")
+    revision = source.get("revision")
     result = []
+    seen: set[str] = set()
+    dropped = 0
     for check in packet["checks"]:
         name = check["id"]
+        if name in seen:
+            dropped += 1
+            continue
+        seen.add(name)
         outcome, excluded = classify(check)
+        eligible = outcome in ("success", "failure")
+        seconds, refused = usable_seconds(
+            check.get("seconds") if eligible else None, (timeouts or {}).get(name, DEFAULT_SECONDS_LIMIT - SECONDS_MARGIN) + SECONDS_MARGIN
+        )
         result.append(
             Row(
                 created=created,
@@ -226,10 +265,12 @@ def observations(packet: Mapping[str, Any], created: datetime, services: Mapping
                 cache=cache_state(check),
                 outcome=outcome,
                 excluded=excluded,
-                seconds=finite_seconds(check.get("seconds")) if outcome in ("success", "failure") else None,
+                seconds=seconds,
+                seconds_excluded=refused,
+                revision=hashlib.sha256(revision.encode(errors="replace")).hexdigest()[:12] if isinstance(revision, str) and revision else None,
             )
         )
-    return result
+    return result, dropped
 
 
 def source_key(packet: Mapping[str, Any]) -> str:
@@ -247,7 +288,9 @@ def sequence(packet: Mapping[str, Any]) -> float:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else 0.0
 
 
-def ingest(directory: Path, services: Mapping[str, tuple[str, ...]], now: datetime | None = None) -> dict[str, Any]:
+def ingest(
+    directory: Path, services: Mapping[str, tuple[str, ...]], now: datetime | None = None, timeouts: Mapping[str, float] | None = None
+) -> dict[str, Any]:
     files, rejected, complete = collect_files(directory)
     now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     seen: set[str] = set()
@@ -297,7 +340,8 @@ def ingest(directory: Path, services: Mapping[str, tuple[str, ...]], now: dateti
             if packet["mode"] != "run":
                 plans += 1
                 continue
-            rows = observations(packet, created, services)
+            rows, repeated = observations(packet, created, services, timeouts)
+            rejected["duplicate-check"] += repeated
             if total + len(rows) > MAX_OBSERVATIONS:
                 rejected["observation-cap"] += 1
                 break
@@ -308,10 +352,18 @@ def ingest(directory: Path, services: Mapping[str, tuple[str, ...]], now: dateti
             rejected["invalid-evidence"] += 1
     kept.sort(key=lambda item: (item[0], item[1], item[2]))
     rows = [row for _created, _sequence, _digest, items in kept for row in items]
+    # One change identity seen at two different revisions on the same platform and origin is anomalous: the identity is
+    # self-reported, so such runs do not get to decide which run is first. (The same identity on two platforms is
+    # normal and is keyed apart.)
+    revisions: dict[tuple[str, str, str], set[str]] = {}
+    for row in rows:
+        if row["identity"] is not None and row["revision"] is not None:
+            revisions.setdefault((row["identity"], row["platform"], row["origin"]), set()).add(row["revision"])
+    conflicted = {key for key, seen_revisions in revisions.items() if len(seen_revisions) > 1}
     first_seen: set[tuple[Any, ...]] = set()
     for row in rows:
         key = (row["identity"], row["check"], row["platform"], row["origin"])
-        if row["identity"] is None:
+        if row["identity"] is None or (row["identity"], row["platform"], row["origin"]) in conflicted:
             row["attempt"] = "unidentified"
         elif row["outcome"] not in ("success", "failure"):
             row["attempt"] = "excluded"  # an attempt that never executed, was cancelled or was unavailable consumes no slot
@@ -322,7 +374,7 @@ def ingest(directory: Path, services: Mapping[str, tuple[str, ...]], now: dateti
             first_seen.add(key)
     return {
         "rows": rows, "rejected": rejected, "complete": complete, "plans": plans, "packets": len(kept), "files": len(files),
-        "sources": sources,
+        "sources": sources, "conflicted_identities": len({identity for identity, _platform, _origin in conflicted}),
     }
 
 
@@ -339,6 +391,7 @@ def summarize(rows: Sequence[Mapping[str, Any]], minimum: int) -> dict[str, Any]
         "excluded": len(rows) - rate["eligible"],
         "rate": rate["rate"] if enough else None,
         "label": None if enough else f"insufficient sample ({rate['eligible']} eligible, {minimum} needed)",
+        "seconds_excluded": sum(1 for row in rows if row["seconds_excluded"]),
         "seconds": {"n": len(seconds), "p50": ci_stats.percentile(seconds, 0.5), "p90": ci_stats.percentile(seconds, 0.9)} if enough and seconds else None,
     }
 
@@ -394,7 +447,7 @@ def overall(rows: Sequence[Mapping[str, Any]], minimum: int) -> list[dict[str, A
 
 def build_report(directory: Path, inventory: Mapping[str, Any], minimum: int = DEFAULT_MINIMUM_SAMPLE, now: datetime | None = None) -> dict[str, Any]:
     services, _boundaries = known_ids(inventory)
-    ingested = ingest(directory, services, now)
+    ingested = ingest(directory, services, now, gate_timeouts(inventory))
     rows = ingested["rows"]
     rejected = {reason: ingested["rejected"].get(reason, 0) for reason in REJECTIONS}
     complete = ingested["complete"] and not any(rejected[reason] for reason in INCOMPLETE)
@@ -410,6 +463,7 @@ def build_report(directory: Path, inventory: Mapping[str, Any], minimum: int = D
         },
         "baseline": "fresh: this window only; no earlier or frozen window is read or compared",
         "trust": TRUST,
+        "anomalies": {"identities_with_conflicting_revisions": ingested["conflicted_identities"]},
         "sources": {
             "hosted_runs": sum(1 for key in ingested["sources"] if key.startswith("hosted:")),
             "local_origins": sum(1 for key in ingested["sources"] if key.startswith("local:")),
@@ -429,6 +483,8 @@ def build_report(directory: Path, inventory: Mapping[str, Any], minimum: int = D
             "Cancelled, never-started, unavailable, manual, CI-only, subsumed and planned checks are excluded from the rate and counted.",
             "Only the first executed run (passed or failed) of a change identity is an independent sample; later executed runs are qualification repeats and never offset a failed first run. An attempt that never executed (not run, unavailable, cancelled) is shown as excluded and consumes no slot.",
             "Packets created in the same second are ordered by their recorded start time when present, else by content digest.",
+            "Packet provenance (created_utc, identity_sha256, the revision) is self-reported and not authenticated; inputs are unauthenticated and the report describes the packets it was given.",
+            "A check id listed twice in one packet counts once; a duration beyond the gate's own timeout plus a margin is left out of the percentiles and counted.",
             "A check counts toward every boundary it serves, so boundary rows overlap. Local and hosted runs are never mixed.",
             "Boundary names come from this checkout's inventory; packets from another revision may map differently.",
             "The execution mode (source or compiled) is not recorded in a packet, so it is not a dimension here.",
@@ -466,6 +522,11 @@ def render(report: Mapping[str, Any]) -> str:
         f"Complete: {'yes' if report['complete'] else 'NO, a cap cut the read short'}. Minimum sample: {report['minimum_sample']} eligible runs.",
         "",
         "## Inputs",
+        *(
+            [f"- Anomaly: {report['anomalies']['identities_with_conflicting_revisions']} change identities appear at more than one revision on the same platform and origin; their runs are labelled unidentified."]
+            if report["anomalies"]["identities_with_conflicting_revisions"]
+            else []
+        ),
         f"- Files considered: {report['inputs']['files_considered']}; run packets used: {report['inputs']['run_packets_used']}; "
         f"plan-only packets not counted: {report['inputs']['plan_only_packets_not_counted']}.",
         _rejected_line(report["inputs"]["rejected"]),
@@ -506,7 +567,12 @@ def render(report: Mapping[str, Any]) -> str:
 
 
 def publish(report: Mapping[str, Any], destination: Path, replace: bool = False) -> Path:
-    """Atomically write the baseline as an owner-only regular file; never over a symlink or, unasked, a file."""
+    """Write the baseline as an owner-only regular file; never over a symlink or, unasked, a file.
+
+    Without [replace] the finished temporary file is hard-linked into place, which
+    fails if the destination exists at that moment, so a file created after the
+    check is never clobbered. With [replace] it is renamed over the destination.
+    """
     if destination.is_symlink():
         raise ValueError("The baseline destination must not be a symlink")
     if destination.exists() and not replace:
@@ -514,11 +580,23 @@ def publish(report: Mapping[str, Any], destination: Path, replace: bool = False)
     destination.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=".reliability-", dir=destination.parent)  # created 0600
     try:
-        with os.fdopen(descriptor, "w") as stream:
+        try:
+            stream = os.fdopen(descriptor, "w")
+        except BaseException:
+            os.close(descriptor)
+            raise
+        with stream:
             stream.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, destination)
+        if replace:
+            os.replace(temporary, destination)
+        else:
+            try:
+                os.link(temporary, destination)
+            except FileExistsError as error:
+                raise ValueError("The baseline already exists; pass --replace to write a new one") from error
+            os.unlink(temporary)
     except BaseException:
         Path(temporary).unlink(missing_ok=True)
         raise

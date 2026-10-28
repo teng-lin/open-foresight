@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import io
 from collections.abc import Callable, Mapping, Sequence
 import json
@@ -54,10 +55,17 @@ LIST_LIMIT = 200
 def read_packet_bytes(path: Path) -> bytes:
     """The packet's bytes, refusing anything that is not a regular file of bounded size.
 
-    The file is opened without blocking and inspected through the descriptor, so a
-    FIFO or device cannot hang the replay and a swap after the check changes nothing.
+    The file is opened without blocking and without following a final symbolic link,
+    and inspected through the descriptor, so a FIFO or device cannot hang the replay
+    and a swap after a scan changes nothing.
     """
-    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        # O_NOFOLLOW: a symlink swapped in at the path after a scan is refused, not followed.
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except OSError as error:
+        if error.errno in (errno.ELOOP, errno.EMLINK):
+            raise ValueError("not a regular file (a symbolic link)") from error
+        raise
     try:
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode):
