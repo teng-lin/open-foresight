@@ -439,6 +439,40 @@ void main() {
       expect(decide(history, audio(2, 6), policy: policy).participantRef, 'a');
     });
 
+    test(
+      'mixed methods start an interval at the smallest lag, end it at the largest',
+      () {
+        reads(history, 1, 10, speakers: ['b']);
+        history.addObservation(read(10.5, speakers: ['a']));
+        reads(
+          history,
+          11,
+          13,
+          speakers: ['a'],
+          method: SpeakerEvidenceMethod.compactTalkingLabel,
+        );
+        final policy = SpeakerAttributionPolicy(
+          indicatorLagUs: {SpeakerEvidenceMethod.compactTalkingLabel: sec(1)},
+        );
+        // The handover lies somewhere between Bo's last read (10.0 s) and the
+        // first status read of Ada (10.5 s): the label's longer lag must not pull
+        // the start of Ada's certainty earlier.
+        final inside = decide(history, audio(10.05, 10.4), policy: policy);
+        expectState(inside, SpeakerDecisionState.multiple, 'speaker_change');
+        expect(
+          decide(history, audio(10.6, 11.9), policy: policy).participantRef,
+          'a',
+        );
+        // The trailing edge uses the largest lag: the last read at 13.0 s shows
+        // speech up to 12.0 s only.
+        expectState(
+          decide(history, audio(11.5, 12.4), policy: policy),
+          SpeakerDecisionState.stale,
+          'history_ends',
+        );
+      },
+    );
+
     test('lag moves the trailing edge of the last interval earlier', () {
       reads(history, 1, 5, speakers: ['a']);
       final policy = SpeakerAttributionPolicy(

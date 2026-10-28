@@ -434,7 +434,15 @@ final class SpeakerAttributor {
     return null;
   }
 
-  int _lagOf(_Segment segment) => segment.methods.isEmpty
+  /// A segment's evidence may mix methods with different indicator lags. When
+  /// its first read happened is bounded by the smallest lag (the latest the
+  /// speech can have begun); when its last read still showed the speaker is
+  /// bounded by the largest (the earliest the speech can have ended).
+  int _lagMin(_Segment segment) => segment.methods.isEmpty
+      ? policy.defaultLagUs
+      : segment.methods.map(policy.lagFor).reduce(math.min);
+
+  int _lagMax(_Segment segment) => segment.methods.isEmpty
       ? policy.defaultLagUs
       : segment.methods.map(policy.lagFor).reduce(math.max);
 
@@ -453,15 +461,15 @@ final class SpeakerAttributor {
     for (var i = segments.length - 1; i >= 0; i--) {
       laterStart[i] = math.min(
         laterStart[i + 1],
-        segments[i].firstEndUs - _lagOf(segments[i]),
+        segments[i].firstEndUs - _lagMin(segments[i]),
       );
     }
     final regions = <_Region>[];
-    var cursor = segments.first.firstEndUs - _lagOf(segments.first);
+    var cursor = segments.first.firstEndUs - _lagMin(segments.first);
     regions.add(_Region(_RegionType.before, _negativeInfinity, cursor));
     for (var i = 0; i < segments.length; i++) {
       final segment = segments[i];
-      final lastRead = segment.lastStartUs - _lagOf(segment);
+      final lastRead = segment.lastStartUs - _lagMax(segment);
       if (i == segments.length - 1) {
         final certainEnd = math.max(lastRead, cursor);
         regions
@@ -479,7 +487,7 @@ final class SpeakerAttributor {
         break;
       }
       final next = segments[i + 1];
-      final nextFirst = next.firstEndUs - _lagOf(next);
+      final nextFirst = next.firstEndUs - _lagMin(next);
       // A later segment with a larger lag can start earlier on the audio clock
       // than this one ends, even beyond its immediate successor: certainty
       // ends at the earliest such start.
