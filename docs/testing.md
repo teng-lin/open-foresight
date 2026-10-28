@@ -263,9 +263,14 @@ the table and the data differ, and enforces the rules above. An entry with no
 owner must say `unassigned`, and an owner is never filled in on anyone's behalf. A
 class other than UNKNOWN needs cited evidence, and a closed entry cannot be
 UNKNOWN. A rerun can be recorded and never closes anything: closing needs a
-controlling test that exists in the repository and a pair of commits, one where it
-failed and one where it passes (`--verify-commits` checks them with Git). A
-mitigated entry says what was mitigated. A consequence names failure entries as
+controlling test that is registered in the repository (a Python test function or
+a Dart `test(`, not a comment or a substring) and a pair of commits, one where it
+failed and one where it passes. That pair is the author's claim and nothing runs
+the test at either commit; `--verify-commits` (off by default, so the pytest does
+not use it) checks only that both are commits of this repository and are in
+order. Deleting an entry is a silent close that review must catch; `--base REV`
+refuses an entry that exists at REV and is gone. A mitigated entry says what was
+mitigated. A consequence names failure entries as
 causes, stays consequence only while any cause is not closed, and cannot be closed
 before they are.
 

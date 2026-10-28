@@ -3,7 +3,8 @@
 
     .venv/bin/python -m tools.failure_ledger            # check; exit 1 on any problem
     .venv/bin/python -m tools.failure_ledger --write    # regenerate the table in docs/testing.md
-    .venv/bin/python -m tools.failure_ledger --verify-commits   # also check closing commits in Git
+    .venv/bin/python -m tools.failure_ledger --verify-commits   # also check that closing commits exist and are ordered
+    .venv/bin/python -m tools.failure_ledger --base origin/main # also refuse entries deleted since REV
 
 The data lives in tools/failure_ledger.json: one entry per unresolved failure
 (class, owner, bounded next experiment, exit criterion, status) and one per
@@ -16,8 +17,14 @@ check fails when the two differ. The rules this enforces:
 - A class other than UNKNOWN needs cited evidence; UNKNOWN stays UNKNOWN until it
   has some, and a closed entry cannot be UNKNOWN.
 - A successful rerun never closes an entry. Reruns may be recorded, and change
-  nothing. Closing needs a controlling test that exists in the repository and a
-  pair of commits (failing before, passing after).
+  nothing. Closing needs a controlling test that is registered in the repository
+  (a Python test function or a Dart `test(`/`testWidgets(`, not a comment or a
+  substring) and a pair of commits (failing before, passing after). The pair is
+  the author's claim: nothing runs the test at either commit. `--verify-commits`
+  checks only that both are commits of this repository and are in order, and it
+  is off by default. `--base REV` compares with the ledger at REV and refuses an
+  entry that was deleted instead of closed; without it a deleted entry is a
+  silent close that only review catches.
 - A mitigated entry says what was mitigated; an open or mitigated entry has no
   closing record.
 - A consequence names existing failure entries as causes, is consequence-only
@@ -36,11 +43,15 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping, Sequence
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 from typing import Any
+
+from tools import boundary_inventory
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = "tools/failure_ledger.json"
@@ -155,12 +166,16 @@ def _closing(entry: Mapping[str, Any], problems: list[str], where: str, root: Pa
             problems.append(f"{where}: closed_by.test must name a file inside the repository")
         else:
             try:
-                content = read_bounded(candidate, MAX_DOCUMENT_BYTES)  # the link itself, so a symlink is refused
+                read_bounded(candidate, MAX_DOCUMENT_BYTES)  # the link itself, so a symlink or a huge file is refused
             except ValueError:
                 problems.append(f"{where}: the controlling test file {safe(path_text)} does not exist or cannot be read")
             else:
-                if name not in content:
-                    problems.append(f"{where}: the controlling test {safe(name)} does not appear in {safe(path_text)}")
+                try:
+                    registered = boundary_inventory.is_registered(root, path_text, name)
+                except Exception:  # noqa: BLE001 - a file that cannot be parsed registers nothing
+                    registered = False
+                if not registered:
+                    problems.append(f"{where}: {safe(name)} is not a registered test in {safe(path_text)} (a .py test function or a Dart test, not a comment or a substring)")
     for label, sha in (("failing_before", before), ("passing_after", after)):
         if not isinstance(sha, str) or not COMMIT.fullmatch(sha):
             problems.append(f"{where}: closed_by.{label} must be a full lowercase commit hash")
@@ -338,30 +353,62 @@ def replace_table(document: str, table: str) -> str:
     return f"{head}{BEGIN}\n{table}\n{END}{tail}"
 
 
+def _git(root: Path, *arguments: str) -> int | None:
+    """Exit status of a Git command in [root], or None if Git could not be run."""
+    try:
+        return subprocess.run(["git", "-C", str(root), *arguments], capture_output=True, timeout=30, check=False).returncode
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def verify_commits(ledger: Mapping[str, Any], root: Path = ROOT) -> list[str]:
-    """For each closed entry: both commits exist and the failing one is an ancestor of the passing one."""
+    """For each closed entry, independently: both commits exist and the failing one is an ancestor of the passing one.
+
+    This checks the pair's existence and order and nothing more: it does not run the
+    controlling test at either commit, so the pair stays the author's claim.
+    """
     problems: list[str] = []
     for entry in ledger["entries"]:
         closed_by = entry.get("closed_by")
         if entry.get("status") != "closed" or not isinstance(closed_by, dict):
             continue
+        missing = False
         for label in ("failing_before", "passing_after"):
-            try:
-                result = subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{closed_by[label]}^{{commit}}"], capture_output=True, timeout=30, check=False)
-            except (OSError, subprocess.SubprocessError):
+            status = _git(root, "cat-file", "-e", f"{closed_by[label]}^{{commit}}")
+            if status is None:
                 return [*problems, "git could not be run to verify commits"]
-            if result.returncode:
+            if status:
                 problems.append(f"{entry['id']}: closed_by.{label} is not a commit in this repository")
-        if not problems:
-            ancestor = subprocess.run(
-                ["git", "-C", str(root), "merge-base", "--is-ancestor", closed_by["failing_before"], closed_by["passing_after"]], capture_output=True, timeout=30, check=False
-            )
-            if ancestor.returncode:
-                problems.append(f"{entry['id']}: failing_before is not an ancestor of passing_after")
+                missing = True
+        if missing:
+            continue
+        if _git(root, "merge-base", "--is-ancestor", closed_by["failing_before"], closed_by["passing_after"]):
+            problems.append(f"{entry['id']}: failing_before is not an ancestor of passing_after")
     return problems
 
 
-def check(root: Path = ROOT, commits: bool = False) -> dict[str, Any]:
+def removed_entries(ledger: Mapping[str, Any], root: Path, base: str) -> list[str]:
+    """Entries present in the ledger at [base] that are gone now: deleting an entry would be a silent close."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/@^~-]{0,200}", base) or base.startswith("-"):
+        return [f"--base {safe(base)} is not a revision name"]
+    try:
+        result = subprocess.run(["git", "-C", str(root), "show", f"{base}:{DATA}"], capture_output=True, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ["git could not be run to compare with the base"]
+    if result.returncode:
+        return [f"{DATA} cannot be read at {safe(base)}"]
+    if len(result.stdout) > MAX_DATA_BYTES:
+        return [f"{DATA} at {safe(base)} is larger than {MAX_DATA_BYTES} bytes"]
+    try:
+        earlier = json.loads(result.stdout.decode(), object_pairs_hook=_no_duplicates)
+        before = {entry["id"] for entry in earlier["entries"] if isinstance(entry, dict) and isinstance(entry.get("id"), str)}
+    except (ValueError, KeyError, TypeError, RecursionError):
+        return [f"{DATA} at {safe(base)} cannot be compared"]
+    now = {entry.get("id") for entry in ledger["entries"] if isinstance(entry, dict)}
+    return [f"{safe(identifier, 20)}: the entry exists at {safe(base)} and is gone; close it with a controlling test instead of deleting it" for identifier in sorted(before - now)]
+
+
+def check(root: Path = ROOT, commits: bool = False, base: str | None = None) -> dict[str, Any]:
     """Load, validate and compare the generated table; problems are messages with only validated or escaped text."""
     try:
         ledger = load(root)
@@ -381,33 +428,64 @@ def check(root: Path = ROOT, commits: bool = False) -> dict[str, Any]:
         problems.append(f"{DOCUMENT}: the ledger table differs from {DATA}; run python -m tools.failure_ledger --write")
     if commits:
         problems.extend(verify_commits(ledger, root))
+    if base is not None:
+        problems.extend(removed_entries(ledger, root, base))
     return {"problems": problems, "unreadable": False, "entries": len(ledger["entries"])}
 
 
+class LedgerProblems(ValueError):
+    """The data breaks the ledger's rules; carries every message."""
+
+    def __init__(self, problems: list[str]) -> None:
+        super().__init__("; ".join(problems[:3]))
+        self.problems = problems
+
+
 def write(root: Path = ROOT) -> Path:
-    """Regenerate the table in the document; refuses to write while the data has problems."""
+    """Regenerate the table in the document, atomically; refuses while the data has problems.
+
+    The new text is written to a temporary file in the same directory and renamed
+    over the document, and a symbolic link at the document's path is refused.
+    """
     ledger = load(root)
     problems = validate(ledger, root)
     if problems:
-        raise ValueError("; ".join(problems[:3]))
+        raise LedgerProblems(problems)
     path = root / DOCUMENT
+    if path.is_symlink():
+        raise ValueError(f"{DOCUMENT} is a symbolic link")
     updated = replace_table(read_bounded(path, MAX_DOCUMENT_BYTES), render_table(ledger))
-    path.write_text(updated)
+    descriptor, temporary = tempfile.mkstemp(prefix=".testing-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            stream.write(updated)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, path.stat().st_mode & 0o777)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
     return path
 
 
 def main(argv: Sequence[str] | None = None, root: Path = ROOT) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter, allow_abbrev=False)
     parser.add_argument("--write", action="store_true", help="regenerate the table in docs/testing.md")
-    parser.add_argument("--verify-commits", action="store_true", help="also check the closing commits with Git")
+    parser.add_argument("--verify-commits", action="store_true", help="also check that the closing commits exist and are ordered (the test is not run)")
+    parser.add_argument("--base", metavar="REV", help="also refuse an entry present in the ledger at REV that is now gone")
     arguments = parser.parse_args(sys.argv[1:] if argv is None else argv)
     if arguments.write:
         try:
             print(f"wrote {write(root).relative_to(root)}")
+        except LedgerProblems as error:
+            for problem in error.problems:
+                print(f"- {problem}", file=sys.stderr)
+            return 1
         except (ValueError, OSError) as error:
             print(f"failure_ledger: {safe(str(error), 400)}", file=sys.stderr)
             return 2
-    report = check(root, arguments.verify_commits)
+    report = check(root, arguments.verify_commits, arguments.base)
     for problem in report["problems"]:
         print(f"- {problem}", file=sys.stderr)
     if not report["problems"]:

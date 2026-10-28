@@ -96,7 +96,9 @@ def test_the_guard_depends_on_nothing_but_the_standard_library():
             imported |= {alias.name.split(".")[0] for alias in node.names}
         elif isinstance(node, ast.ImportFrom):
             imported.add((node.module or "").split(".")[0])
-    assert imported <= {"__future__", "argparse", "collections", "json", "pathlib", "re", "subprocess", "sys", "typing"}, imported
+    assert imported <= {"__future__", "argparse", "collections", "json", "os", "pathlib", "re", "subprocess", "sys", "tempfile", "typing", "tools"}, imported
+    tools_imports = [node for node in ast.walk(ast.parse((ROOT / "tools/failure_ledger.py").read_text())) if isinstance(node, ast.ImportFrom) and node.module == "tools"]
+    assert [alias.name for node in tools_imports for alias in node.names] == ["boundary_inventory"]  # what is on main, nothing from the evidence modules
 
 
 # ------------------------------------------------------------------ owners
@@ -214,7 +216,7 @@ def test_a_closed_entry_needs_a_controlling_test_and_two_commits(tmp_path):
         ({"test": "::test_the_control"}, "closed_by.test must be 'path/to/test_file::test name'"),
         ({"test": 7}, "closed_by.test must be"),
         ({"test": "tests/missing.py::test_the_control"}, "does not exist or cannot be read"),
-        ({"test": "tests/test_controls.py::test_other"}, "does not appear in"),
+        ({"test": "tests/test_controls.py::test_other"}, "is not a registered test in"),
         ({"test": "../outside.py::test_the_control"}, "must name a file inside the repository"),
         ({"test": "tests/../tests/test_controls.py::test_the_control"}, "must name a file inside the repository"),
         ({"test": "/etc/hosts::root"}, "must name a file inside the repository"),
@@ -569,3 +571,201 @@ def test_main_never_prints_a_raw_control_character_from_the_data(tmp_path, capsy
     assert ledger.main([], root=root) == 1
     err = capsys.readouterr().err
     assert "\x1b" not in err and "hostile\\x1b[31m" in err
+
+
+# ------------------------------------------------------------------ the controlling test must be a registered test
+
+def control_ledger(path, name):
+    data = base()
+    entry = closed_entry(test=f"{path}::{name}")
+    data["entries"][1] = entry
+    return data
+
+
+def with_control(tmp_path, filename, text, name):
+    data = control_ledger(f"tests/{filename}", name)
+    root = workspace(tmp_path, data)
+    (root / "tests" / filename).write_text(text)
+    return ledger.validate(data, root)
+
+
+@pytest.mark.parametrize(
+    ("filename", "text", "name"),
+    [
+        # the repros: a comment that mentions the name, and a name that occurs somewhere in the file
+        ("storage_worker_session_test.dart", "// TODO: write 'cold writer drains after bootstrap' some day\n", "cold writer drains after bootstrap"),
+        ("storage_worker_session_test.dart", "void main() { final owner = 1; test('something else', () {}); }\n", "owner"),
+        ("a_test.dart", "void main() { /* test('the case', () {}); */ }\n", "the case"),
+        ("a_test.dart", "void main() { print(\"test('the case', () {})\"); }\n", "the case"),
+        ("a_test.dart", "void main() { test('the case and more', () {}); }\n", "the case"),
+        ("a_test.dart", "void main() { test('the', () {}); }\n", "the case"),
+        ("test_x.py", "# def test_the_case(): pass\n", "test_the_case"),
+        ("test_x.py", "text = 'def test_the_case(): pass'\n", "test_the_case"),
+        ("test_x.py", "def helper_test_the_case(): pass\n", "test_the_case"),
+        ("test_x.py", "def test_the_case_and_more(): pass\n", "test_the_case"),
+        ("test_x.py", "def test_the_case(:\n", "test_the_case"),  # does not parse: registers nothing
+        ("notes.md", "test_the_case\n", "test_the_case"),
+        ("notes.txt", "test('the case', () {})\n", "the case"),
+    ],
+)
+def test_only_a_registered_test_can_be_the_controlling_test(tmp_path, filename, text, name):
+    problems = with_control(tmp_path, filename, text, name)
+    assert any(f"is not a registered test in tests/{filename}" in problem and problem.startswith("L2:") for problem in problems), problems
+
+
+@pytest.mark.parametrize(
+    ("filename", "text", "name"),
+    [
+        ("a_test.dart", "void main() { test('cold writer drains after bootstrap', () {}); }\n", "cold writer drains after bootstrap"),
+        ("a_test.dart", "void main() {\n  testWidgets('the case', (tester) async {});\n}\n", "the case"),
+        ("a_test.dart", "void main() {\n  test(\n    'wrapped across lines',\n    () {},\n  );\n}\n", "wrapped across lines"),
+        ("a_test.dart", "void main() { for (final k in ['a']) { test('case $k', () {}); } }\n", "case a"),
+        ("test_x.py", "def test_the_case(): pass\n", "test_the_case"),
+        ("test_x.py", "import pytest\n\n@pytest.mark.parametrize('v', [1])\ndef test_the_case(v): pass\n", "test_the_case[1]"),
+        ("test_x.py", "class TestX:\n    def test_inside(self): pass\n", "test_inside"),
+    ],
+)
+def test_a_registered_dart_or_python_test_is_accepted(tmp_path, filename, text, name):
+    assert with_control(tmp_path, filename, text, name) == []
+
+
+# ------------------------------------------------------------------ the commit check is independent per entry and says what it is
+
+def test_every_closed_entry_is_checked_even_after_another_one_fails(tmp_path):
+    data = base()
+    first = closed_entry()
+    first.update(id="L1", closed_by={**first["closed_by"], "failing_before": SHA_A, "passing_after": SHA_B})
+    second = closed_entry()
+    second["id"] = "L9"
+    data["entries"] = [first, second, data["entries"][2]]
+    data["entries"][2]["causes"] = ["L1", "L9"]
+    data["entries"][2]["status"] = "closed"
+    root = workspace(tmp_path, data)
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    one = git(root, "commit", "-q", "-m", "one")
+    (root / "later").write_text("x")
+    git(root, "add", "-A")
+    two = git(root, "commit", "-q", "-m", "two")
+    data["entries"][0]["closed_by"].update(failing_before=SHA_A, passing_after=two)  # L1: a commit that does not exist
+    data["entries"][1]["closed_by"].update(failing_before=two, passing_after=one)  # L9: the wrong way round
+    problems = ledger.verify_commits(data, root)
+    assert problems == ["L1: closed_by.failing_before is not a commit in this repository", "L9: failing_before is not an ancestor of passing_after"]
+
+
+def test_the_documents_and_the_module_say_the_pair_is_the_authors_claim():
+    document = (ROOT / ledger.DOCUMENT).read_text()
+    assert "That pair is the author's claim and nothing runs\nthe test at either commit" in document
+    assert "checks only that both are commits of this repository and are in\norder" in document
+    assert "nothing runs the test at either commit" in ledger.__doc__ and "author's claim" in ledger.__doc__
+
+
+# ------------------------------------------------------------------ deleting an entry is not closing it
+
+def test_an_entry_deleted_since_the_base_is_refused(tmp_path):
+    data = base()
+    root = workspace(tmp_path, data)
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "base")
+    gone = copy.deepcopy(data)
+    del gone["entries"][1]
+    gone["entries"][1]["causes"] = ["L1"]
+    (root / ledger.DATA).write_text(json.dumps(gone))
+    (root / ledger.DOCUMENT).write_text(f"{ledger.BEGIN}\n{ledger.render_table(gone)}\n{ledger.END}\n")
+    assert ledger.check(root)["problems"] == []
+    problems = ledger.check(root, base="HEAD")["problems"]
+    assert problems == ["L2: the entry exists at HEAD and is gone; close it with a controlling test instead of deleting it"]
+    assert ledger.main(["--base", "HEAD"], root=root) == 1
+    assert ledger.removed_entries(data, root, "HEAD") == []  # nothing is missing from the full ledger
+
+
+@pytest.mark.parametrize("base_name", ["--exec=x", "-p", "", "a b", "x" * 300, "HEAD;rm", "no-such-revision"])
+def test_a_base_that_is_not_a_revision_is_a_problem_not_a_command(tmp_path, base_name):
+    root = workspace(tmp_path)
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "base")
+    problems = ledger.removed_entries(base(), root, base_name)
+    assert len(problems) == 1 and ("is not a revision name" in problems[0] or "cannot be read at" in problems[0])
+    if base_name != "no-such-revision" and base_name != "a b" and base_name != "HEAD;rm":
+        assert "is not a revision name" in problems[0], base_name  # refused before Git is asked
+    assert all(0x20 <= ord(char) <= 0x7E for char in problems[0])
+
+
+def test_a_base_ledger_that_cannot_be_compared_is_a_problem(tmp_path):
+    root = workspace(tmp_path)
+    (root / ledger.DATA).write_text('{"schema": 1, "entries": [3]}')
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "odd")
+    assert ledger.removed_entries(base(), root, "HEAD") == []  # entries that are not objects name nothing, so nothing is missing
+    (root / ledger.DATA).write_text("{broken")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "broken")
+    assert ledger.removed_entries(base(), root, "HEAD") == ["tools/failure_ledger.json at HEAD cannot be compared"]
+    (root / ledger.DATA).write_text('{"entries": [{"id": "L1"}], "x": 1, "x": 2}')
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "repeated")
+    assert ledger.removed_entries(base(), root, "HEAD") == ["tools/failure_ledger.json at HEAD cannot be compared"]
+    (root / ledger.DATA).write_text('{"entries": [{"id": "L1"}], "pad": "' + "x" * (ledger.MAX_DATA_BYTES + 10) + '"}')
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "huge")
+    assert ledger.removed_entries(base(), root, "HEAD") == [f"tools/failure_ledger.json at HEAD is larger than {ledger.MAX_DATA_BYTES} bytes"]
+
+
+# ------------------------------------------------------------------ --write is atomic and its exit codes match the check
+
+def test_write_replaces_the_document_atomically_and_keeps_its_mode(tmp_path):
+    root = workspace(tmp_path)
+    document = root / ledger.DOCUMENT
+    document.write_text(document.read_text().replace("it timed out", "tampered"))
+    document.chmod(0o640)
+    before = document.stat().st_ino
+    ledger.write(root)
+    assert document.stat().st_ino != before and (document.stat().st_mode & 0o777) == 0o640  # a new file was renamed into place
+    assert "it timed out" in document.read_text() and not [name for name in os.listdir(document.parent) if name.startswith(".testing-")]
+
+
+def test_a_failed_write_leaves_the_document_and_no_temporary_file(tmp_path, monkeypatch):
+    root = workspace(tmp_path)
+    document = root / ledger.DOCUMENT
+    document.write_text(document.read_text().replace("it timed out", "tampered"))
+    tampered = document.read_text()
+    monkeypatch.setattr(ledger.os, "replace", lambda *a: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError, match="disk full"):
+        ledger.write(root)
+    assert document.read_text() == tampered and not [name for name in os.listdir(document.parent) if name.startswith(".testing-")]
+
+
+def test_write_refuses_a_symbolic_link_at_the_document_path(tmp_path):
+    root = workspace(tmp_path)
+    target = tmp_path / "elsewhere.md"
+    target.write_text(f"{ledger.BEGIN}\nx\n{ledger.END}\n")
+    (root / ledger.DOCUMENT).unlink()
+    (root / ledger.DOCUMENT).symlink_to(target)
+    with pytest.raises(ValueError, match="symbolic link"):
+        ledger.write(root)
+    assert target.read_text() == f"{ledger.BEGIN}\nx\n{ledger.END}\n"
+
+
+def test_write_with_rule_violations_exits_one_like_the_check_and_prints_them(tmp_path, capsys):
+    data = base()
+    data["entries"][0]["owner_status"] = "assigned"
+    root = workspace(tmp_path, data)
+    assert ledger.main(["--write"], root=root) == 1
+    err = capsys.readouterr().err
+    assert "L1: an assigned owner must be a name" in err and "Traceback" not in err
+    assert ledger.main([], root=root) == 1
+    (root / ledger.DATA).write_text("{broken")
+    assert ledger.main(["--write"], root=root) == 2  # only an unreadable input is 2
+
+
+def test_the_commit_check_without_git_is_a_problem_not_a_pass(tmp_path, monkeypatch):
+    data = base()
+    data["entries"][1] = closed_entry()
+    root = workspace(tmp_path, data)
+    assert ledger.main(["--verify-commits"], root=root) == 1
+    monkeypatch.setattr(ledger.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("git")))
+    assert ledger.verify_commits(data, root) == ["git could not be run to verify commits"]
+    assert ledger.removed_entries(data, root, "HEAD") == ["git could not be run to compare with the base"]
