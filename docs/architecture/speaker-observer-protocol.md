@@ -46,6 +46,13 @@ platform helpers (`zoom_observer_macos`, `zoom_observer_linux`). Design context:
 - The helper is launched as `<helper> --protocol 1`; any other arguments exit 64
   with a usage line on stderr.
 - All observed strings (names, window titles) are untrusted source data.
+- Field syntax: `id`, `session`, `ref` and `window` are opaque, 1 to 128
+  characters, with no control characters. `helper`, `helper_version`,
+  `parser_version`, `platform`, `code` and `reason` are tokens of at most 64
+  characters from `A-Za-z0-9_.:-` (`reason` may be empty or absent).
+  `zoom_version` and `locale` are optional text of at most 64 characters.
+  Millisecond fields are non-negative integers below 2^50. The receiver treats
+  any violation as a protocol error and reports only a fixed description.
 
 ## Requests (service to helper)
 
@@ -53,7 +60,7 @@ platform helpers (`zoom_observer_macos`, `zoom_observer_linux`). Design context:
 | --- | --- | --- |
 | `capabilities` | `id` | Report availability without prompting or changing settings |
 | `setup` | `id` | Explicit accessibility setup (may prompt / guide the user); reply with `capabilities` |
-| `start` | `id`, `session`, `poll_ms`, `deadline_ms` | Begin observing the selected meeting for recording session `session` |
+| `start` | `id`, `session`, `poll_ms` (50 to 60000), `deadline_ms` (1 to 600000) | Begin observing the selected meeting for recording session `session` |
 | `stop` | `id` | Finish the interval, emit `stopped`, exit 0 within `deadline_ms` |
 | `clock` | `id` | Reply with `clock` frame for offset measurement |
 
@@ -189,7 +196,15 @@ be derived from a steady clock that does not count system sleep.
 - `method` is one of `participant_status`, `compact_talking_label`,
   `ordered_tile` (disabled by default), `atspi_state` (Linux, reserved until a
   live signal is established).
-- Names keep their original spelling, including commas and punctuation.
+- Names keep their original spelling, including commas and punctuation. The
+  receiver removes control and bidirectional-override characters, turns line
+  breaks into spaces and trims; a name that is empty afterwards, or longer than
+  256 characters, is a protocol error.
+- Every `speakers[].ref` must name a distinct entry of the same observation's
+  `participants`, and `participants[].ref` values are distinct. Violations are
+  protocol errors, so a speaker can never lack a roster entry.
+- An `error` frame's `message` is untrusted diagnostic text; the receiver
+  bounds it to 256 characters and does not log it by default.
 
 ## Limits and lifecycle
 
