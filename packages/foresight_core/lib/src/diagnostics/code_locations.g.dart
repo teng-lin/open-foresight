@@ -67,6 +67,7 @@ const diagnosticCodeLocations = <String>[
   'src/audio_presentation.dart',
   'src/audio_segmentation.dart',
   'src/cancellation.dart',
+  'src/capture_timeline.dart',
   'src/chat_sources.dart',
   'src/client_command.dart',
   'src/client_contract.dart',
