@@ -454,6 +454,11 @@ void main() {
           'capture_denial_reached_desktop',
           {
             'warning': workspace.meetingFeature.recordingState,
+            'failed_notice': tester
+                .widget<RecordingStatusNotice>(
+                  find.byType(RecordingStatusNotice),
+                )
+                .failed,
             'active': (failedStatus['capture'] as Map)['active'],
             'capture_active':
                 (failedStatus['capture'] as Map)['capture_active'],
@@ -462,6 +467,7 @@ void main() {
           },
           {
             'warning': captureWarning,
+            'failed_notice': true,
             'active': false,
             'capture_active': false,
             'persisted_warning': captureWarning,

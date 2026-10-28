@@ -96,6 +96,7 @@ final class RecordingController {
   var _session = 0, _unsavedSegments = 0;
   bool _physicalActive = false;
   String _persistenceState = 'saved';
+  String _terminalError = '';
   Map<String, Object?> get state => {
     'meeting_id': recordingMeeting,
     // Active retains session ownership while paused; capture_active alone
@@ -104,7 +105,9 @@ final class RecordingController {
     'capture_active': recording?.captureActive ?? false,
     'error': recording?.lastError.isNotEmpty == true
         ? recording!.lastError
-        : null,
+        : _terminalError.isEmpty
+        ? null
+        : _terminalError,
     'audio_session_id': recording?.audioSessionId,
     'starting': recording?.starting ?? false,
     'finishing': recording?.finishing ?? false,
@@ -163,6 +166,7 @@ final class RecordingController {
     final session = ++_session;
     _unsavedSegments = 0;
     _persistenceState = 'saved';
+    _terminalError = '';
     final persistence = _persistence = RecordingTranscriptPersistence(
       store: store,
       meeting: id,
@@ -504,6 +508,8 @@ final class RecordingController {
   }
 
   void _releaseRecording() {
+    final error = recording?.lastError ?? '';
+    if (error.isNotEmpty) _terminalError = error;
     recording = null;
     _physicalActive = false;
     recordingMeeting = null;
@@ -650,6 +656,7 @@ final class RecordingController {
       if (!interrupted && failure == null && reason != null) {
         recordingState = '$reason $recordingState';
       }
+      _terminalError = interrupted || failure != null ? recordingState : '';
       _notify();
       _trackIndex(id, session, finalIndex: true);
       _diagnose(

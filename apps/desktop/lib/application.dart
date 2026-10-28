@@ -607,15 +607,16 @@ class _WorkspaceState extends State<Workspace>
       allowAgentRequests: !onboarding,
       child: Column(
         children: [
+          Expanded(child: workspace),
           if (!onboarding)
             ValueListenableBuilder<int>(
               valueListenable: serviceUiRevision,
               builder: (_, __, ___) => RecordingStatusNotice(
                 active: d.capturePresentation.active,
                 status: d.capturePresentation.state,
+                failed: d.capturePresentation.error.isNotEmpty,
               ),
             ),
-          Expanded(child: workspace),
         ],
       ),
     );

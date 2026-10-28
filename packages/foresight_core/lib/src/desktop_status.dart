@@ -187,6 +187,7 @@ final class CapturePresentation extends _Presentation {
       elapsedMilliseconds = _int(value, 'elapsed_ms'),
       elapsedMillisecondsProvided = value['elapsed_ms'] != null,
       state = _text(value, 'state', 'idle'),
+      error = _text(value, 'error'),
       samples = _list(value['samples'], (item) => item as int),
       peaks = _list(value['peaks'], (item) => (item as num).toDouble()),
       volumes = _list(value['volumes'], (item) => (item as num).toDouble()),
@@ -215,7 +216,7 @@ final class CapturePresentation extends _Presentation {
   // Missing elapsed time uses the consumer's began-time fallback; zero does not.
   final bool active, finishing, paused, elapsedMillisecondsProvided;
   final int elapsedMilliseconds;
-  final String state;
+  final String state, error;
   final List<int> samples;
   final List<double> peaks, volumes;
   final Map<String, String> provisional;
@@ -241,6 +242,7 @@ final class CapturePresentation extends _Presentation {
     elapsedMilliseconds,
     elapsedMillisecondsProvided,
     state,
+    error,
     samples,
     peaks,
     volumes,

@@ -104,8 +104,9 @@ class RecordingStatusNotice extends StatelessWidget {
     super.key,
     required this.active,
     required this.status,
+    required this.failed,
   });
-  final bool active;
+  final bool active, failed;
   final String status;
 
   @override
@@ -113,17 +114,32 @@ class RecordingStatusNotice extends StatelessWidget {
     if (active || status.isEmpty || status == 'idle') {
       return const SizedBox.shrink();
     }
+    final colors = Theme.of(context).colorScheme;
+    final foreground = failed ? colors.onError : colors.onSurface;
     return Material(
-      color: Theme.of(context).colorScheme.surfaceContainerHigh,
+      color: failed ? colors.error : colors.surfaceContainerHigh,
       child: Semantics(
         liveRegion: true,
         child: SafeArea(
-          bottom: false,
+          top: false,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: SizedBox(
               width: double.infinity,
-              child: SelectableText(status),
+              child: Row(
+                children: [
+                  if (failed) ...[
+                    Icon(Icons.error_outline, color: foreground, size: 20),
+                    const SizedBox(width: 8),
+                  ],
+                  Expanded(
+                    child: SelectableText(
+                      status,
+                      style: TextStyle(color: foreground),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

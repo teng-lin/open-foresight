@@ -12,8 +12,9 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 - Collapse recording playback behind a Show recording button, hide live storage
   and activity updates, and remove the remaining-originals switch. Show the final
-  recording status after capture stops, including failures and the reason for
-  inactivity or desktop-disconnection stops.
+  recording status in the bottom bar after capture stops, with a red error bar
+  for failures and neutral completion messages. Retain the reason for inactivity
+  or desktop-disconnection stops.
 - Skip the full registered-model content scan during service startup. Model
   downloads and registration continue to verify their checksums.
 - Keep the speech setup display stable while recording data refreshes, avoiding
