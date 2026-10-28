@@ -1746,3 +1746,51 @@ def test_a_prerequisite_produced_by_an_earlier_stage_is_not_shown_as_satisfied(m
     assert "missing now" not in pending["detail"]
     text = vc.render(plan)
     assert "prerequisite pending (native-stage): " in text and "prerequisite ok: /var/tmp/of-wp1/absent-build" not in text
+
+
+# ------------------------------------------- batch 3b-1: phases and pins in evidence
+
+
+@pytest.mark.parametrize(
+    ("entry", "availability", "expected"),
+    [
+        ({"status": "passed", "seconds": 1.0, "returncode": 0}, "runnable", ("ok", "passed", "clean")),
+        ({"status": "failed", "seconds": 1.0, "returncode": 3}, "runnable", ("ok", "failed", "clean")),
+        ({"status": "failed", "seconds": 9.0, "timed_out": True, "reason": "timed out"}, "runnable", ("ok", "timed-out", "killed-after-timeout")),
+        ({"status": "failed", "seconds": 1.0, "leaked_descendants": True}, "runnable", ("ok", "failed", "leaked-descendants")),
+        ({"status": "failed", "seconds": 1.0, "reason": "the entrypoint did not exit after SIGKILL"}, "runnable", ("ok", "failed", "unknown")),
+        ({"status": "failed", "seconds": 1.0, "interrupted": True}, "runnable", ("ok", "failed", "clean")),
+        ({"status": "unavailable"}, "unavailable", ("unavailable", "not-run", "not-run")),
+        ({"status": "not-run"}, "runnable", ("ok", "not-run", "not-run")),
+        ({"status": "ci-only"}, "ci-only", ("not-applicable", "not-run", "not-run")),
+        ({"status": "manual"}, "manual", ("not-applicable", "not-run", "not-run")),
+        ({"status": "planned"}, "runnable", ("ok", "not-run", "not-run")),
+        ({"status": "subsumed", "subsumed_by": "python-coverage"}, "runnable", ("ok", "not-applicable", "not-applicable")),
+        ({"status": "failed", "subsumed_by": "python-coverage", "reason": "subsuming check python-coverage did not pass"}, "runnable", ("ok", "not-applicable", "not-applicable")),
+    ],
+)
+def test_phases_record_only_what_the_tool_observed(entry, availability, expected):
+    phases = vc.check_phases(entry, availability)
+    assert (phases["setup"], phases["body"], phases["teardown"]) == expected
+    assert all(value in vc.validation_evidence.PHASE_VALUES[name] for name, value in phases.items())
+
+
+def test_a_run_records_phases_for_every_check_and_the_repositorys_tool_pins(private_output, accepting_junit, monkeypatch):
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({"check_local_validation": "timeout"}))
+    code = vc.main(["--files", "docs/testing.md", "--output", str(private_output)], root=ROOT, environ={})
+    summary = json.loads((private_output / "evidence.json").read_text())
+    assert code == 1 and summary["schema"] == 2
+    [guards] = summary["checks"]
+    assert guards["phases"] == {"setup": "ok", "body": "timed-out", "teardown": "killed-after-timeout"}
+    assert set(summary["tool_pins"]) == {"flutter", "dart", "protoc", "actionlint", "shellcheck"}
+    assert summary["tool_pins"]["protoc"]["pinned"] == json.loads((ROOT / "tools/pins.json").read_text())["protoc"]
+    assert {gap["code"] for gap in summary["reproduction_gaps"]} >= {"change-set-dirty-unknown", "check-not-passed:shared-guards"}
+
+
+def test_a_plan_records_setup_and_marks_the_rest_not_run(capsys):
+    code, captured = cli(["--files", "native/foresight_native.h", "--plan", "--json"], capsys)
+    checks = {check["id"]: check for check in json.loads(captured.out)["evidence"]["checks"]}
+    assert code == 0
+    assert checks["hosted-packaging"]["phases"] == {"setup": "not-applicable", "body": "not-run", "teardown": "not-run"}
+    assert all(check["phases"]["body"] == "not-run" and check["phases"]["teardown"] == "not-run" for check in checks.values())
+    assert {check["phases"]["setup"] for check in checks.values()} <= {"ok", "unavailable", "not-applicable"}

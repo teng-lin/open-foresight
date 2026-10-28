@@ -194,7 +194,7 @@ def test_summary_validation_rejects_forged_success_and_foreign_environment():
         lambda s: s["environment"].update(GITHUB_TOKEN="x"),
         lambda s: s["checks"][0].update(status="mystery"),
         lambda s: s.update(status="bogus"),
-        lambda s: s.update(schema=2),
+        lambda s: s.update(schema=3),
         lambda s: s.pop("selection"),
     ):
         forged = json.loads(json.dumps(good))
@@ -265,3 +265,153 @@ def test_junit_problems_name_every_way_a_report_can_fail_to_support_a_pass():
         {**good, "path": "e", "executed": 0},
     ]
     assert [problem.split(":")[0] for problem in evidence.junit_problems([good, *bad])] == list("abcde")
+
+
+# ------------------------------------------------------------ schema 2 (batch 3b-1)
+
+PINS = {"protoc": "35.1", "dart": "3.9.2", "flutter": "3.35.7", "actionlint": "1.7.7", "shellcheck": "0.9.0"}
+
+
+def summary_with(tools=None, checks=None, environ=None, mode="run", unexecuted=(), pins=PINS):
+    return evidence.build_summary(
+        mode=mode, source={"mode": "explicit", "identity_sha256": "0" * 64, "dirty": None, "dirty_unknown": "explicit file list"},
+        invocation={"entrypoint": "tools.validate_change", "argv": ["--files", "a b.md"]}, selection={},
+        checks=[check("shared-guards", "passed")] if checks is None else checks,
+        unexecuted_platforms=list(unexecuted), reproduction=["rerun"], environ=environ if environ is not None else {},
+        tools=tools, pins=pins,
+    )
+
+
+def test_schema_two_adds_pins_phases_concurrency_cache_artifacts_and_gaps():
+    result = summary_with(tools={"python": "3.13.0", "protoc": "libprotoc 36.2", "dart": "Dart SDK version: 3.9.2 (stable)", "cmake": "cmake 4"})
+    assert result["schema"] == 2 == evidence.SCHEMA and evidence.READABLE_SCHEMAS == (1, 2)
+    assert {"tool_pins", "concurrency", "cache", "artifacts", "reproduction_gaps"} <= result.keys()
+    pins = result["tool_pins"]
+    assert pins["protoc"] == {"pinned": "35.1", "observed": "libprotoc 36.2", "matches": False}
+    assert pins["dart"]["matches"] is True
+    assert pins["flutter"] == {"pinned": "3.35.7", "observed": None, "matches": None}
+    codes = [gap["code"] for gap in result["reproduction_gaps"]]
+    assert "pin-mismatch:protoc" in codes and "pin-mismatch:dart" not in codes and "pin-mismatch:flutter" not in codes
+    assert "change-set-dirty-unknown" in codes
+
+
+def test_version_matching_is_a_whole_token_and_a_failed_probe_never_matches():
+    assert evidence.version_matches("35.1", "libprotoc 35.1") is True
+    assert evidence.version_matches("35.1", "libprotoc 35.10") is False
+    assert evidence.version_matches("3.9.2", "Dart SDK version: 13.9.2") is False
+    assert evidence.version_matches("1.7.7", "probe failed: exit 1: 1.7.7") is False
+    assert evidence.version_matches("1.7.7", None) is None
+
+
+def test_pinned_tools_come_from_the_repository_pins_and_the_hosted_workflow_tools():
+    pins = evidence.pinned_tools()
+    from tools import check_local_validation
+
+    assert pins["actionlint"] == "1.7.7" and pins["shellcheck"] == "0.9.0"
+    assert {name: version for name, _arguments, version in check_local_validation.WORKFLOW_TOOLS} == {"actionlint": "1.7.7", "shellcheck": "0.9.0"}
+    assert json.loads((Path(__file__).resolve().parents[1] / "tools/pins.json").read_text())["protoc"] == pins["protoc"]
+
+
+def test_gaps_name_every_condition_a_reader_could_not_reproduce():
+    flaky = check("native-stage", "unavailable", reason="dart is not on PATH")
+    result = summary_with(checks=[check("shared-guards", "passed"), flaky], unexecuted=["linux"], tools={"protoc": "libprotoc 36.2"})
+    result["account"]["home_env_set"], result["account"]["home_matches_nss"] = True, False
+    result["temp_root_policy"]["compliant"] = False
+    result["source"]["revision_declared"] = True
+    result["artifacts"] = [{"check": "x", "path": "/p", "sha256": "0" * 64, "producer": None}]
+    codes = {gap["code"] for gap in evidence.derive_gaps(result)}
+    assert codes == {
+        "pin-mismatch:protoc", "temp-root-noncompliant", "home-differs-from-nss", "change-set-dirty-unknown",
+        "revision-declared-not-verified", "unexecuted-platform:linux", "check-not-passed:native-stage", "artifact-provenance-not-recorded",
+    }
+    assert evidence.derive_gaps(result)[0]["detail"]
+
+
+def test_reused_outputs_and_digests_are_recorded_without_claiming_a_producer():
+    reuse = [{"id": "native-library", "path": "/b", "present": True, "sha256": {"/b/lib": "a" * 64}, "at_execution": {"present": True}}]
+    checks = [check("core-stage", "passed", reuse=reuse)]
+    result = summary_with(checks=checks)
+    assert result["cache"] == {"reused_outputs": [{"check": "core-stage", "id": "native-library", "path": "/b", "present": True, "at_execution": True}]}
+    assert result["artifacts"] == [{"check": "core-stage", "path": "/b/lib", "sha256": "a" * 64, "producer": None}]
+    assert any(gap["code"] == "artifact-provenance-not-recorded" for gap in result["reproduction_gaps"])
+
+
+def test_concurrency_records_only_the_settings_the_runner_allowlists(monkeypatch):
+    assert set(evidence.CONCURRENCY_ENV) <= set(evidence.ENV_ALLOWLIST)
+    record = evidence.concurrency({"FORESIGHT_BUILD_JOBS": "8", "FORESIGHT_PYTEST_WORKERS": "2", "FORESIGHT_CI_GOOGLE_REFRESH_TOKEN": "secret", "PATH": "/x"})
+    assert record["settings"] == {"FORESIGHT_BUILD_JOBS": "8", "FORESIGHT_PYTEST_WORKERS": "2"}
+    assert record["cpu_count"] == os.cpu_count() and record["checks_run"] == "sequential"
+    monkeypatch.setenv("FORESIGHT_PARALLEL_GATES", "1")
+    assert evidence.concurrency()["settings"] == {"FORESIGHT_PARALLEL_GATES": "1"}
+
+
+def test_phase_values_are_validated_and_a_forged_phase_is_rejected():
+    good = summary_with(checks=[check("a", "passed", phases={"setup": "ok", "body": "passed", "teardown": "clean"})])
+    evidence.validate_summary(good)
+    for phase, value in (("body", "success"), ("teardown", "fine"), ("setup", "ready"), ("mystery", "ok")):
+        forged = json.loads(json.dumps(good))
+        forged["checks"][0]["phases"][phase] = value
+        with pytest.raises(ValueError, match="phase"):
+            evidence.validate_summary(forged)
+
+
+def test_a_schema_two_summary_must_carry_its_new_sections_and_well_formed_gaps():
+    good = summary_with()
+    for key in ("tool_pins", "concurrency", "cache", "artifacts", "reproduction_gaps"):
+        broken = json.loads(json.dumps(good))
+        broken.pop(key)
+        with pytest.raises(ValueError, match="schema 2 lacks"):
+            evidence.validate_summary(broken)
+    broken = json.loads(json.dumps(good))
+    broken["reproduction_gaps"] = [{"code": "x"}]
+    with pytest.raises(ValueError, match="code and a detail"):
+        evidence.validate_summary(broken)
+
+
+def test_schema_one_summaries_remain_readable():
+    legacy = json.loads(json.dumps(summary_with()))
+    legacy["schema"] = 1
+    for key in ("tool_pins", "concurrency", "cache", "artifacts", "reproduction_gaps"):
+        legacy.pop(key)
+    evidence.validate_summary(legacy)
+
+
+# The wider schema must not widen what leaves the machine.
+SENTINELS = {
+    "FORESIGHT_CI_GOOGLE_REFRESH_TOKEN": "sentinel-refresh-token",
+    "FORESIGHT_SEARCH_API_KEY": "sentinel-search-key",
+    "GITHUB_TOKEN": "sentinel-github-token",
+    "AWS_SECRET_ACCESS_KEY": "sentinel-aws",
+    "HOME": "/home/sentinel-home-user",
+    "USER": "sentinel-user",
+    "PATH": "/sentinel/path/bin",
+    "FORESIGHT_MODEL_ASSETS": "/private/sentinel-model-assets",
+}
+
+
+def test_no_new_field_can_carry_a_value_from_outside_the_environment_allowlist(tmp_path):
+    reuse = [{"id": "native-library", "path": str(tmp_path), "present": True, "sha256": {}, "at_execution": {"present": True}}]
+    environ = {**SENTINELS, "FORESIGHT_BUILD_JOBS": "4", "GITHUB_RUN_ID": "77", "FORESIGHT_PYTEST_WORKERS": "2"}
+    result = summary_with(
+        environ=environ, checks=[check("core-stage", "passed", reuse=reuse, phases={"setup": "ok", "body": "passed", "teardown": "clean"})],
+        tools={"python": "3.13", "protoc": "libprotoc 35.1"},
+    )
+    text = json.dumps(result)
+    for name, value in SENTINELS.items():
+        assert value not in text, name
+    assert result["environment"] == {"FORESIGHT_BUILD_JOBS": "4", "GITHUB_RUN_ID": "77", "FORESIGHT_PYTEST_WORKERS": "2"}
+    assert result["concurrency"]["settings"] == {"FORESIGHT_BUILD_JOBS": "4", "FORESIGHT_PYTEST_WORKERS": "2"}
+    # The only free text in the new sections is tool output, paths of recorded checks, and the gap prose built here.
+    assert set(result["tool_pins"]) == set(PINS)
+    assert all(set(record) == {"pinned", "observed", "matches"} for record in result["tool_pins"].values())
+
+
+def test_every_environment_name_a_new_section_reads_is_on_the_allowlist():
+    source = (Path(__file__).resolve().parents[1] / "tools/validation_evidence.py").read_text()
+    from tools import validation_replay
+
+    assert set(evidence.CONCURRENCY_ENV) <= set(evidence.ENV_ALLOWLIST)
+    assert not [name for name in evidence.ENV_ALLOWLIST if name.startswith("FORESIGHT_CI_") or "TOKEN" in name or "KEY" in name or "SECRET" in name]
+    assert "os.environ[" not in source and "os.getenv" not in source  # reads go through the injected mapping
+    replay = Path(validation_replay.__file__).read_text()
+    assert "os.environ" not in replay and "getenv" not in replay  # the replay reads no environment at all

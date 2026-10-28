@@ -21,12 +21,16 @@ ROOT = Path(__file__).resolve().parents[1]
 TEMP_PARENT = Path("/var/tmp").resolve()  # noqa: S108 - canonical disk-backed parent only
 
 
+# The hosted versions of the workflow tools: (name, version arguments, pinned version).
+WORKFLOW_TOOLS = (
+    ("actionlint", ["-version"], "1.7.7"),
+    ("shellcheck", ["--version"], "0.9.0"),
+)
+
+
 def workflow_lint() -> int:
     """Refuse actionlint's silent shell-check omission or mismatched CI tools."""
-    tools = (
-        ("actionlint", ["-version"], "1.7.7"),
-        ("shellcheck", ["--version"], "0.9.0"),
-    )
+    tools = WORKFLOW_TOOLS
     failed = False
     executables = {}
     for name, arguments, expected in tools:
@@ -73,6 +77,7 @@ def shared_tasks(python: str) -> list[tuple[str, list[str]]]:
     return [
         ("skip-inventory", [python, "tools/check_integration_inventory.py"]),
         ("boundary-inventory", [python, "-m", "tools.boundary_inventory"]),
+        ("entrypoint-parity", [python, "-m", "tools.check_entrypoint_parity"]),
         ("document-links", [python, "-m", "tools.check_document_links"]),
         ("subprocess-timeouts", [python, "tools/check_subprocess_timeouts.py"]),
         ("ruff", [python, "-m", "ruff", "check", "."]),

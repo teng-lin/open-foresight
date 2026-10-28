@@ -107,14 +107,55 @@ groups, full Python coverage) are listed as deferred until `--include-long`.
 
 ## Evidence and exit status
 
-`evidence.json` is versioned (`schema` 1, `kind` `foresight-validation-evidence`).
-It records revision and change identity, entrypoint, arguments and working
-directory, OS and architecture, tool versions, per-check status and reason,
-JUnit counts written during the run, raw-log paths, real and effective UID/GID,
-supplementary groups, the NSS account and whether `HOME` agrees with it, the
-temp-root policy (canonical, private, owned, short), allowlisted environment and
-unexecuted platforms. The environment is read through an allowlist of exact
-names. Credentials, profiles, transcripts and model assets are never collected.
+`evidence.json` is versioned (`schema` 2, `kind` `foresight-validation-evidence`;
+schema 1 packets stay readable). It records revision and change identity,
+entrypoint, arguments and working directory, OS and architecture, tool versions,
+per-check status and reason, JUnit counts written during the run, raw-log paths,
+real and effective UID/GID, supplementary groups, the NSS account and whether
+`HOME` agrees with it, the temp-root policy (canonical, private, owned, short),
+allowlisted environment and unexecuted platforms. The environment is read through
+an allowlist of exact names. Credentials, profiles, transcripts and model assets
+are never collected.
+
+Schema 2 adds, all derived from what the run observed and never from the full
+environment:
+
+- `tool_pins`: each pinned tool (Flutter, Dart, protoc from `tools/pins.json`;
+  actionlint and ShellCheck from the shared guards) beside what was observed and
+  whether the pinned version is a whole token of it. An unobserved tool matches
+  nothing; a failed probe never matches.
+- `phases` per check: setup (could it start here), body (the entrypoint's
+  outcome) and teardown (what happened to its process group: `clean`,
+  `leaked-descendants`, `killed-after-timeout`, or `unknown` when it cannot be
+  vouched for). A phase the tool did not run is `not-run`, never inferred.
+- `concurrency` (CPU count and the allowlisted parallelism settings), `cache`
+  (reused outputs and whether each was present at planning and at execution) and
+  `artifacts` (digests of reused products). The producer of an artifact is
+  `null`: only the entrypoint verifies provenance, and the gaps say so.
+- `reproduction_gaps`: what stands between a reader and an exact reproduction,
+  derived from the packet (pin mismatches, a non-compliant temp root, `HOME`
+  differing from the NSS home, an unknown dirty state, a declared and unverified
+  revision, unexecuted platforms, checks that did not pass, unrecorded artifact
+  provenance).
+
+`python -m tools.validation_replay PACKET [--check] [--json]` reads a packet and
+prints the recorded invocation, each failed check's own entrypoint and retained
+log, the packet's gaps and the differences between the recorded host and this one
+(operating system and release, architecture, Python, tool versions, root versus
+non-root, NSS account name, temp roots). It runs nothing, and a replay that lists
+no gap still does not prove a hosted failure reproduces: a newer local macOS, a
+compiled-only replay, or a different container image remain gaps whenever they
+differ. `--check` exits 1 while any gap remains and 2 for an unreadable packet.
+
+`python -m tools.check_entrypoint_parity` (part of the shared guards) reads the
+workflows without changing them and checks that every command gate's script is
+called by some workflow step, or that the gate declares `local_only` with a
+reason, and that a `local_only` claim no workflow contradicts. It also rejects a
+workflow that calls a repository script that no longer exists and fails on any
+workflow shape it does not understand. It is script-level: it does not check that
+a workflow passes the same arguments, and inline `dart test`, `flutter test`,
+`ctest` or `pytest` invocations are listed in its `--json` output for information
+only.
 
 | Overall status | Meaning |
 | --- | --- |

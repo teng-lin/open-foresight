@@ -475,3 +475,12 @@ def test_class_and_module_level_skips_in_cited_files_must_declare_a_skip_gate(ex
         "tests/test_macos_bundle.py": "platform-contracts",
         "tests/test_dmg_contract.py": "dmg-contracts",
     }
+
+
+def test_local_only_must_carry_a_reason(export, editable):
+    def blank(data):
+        data["gates"]["shared-guards"]["local_only"] = "  "
+
+    editable("tools/boundary_inventory.json", blank)
+    failing(export, "gate shared-guards: local_only needs a reason")
+    assert inventory.load(ROOT)["gates"]["python-coverage"]["local_only"].strip()

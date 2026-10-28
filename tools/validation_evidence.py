@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import platform
 import pwd
+import re
 import shutil
 import stat
 import subprocess
@@ -27,7 +28,9 @@ import tempfile
 from typing import Any
 import xml.etree.ElementTree as ET
 
-SCHEMA = 1
+SCHEMA = 2
+# Schema 1 summaries (batch 1) stay readable; replay and reports accept both.
+READABLE_SCHEMAS = (1, 2)
 KIND = "foresight-validation-evidence"
 # Every other variable stays unread. FORESIGHT_* is deliberately not a prefix
 # rule: credentials such as FORESIGHT_CI_GOOGLE_REFRESH_TOKEN share that prefix.
@@ -277,6 +280,105 @@ def classify(
     return "full-validation-passed", []
 
 
+# What each phase of one check may record. Anything a check cannot know stays
+# "unknown"; a phase is never inferred from another.
+PHASE_VALUES = {
+    "setup": ("ok", "unavailable", "not-applicable"),
+    "body": ("passed", "failed", "timed-out", "not-run", "not-applicable"),
+    "teardown": ("clean", "leaked-descendants", "killed-after-timeout", "not-run", "not-applicable", "unknown"),
+}
+CONCURRENCY_ENV = ("FORESIGHT_BUILD_JOBS", "FORESIGHT_PARALLEL_GATES", "FORESIGHT_PYTEST_WORKERS")
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def pinned_tools(root: Path = ROOT) -> dict[str, str]:
+    """Toolchain versions the repository pins: pins.json plus the hosted workflow tools."""
+    from tools import check_local_validation
+
+    pins = json.loads((root / "tools/pins.json").read_text())
+    result = {
+        "flutter": pins["flutter"]["version"],
+        "dart": pins["dart"],
+        "protoc": pins["protoc"],
+    }
+    result.update({name: version for name, _arguments, version in check_local_validation.WORKFLOW_TOOLS})
+    return result
+
+
+def version_matches(pinned: str, observed: str | None) -> bool | None:
+    """Whether the pinned version appears as a whole token; None if never observed."""
+    if observed is None:
+        return None
+    if observed.startswith("probe failed"):
+        return False
+    return re.search(rf"(?<![\d.]){re.escape(pinned)}(?![\d.])", observed) is not None
+
+
+def tool_pins(observed: Mapping[str, Any] | None, pins: Mapping[str, str]) -> dict[str, dict[str, Any]]:
+    """Each pinned tool beside what was observed; unobserved tools match nothing."""
+    observed = observed or {}
+    return {
+        name: {"pinned": version, "observed": observed.get(name), "matches": version_matches(version, observed.get(name))}
+        for name, version in sorted(pins.items())
+    }
+
+
+def concurrency(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
+    environ = os.environ if environ is None else environ
+    return {
+        "cpu_count": os.cpu_count(),
+        "settings": {name: _printable(environ[name]) for name in CONCURRENCY_ENV if name in environ},
+        "checks_run": "sequential",
+    }
+
+
+def cache_and_artifacts(checks: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Reused outputs and digested artifacts, as the checks observed them.
+
+    Nothing here verifies provenance: the producer stays null because only the
+    entrypoint verifies it, and the gap list says so.
+    """
+    reused = []
+    artifacts = []
+    for check in checks:
+        for item in check.get("reuse", ()):
+            reused.append({"check": check["id"], "id": item["id"], "path": item["path"], "present": item["present"],
+                           "at_execution": (item.get("at_execution") or {}).get("present")})
+            for path, digest in sorted((item.get("sha256") or {}).items()):
+                artifacts.append({"check": check["id"], "path": path, "sha256": digest, "producer": None})
+    return {"reused_outputs": reused}, artifacts
+
+
+def derive_gaps(summary: Mapping[str, Any]) -> list[dict[str, str]]:
+    """What stands between a reader and an exact reproduction, from the packet alone."""
+    gaps: list[dict[str, str]] = []
+
+    def add(code: str, detail: str) -> None:
+        gaps.append({"code": code, "detail": detail})
+
+    for name, record in sorted((summary.get("tool_pins") or {}).items()):
+        if record.get("matches") is False:
+            add(f"pin-mismatch:{name}", f"pinned {record['pinned']}, observed {record.get('observed')!r}")
+    if not summary["temp_root_policy"].get("compliant"):
+        add("temp-root-noncompliant", "the temp roots were not private, canonical, owned and short")
+    account = summary["account"]
+    if account.get("home_env_set") and not account.get("home_matches_nss"):
+        add("home-differs-from-nss", "HOME names a different directory than the NSS account home")
+    source = summary["source"]
+    if source.get("dirty") is None:
+        add("change-set-dirty-unknown", str(source.get("dirty_unknown") or "the working tree was not inspected"))
+    if source.get("revision_declared"):
+        add("revision-declared-not-verified", "the revision is a label supplied by the caller")
+    for platform_name in summary["unexecuted_platforms"]:
+        add(f"unexecuted-platform:{platform_name}", "no passing host-scoped check covered this platform")
+    for check in summary["checks"]:
+        if check["status"] not in ("passed", "subsumed", "planned"):
+            add(f"check-not-passed:{check['id']}", f"status {check['status']}" + (f": {check['reason']}" if check.get("reason") else ""))
+    if summary.get("artifacts"):
+        add("artifact-provenance-not-recorded", "digests are recorded; producer provenance is verified only by the entrypoint")
+    return gaps
+
+
 def build_summary(
     *,
     mode: str,
@@ -290,6 +392,7 @@ def build_summary(
     tools: Mapping[str, Any] | None = None,
     now: datetime | None = None,
     incomplete_reasons: Sequence[str] = (),
+    pins: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     status, reasons = classify(mode, checks, unexecuted_platforms, incomplete_reasons)
     summary = {
@@ -314,6 +417,10 @@ def build_summary(
         "incomplete_reasons": list(incomplete_reasons),
         "reproduction": list(reproduction),
     }
+    summary["tool_pins"] = tool_pins(tools, pins if pins is not None else pinned_tools())
+    summary["concurrency"] = concurrency(environ)
+    summary["cache"], summary["artifacts"] = cache_and_artifacts(checks)
+    summary["reproduction_gaps"] = derive_gaps(summary)
     validate_summary(summary)
     return summary
 
@@ -328,8 +435,19 @@ def validate_summary(summary: Mapping[str, Any]) -> None:
     missing = [key for key in required if key not in summary]
     if missing:
         raise ValueError("Evidence summary lacks: " + ", ".join(missing))
-    if summary["schema"] != SCHEMA or summary["kind"] != KIND:
+    if summary["schema"] not in READABLE_SCHEMAS or summary["kind"] != KIND:
         raise ValueError("Unsupported evidence summary schema")
+    if summary["schema"] == 2:
+        absent = [key for key in ("tool_pins", "concurrency", "cache", "artifacts", "reproduction_gaps") if key not in summary]
+        if absent:
+            raise ValueError("Evidence summary schema 2 lacks: " + ", ".join(absent))
+        for check in summary["checks"]:
+            for phase, value in (check.get("phases") or {}).items():
+                if phase not in PHASE_VALUES or value not in PHASE_VALUES[phase]:
+                    raise ValueError(f"Invalid {phase} phase {value!r} for check {check.get('id')}")
+        for gap in summary["reproduction_gaps"]:
+            if not isinstance(gap.get("code"), str) or not isinstance(gap.get("detail"), str):
+                raise ValueError("A reproduction gap needs a code and a detail")
     if summary["status"] not in STATUSES:
         raise ValueError("Unknown evidence status")
     unknown = sorted(set(summary["environment"]) - set(ENV_ALLOWLIST))

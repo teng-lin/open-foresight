@@ -1015,6 +1015,38 @@ def child_environment(environ: Mapping[str, str], output: Path) -> tuple[dict[st
     return env, policy
 
 
+def check_phases(entry: Mapping[str, Any], availability: str) -> dict[str, str]:
+    """Setup, body and teardown of one check, only as far as this tool observed them.
+
+    Setup is whether the check could start here; the body is the entrypoint's
+    outcome; teardown is what happened to its process group. A phase the tool did
+    not run is "not-run" or "not-applicable", and a teardown it cannot vouch for
+    is "unknown", never "clean".
+    """
+    setup = {"ci-only": "not-applicable", "manual": "not-applicable", "unavailable": "unavailable"}.get(availability, "ok")
+    if entry.get("subsumed_by"):
+        return {"setup": "ok", "body": "not-applicable", "teardown": "not-applicable"}
+    if entry.get("timed_out"):
+        body = "timed-out"
+    elif entry["status"] == "passed":
+        body = "passed"
+    elif entry["status"] == "failed" and entry.get("seconds") is not None:
+        body = "failed"
+    else:
+        body = "not-run"
+    if body == "not-run":
+        return {"setup": setup, "body": body, "teardown": "not-run"}
+    if "did not exit after SIGKILL" in str(entry.get("reason") or ""):
+        teardown = "unknown"
+    elif entry.get("leaked_descendants"):
+        teardown = "leaked-descendants"
+    elif entry.get("timed_out"):
+        teardown = "killed-after-timeout"
+    else:
+        teardown = "clean"
+    return {"setup": setup, "body": body, "teardown": teardown}
+
+
 def _outcome_status(outcome: Mapping[str, Any]) -> tuple[str, str | None]:
     """Status and reason for an entrypoint's run outcome."""
     if outcome.get("error"):
@@ -1130,6 +1162,8 @@ def execute(
     for result in results.values():
         if result["status"] == "subsumed" and outcomes.get(result["subsumed_by"]) != "passed":
             result.update(status="failed", reason=f"subsuming check {result['subsumed_by']} did not pass")
+    for check in ordered:
+        results[check["id"]]["phases"] = check_phases(results[check["id"]], check["availability"])
     return [results[check["id"]] for check in ordered], temp_policy
 
 
@@ -1351,6 +1385,7 @@ def _main(argv: Sequence[str] | None, root: Path, environ: Mapping[str, str] | N
             environ=environ,
             tools=validation_evidence.observe_tools() if mode == "run" else None,
             incomplete_reasons=incomplete,
+            pins=validation_evidence.pinned_tools(root),
         )
         summary["temp_root_policy"] = temp_policy
         # Results first: a failure to publish evidence must not lose a completed run's output.
@@ -1383,8 +1418,10 @@ def _main(argv: Sequence[str] | None, root: Path, environ: Mapping[str, str] | N
 
 
 def _evidence_check(check: Mapping[str, Any]) -> dict[str, Any]:
-    keys = ("id", "title", "kind", "scope", "platforms", "status", "reason", "returncode", "timed_out", "leaked_descendants", "interrupted", "seconds", "log", "junit", "subsumed_by", "long")
+    keys = ("id", "title", "kind", "scope", "platforms", "status", "reason", "returncode", "timed_out", "leaked_descendants", "interrupted", "seconds", "log", "junit", "subsumed_by", "long", "phases")
     record = {key: check[key] for key in keys if key in check}
+    if "phases" not in record:
+        record["phases"] = check_phases(check, check.get("availability", "runnable"))
     record["entrypoint"] = (check.get("entrypoint") or {}).get("argv")
     record["why"] = [entry["reason"] for entry in check.get("why", ())][:LIST_LIMIT]
     record["reuse"] = [
