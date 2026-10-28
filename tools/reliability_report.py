@@ -363,8 +363,10 @@ def ingest(
     first_seen: set[tuple[Any, ...]] = set()
     for row in rows:
         key = (row["identity"], row["check"], row["platform"], row["origin"])
-        if row["identity"] is None or (row["identity"], row["platform"], row["origin"]) in conflicted:
+        if row["identity"] is None:
             row["attempt"] = "unidentified"
+        elif (row["identity"], row["platform"], row["origin"]) in conflicted:
+            row["attempt"] = "contested"  # not decided: the identity collides, so which run was first is unknowable
         elif row["outcome"] not in ("success", "failure"):
             row["attempt"] = "excluded"  # an attempt that never executed, was cancelled or was unavailable consumes no slot
         elif key in first_seen:
@@ -390,6 +392,7 @@ def summarize(rows: Sequence[Mapping[str, Any]], minimum: int) -> dict[str, Any]
         "failed": rate["failed"],
         "excluded": len(rows) - rate["eligible"],
         "rate": rate["rate"] if enough else None,
+        "marker": COLLISION if any(row["attempt"] == "contested" for row in rows) else None,
         "label": None if enough else f"insufficient sample ({rate['eligible']} eligible, {minimum} needed)",
         "seconds_excluded": sum(1 for row in rows if row["seconds_excluded"]),
         "seconds": {"n": len(seconds), "p50": ci_stats.percentile(seconds, 0.5), "p90": ci_stats.percentile(seconds, 0.9)} if enough and seconds else None,
@@ -412,7 +415,7 @@ def recurring_failures(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]
     """Failures of the same check on the same platform and origin across at least two distinct change identities."""
     failing: dict[tuple[str, str, str], list[Mapping[str, Any]]] = {}
     for row in rows:
-        if row["outcome"] == "failure" and row["attempt"] != "repeat":
+        if row["outcome"] == "failure" and row["attempt"] not in ("repeat", "contested"):
             failing.setdefault((row["check"], row["platform"], row["origin"]), []).append(row)
     result = []
     for (check, platform, origin), items in sorted(failing.items()):
@@ -438,7 +441,8 @@ def overall(rows: Sequence[Mapping[str, Any]], minimum: int) -> list[dict[str, A
             {
                 "key": {"origin": origin, "platform": platform},
                 "all_observations": summarize(subset, minimum),
-                "first_runs_only": summarize([row for row in subset if row["attempt"] != "repeat"], minimum),
+                "first_runs_only": summarize([row for row in subset if row["attempt"] not in ("repeat", "contested")], minimum),
+                "contested_identities": summarize([row for row in subset if row["attempt"] == "contested"], minimum),
                 "qualification_repeats_only": summarize([row for row in subset if row["attempt"] == "repeat"], minimum),
             }
         )
@@ -492,6 +496,7 @@ def build_report(directory: Path, inventory: Mapping[str, Any], minimum: int = D
     }
 
 
+COLLISION = "identity collision: first-run attribution unreliable"
 TRUST = (
     "Inputs are unauthenticated: this report describes the packets it was given and is only as trustworthy as the directory. "
     "Do not point it at artifacts from pull requests you did not collect yourself."
@@ -504,6 +509,10 @@ def _cell(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.3f}"
     return str(value)
+
+
+def _note(entry: Mapping[str, Any]) -> str:
+    return "; ".join(part for part in (entry["label"], entry["marker"]) if part)
 
 
 def _rejected_line(rejected: Mapping[str, int]) -> str:
@@ -523,7 +532,7 @@ def render(report: Mapping[str, Any]) -> str:
         "",
         "## Inputs",
         *(
-            [f"- Anomaly: {report['anomalies']['identities_with_conflicting_revisions']} change identities appear at more than one revision on the same platform and origin; their runs are labelled unidentified."]
+            [f"- Anomaly: {report['anomalies']['identities_with_conflicting_revisions']} change identities appear at more than one revision on the same platform and origin; their runs are labelled contested and are marked 'identity collision: first-run attribution unreliable'."]
             if report["anomalies"]["identities_with_conflicting_revisions"]
             else []
         ),
@@ -536,11 +545,11 @@ def render(report: Mapping[str, Any]) -> str:
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for entry in report["overall"]:
-        for name in ("all_observations", "first_runs_only", "qualification_repeats_only"):
+        for name in ("all_observations", "first_runs_only", "qualification_repeats_only", "contested_identities"):
             scope = entry[name]
             lines.append(
                 f"| {entry['key']['origin']} | {entry['key']['platform']} | {name.replace('_', ' ')} | {scope['observations']} | {scope['eligible']} | "
-                f"{scope['failed']} | {scope['excluded']} | {_cell(scope['rate'])} | {scope['label'] or ''} |"
+                f"{scope['failed']} | {scope['excluded']} | {_cell(scope['rate'])} | {_note(scope)} |"
             )
     for title, key, columns in (
         ("By check", "by_check", ("check", "platform", "origin", "selection", "cache", "attempt")),
@@ -551,7 +560,7 @@ def render(report: Mapping[str, Any]) -> str:
             seconds = row["seconds"] or {}
             lines.append(
                 "| " + " | ".join(row["key"][column] for column in columns)
-                + f" | {row['observations']} | {row['eligible']} | {row['failed']} | {row['excluded']} | {_cell(row['rate'])} | {_cell(seconds.get('p50'))} | {_cell(seconds.get('p90'))} | {row['label'] or ''} |"
+                + f" | {row['observations']} | {row['eligible']} | {row['failed']} | {row['excluded']} | {_cell(row['rate'])} | {_cell(seconds.get('p50'))} | {_cell(seconds.get('p90'))} | {_note(row)} |"
             )
     lines += ["", "## Recurring first-run failures", "Same check, platform and origin, failed on at least two distinct change identities."]
     if report["recurring_first_run_failures"]:

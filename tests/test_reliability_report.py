@@ -848,9 +848,17 @@ def test_one_identity_at_two_revisions_on_the_same_platform_does_not_decide_the_
     real["source"]["revision"], forged["source"]["revision"] = "r" * 40, "s" * 40
     result = build(tmp_path, [real, forged], minimum=1)
     assert result["anomalies"] == {"identities_with_conflicting_revisions": 1}
-    assert {row["key"]["attempt"] for row in result["by_check"]} == {"unidentified"}
+    assert {row["key"]["attempt"] for row in result["by_check"]} == {"contested"}
+    assert all(row["marker"] == "identity collision: first-run attribution unreliable" for row in result["by_check"])
+    scoped = totals(result)
+    assert scoped["first_runs_only"]["observations"] == 0 and scoped["contested_identities"]["observations"] == 2
+    assert scoped["contested_identities"]["marker"] == report_module.COLLISION and scoped["all_observations"]["marker"] == report_module.COLLISION
+    assert result["recurring_first_run_failures"] == []
     text = report_module.render(result)
     assert "Anomaly: 1 change identities appear at more than one revision" in text and "r" * 40 not in text
+    contested_rows = [line for line in text.splitlines() if "| contested identities |" in line]
+    assert contested_rows and contested_rows[0].endswith("| identity collision: first-run attribution unreliable |")
+    assert any(line.startswith("| alpha-stage |") and line.endswith("| identity collision: first-run attribution unreliable |") for line in text.splitlines())
 
 
 @pytest.mark.parametrize("variant", ["same-revision", "other-platform", "no-revision", "other-origin"])
@@ -867,7 +875,8 @@ def test_the_ordinary_ways_an_identity_repeats_are_not_anomalies(tmp_path, varia
         second["source"]["revision"], second["environment"]["GITHUB_ACTIONS"] = "s" * 40, "true"
     result = build(tmp_path, [first, second], minimum=1)
     assert result["anomalies"] == {"identities_with_conflicting_revisions": 0}
-    assert "Anomaly:" not in report_module.render(result)
+    text = report_module.render(result)
+    assert "Anomaly:" not in text and "identity collision" not in text and all(row["marker"] is None for row in result["by_check"])
 
 
 def test_the_report_states_that_packet_provenance_is_self_reported(tmp_path):

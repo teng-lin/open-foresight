@@ -344,7 +344,7 @@ What it refuses to do is the point:
   (the first listing; the excess is the `duplicate-check` rejection), so a packet
   cannot inflate its own denominator. A change identity seen at more than one
   revision on the same platform and origin is reported as an anomaly and its runs
-  are labelled `unidentified`, so they cannot decide which run is first; the same
+  are labelled `contested`, carry the marker "identity collision: first-run attribution unreliable" and are shown as their own scope instead of in the first-run totals, so they cannot decide which run is first; the same
   identity on two platforms is normal and is keyed apart. A duration beyond the
   gate's own `timeout_seconds` plus 60 seconds (6 hours for a gate with none) is
   left out of the percentiles and counted as `seconds_excluded`.
