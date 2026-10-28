@@ -797,7 +797,7 @@
           "names": [
             "test_desktop_facade_reads_changes_and_reconnects_without_replaying_mutations"
           ],
-          "note": "Real desktop connection against the compiled service; the facade test needs a configured native display and fails rather than skips without one."
+          "note": "Real desktop connection against the compiled service; needs a configured native display and fails rather than skips without one. It checks reads, change events and reconnect after a graceful SIGTERM; it does not prove that an uncertain mutation is never replayed."
         },
         {
           "kind": "production-both-sides",
@@ -850,7 +850,8 @@
       ],
       "gaps": [
         "No test crashes (SIGKILL or crash gate) a real service under an attached RemoteDomain; real-service tests terminate gracefully.",
-        "A slow non-attach reply from a real service to an attached RemoteDomain is not exercised."
+        "A slow non-attach reply from a real service to an attached RemoteDomain is not exercised.",
+        "The facade test against the compiled service SIGTERMs with no mutation in flight, and its no_mutation_replay report field is a literal true; 'an uncertain mutation is never replayed' is proven only against the fixture service in remote_domain_test.dart."
       ]
     },
     {
@@ -900,11 +901,12 @@
           ]
         },
         {
-          "kind": "production-both-sides",
+          "kind": "fixture",
           "path": "packages/foresight_core/test/service_closing_protocol_test.dart",
           "names": [
             "at SIGTERM a request waiting for approval is refused and resent once to the replacement, while a dispatched one is outcomeUnknown"
-          ]
+          ],
+          "note": "Production service and the production ServiceConnection library that MCP embeds, but the MCP process and protocol layer are replaced by the test harness, so this is not production on both sides for MCP."
         },
         {
           "kind": "production-both-sides",
@@ -1285,9 +1287,9 @@
           "path": "tests/service/test_service_process.py",
           "excluded": true,
           "names": [
-            "test_unexpected_service_death_interrupts_capture_and_reuses_profile",
-            "test_release_service_ignores_lifecycle_gates"
-          ]
+            "test_unexpected_service_death_interrupts_capture_and_reuses_profile"
+          ],
+          "note": "The release-build gate-stripping control (test_release_service_ignores_lifecycle_gates) is not a launcher handoff and is no longer cited here."
         },
         {
           "kind": "fixture",
@@ -2155,16 +2157,21 @@
       "evidence": [
         {
           "path": "packages/foresight_core/test/remote_domain_test.dart",
-          "test": "a command on a connection that already closed is sent once, on the next",
+          "test": "abrupt service loss reconnects and refreshes snapshots without replaying a write",
+          "sides": "production client, fixture service that drops the socket"
+        },
+        {
+          "path": "packages/foresight_core/test/remote_domain_test.dart",
+          "test": "a command whose outcome is unknown is never resent",
           "sides": "production client, fixture service"
         },
         {
           "path": "packages/foresight_core/test/service_closing_protocol_test.dart",
           "test": "at SIGTERM a request waiting for approval is refused and resent once to the replacement, while a dispatched one is outcomeUnknown",
-          "sides": "production service; client is ServiceConnection, not RemoteDomain"
+          "sides": "production service; the client is ServiceConnection, not RemoteDomain"
         }
       ],
-      "missing": "A real service ending an in-flight request from an attached RemoteDomain with no reply."
+      "missing": "A real service ending an in-flight request from an attached RemoteDomain with no reply. The earlier citation of 'a command on a connection that already closed is sent once, on the next' was removed: that test closes the connection before dispatch and has no reply pending."
     },
     {
       "boundary": "Desktop to service",
@@ -2218,10 +2225,10 @@
         {
           "path": "tests/service/test_service_process.py",
           "test": "test_desktop_facade_reads_changes_and_reconnects_without_replaying_mutations",
-          "sides": "production both; SIGTERM, needs a display"
+          "sides": "production both; the service is SIGTERMed with no mutation in flight and needs a display. Its report's no_mutation_replay is a literal true in tests/service/remote_client_probe.dart, so, although it checks the persisted note is unchanged after the restart, it does not prove an uncertain mutation is never replayed"
         }
       ],
-      "missing": "Reconnect after an unclean loss of a real service (the baseline matrix does not state what its G part was); backoff, attach-timeout and epoch behavior are fixture-only."
+      "missing": "Reconnect after an unclean loss of a real service (the baseline matrix does not state what its G part was). Non-replay of an uncertain mutation is proven only against the fixture service (remote_domain_test); no real-service test leaves a mutation in flight. Backoff, attach-timeout and epoch behavior are fixture-only."
     },
     {
       "boundary": "MCP/CLI to service",
@@ -2246,35 +2253,34 @@
       "boundary": "Frontend isolate to worker isolate",
       "transition": "Slow reply",
       "baseline": "G",
-      "status": "partial",
-      "evidence": [
-        {
-          "path": "packages/foresight_core/test/service_gate_test.dart",
-          "test": "a committed request waits at its gate before the reply is sent",
-          "sides": "production both (compiled service); a harness test, not a bridge assertion"
-        }
-      ],
-      "missing": "No assertion about bridge behavior while the worker is slow: concurrent requests, cancel during a held reply, frontend close with a held reply."
+      "status": "open",
+      "evidence": [],
+      "missing": "No bridge assertion exists. The nearest test, 'a committed request waits at its gate before the reply is sent' (service_gate_test.dart), is a service commit/reply gate in a compiled service, not an assertion about the frontend/worker bridge; concurrent requests, cancel during a held reply and frontend close with a held reply are all untested."
     },
     {
       "boundary": "Service to helper",
       "transition": "Closing",
       "baseline": "F",
-      "status": "closed-production",
+      "status": "partial",
       "evidence": [
         {
-          "path": "tests/service/test_service_process.py",
-          "test": "test_service_stop_waits_for_active_capture_and_finalizes_transcript",
-          "sides": "production both; asserts the real helper pid is gone after the service exits"
+          "path": "packages/foresight_core/test/service_gate_test.dart",
+          "test": "the isolated worker stops at every close gate in order",
+          "sides": "production service, GatedHelper stand-in; asserts the helper released through its graceful path (helper.released), not a SIGKILL"
         },
         {
           "path": "tests/service/test_service_process.py",
           "test": "test_idle_shutdown_verifies_a_real_adopted_helper",
-          "sides": "production both; adopted real helper is stopped and the ack verified"
+          "sides": "production both; an adopted real helper exits with -SIGTERM and the ack is verified"
+        },
+        {
+          "path": "tests/service/test_service_process.py",
+          "test": "test_service_stop_waits_for_active_capture_and_finalizes_transcript",
+          "sides": "production both; proves only that the real helper pid is gone after the service exits, which a SIGKILL fallback would also satisfy"
         }
       ],
-      "missing": null,
-      "note": "These tests predate the baseline; the matrix undercounted them. Reconciliation read both bodies (helper pid liveness assertion; adopted-helper exit status) before recording the cell as closed."
+      "missing": "No test shows a service-launched real helper leaving through its graceful SIGTERM path during service close: the stop tests prove the pid is gone (a SIGKILL fallback passes), and the gate test uses a stand-in helper.",
+      "note": "Downgraded from closed-production after review: the earlier reading over-credited a pid-liveness assertion."
     },
     {
       "boundary": "Service to helper",
@@ -2285,7 +2291,7 @@
         {
           "path": "tests/service/test_worker_recovery.py",
           "test": "test_helper_crash_preserves_committed_data_and_restores_indexing",
-          "sides": "production both; relaunch with a new instance, not channel reuse"
+          "sides": "production both; SIGKILL of the helper with no RPC in flight, then relaunch with a new instance: restart and recovery, not channel reuse"
         },
         {
           "path": "packages/foresight_core/test/helper_transport_test.dart",
@@ -2293,26 +2299,21 @@
           "sides": "production channel, in-process gRPC fixture"
         }
       ],
-      "missing": "Nothing asserts the same channel reconnects to a replacement real helper socket."
+      "missing": "Nothing asserts that the same channel reconnects to a replacement real helper socket. This real-helper test backs restart and recovery only."
     },
     {
       "boundary": "Service to helper",
       "transition": "EOF before reply",
       "baseline": "F",
-      "status": "partial",
+      "status": "fixture-only",
       "evidence": [
-        {
-          "path": "tests/service/test_worker_recovery.py",
-          "test": "test_helper_crash_preserves_committed_data_and_restores_indexing",
-          "sides": "production both; SIGKILL without a held in-flight RPC"
-        },
         {
           "path": "packages/foresight_core/test/helper_channel_test.dart",
           "test": "peer EOF before a queued request reports failure without escaping",
           "sides": "production channel, raw stream stand-in"
         }
       ],
-      "missing": "A deterministic test where a real helper dies mid-request and the service handles the lost reply."
+      "missing": "A deterministic test where a real helper dies mid-request and the service handles the lost reply. The real-helper crash test (test_helper_crash_preserves_committed_data_and_restores_indexing) kills the helper with no RPC in flight; it supports Restart and Crash, not this cell, and is deliberately not cited here."
     },
     {
       "boundary": "Service to helper",

@@ -487,6 +487,8 @@ def verify(root: Path = ROOT) -> dict[str, Any]:
         if status == "closed-production":
             if cell.get("missing"):
                 fail(f"{label}: a closed cell cannot list missing coverage")
+            if not any("production both" in str(entry.get("sides", "")).lower() for entry in evidence):
+                fail(f"{label}: a closed cell needs evidence whose sides say production both")
         elif not str(cell.get("missing") or "").strip():
             fail(f"{label}: {status} must say what is missing")
         for entry in evidence:

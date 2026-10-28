@@ -290,7 +290,11 @@ def support_consumers(
     A file that cannot be read is returned as a consumer and described in `errors`
     rather than dropped. `part` and `part of` link a file and its library both ways.
     """
-    scanned = [name for name in files if name.startswith(_SUPPORT_SCAN) and name.endswith((".dart", ".py"))]
+    scanned = [
+        name
+        for name in files
+        if (name.startswith(_SUPPORT_SCAN) and name.endswith((".dart", ".py"))) or (name.startswith("tests/") and name.endswith(".py"))
+    ]
     support = [path for path in changed if path.startswith(("packages/foresight_test_support/", "tests/service/gated_helper"))]
     if any(not path.endswith(".dart") and PurePosixPath(path).suffix != ".py" for path in support):
         return sorted(scanned)  # pubspec, analysis options: every consumer
@@ -320,12 +324,13 @@ def support_consumers(
             if importer not in seen:
                 seen.add(importer)
                 queue.append(importer)
+        # A file mentioned by name is a consumer: Python tests read Dart fixtures (and
+        # the Python twin of a Dart fixture), and the twin pairs read each other.
         base = PurePosixPath(current).name
-        if current.endswith(".py"):
-            for name, text in texts.items():
-                if name not in seen and base in text:
-                    seen.add(name)
-                    queue.append(name)
+        for name, text in texts.items():
+            if name not in seen and base in text and (current.endswith(".py") or name.endswith(".py")):
+                seen.add(name)
+                queue.append(name)
     return sorted((seen | unreadable) - set(support))
 
 

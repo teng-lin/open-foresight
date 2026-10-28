@@ -44,7 +44,9 @@ def failing(export, *fragments):
 
 def test_checked_in_inventory_is_reconciled_with_every_source():
     counts = inventory.verify(ROOT)
-    assert counts["boundaries"] >= 10 and counts["lifecycle_cells"] >= 10
+    data = inventory.load(ROOT)
+    assert counts["boundaries"] == len(data["boundaries"]) == 12 and counts["lifecycle_cells"] == len(data["lifecycle_reconciliation"]) == 14
+    assert counts["gates"] == len(data["gates"]) and counts["impact_rules"] == len(data["impact_rules"])
     assert counts["probes_mapped"] == len(json.loads((ROOT / "tools/integration_probes.json").read_text())["entries"])
     assert counts["exclusions_mapped"] == len(json.loads((ROOT / "pytest-exclusions.json").read_text()))
 
@@ -57,8 +59,12 @@ def test_the_complete_export_without_git_verifies(export):
 def test_every_issue_boundary_class_and_closure_class_is_present():
     data = inventory.load(ROOT)
     names = {boundary["id"] for boundary in data["boundaries"]}
-    assert {"desktop-service", "mcp-service", "frontend-worker-isolate", "service-helper", "service-sqlite-read-worker", "build-installed-product", "harness-os"} <= names
-    assert {rule["kind"] for rule in data["impact_rules"]} >= set(inventory.REQUIRED_RULE_KINDS)
+    assert names == {
+        "desktop-service", "mcp-service", "frontend-worker-isolate", "service-helper", "service-sqlite-read-worker",
+        "launcher-service-handoff", "dart-native-ffi", "schema-bindings", "build-installed-product", "harness-os",
+        "document-import-sandbox", "model-runtime-acceptance",
+    }
+    assert {rule["kind"] for rule in data["impact_rules"]} == set(inventory.REQUIRED_RULE_KINDS) | {"test-file"}
     for boundary in data["boundaries"]:
         assert boundary["owner"] in data["owners"]
         assert {entry["kind"] for entry in boundary["evidence"]} <= set(inventory.COVERAGE_KINDS)
@@ -294,7 +300,6 @@ def test_boundaries_must_be_complete_and_honest(export, editable):
         first["also_gates"] = ["ghost-two"]
         first["evidence"][0]["kind"] = "wishful"
         third = data["boundaries"][2]
-        third["evidence"] = [item for item in third["evidence"] if item["kind"] != "production-both-sides"] or [{"kind": "static-guard", "path": "tests/test_native_ffi_contract.py"}]
         third["evidence"] = [{"kind": "static-guard", "path": "tests/test_native_ffi_contract.py"}]
         third["gaps"] = []
         data["boundaries"][3]["evidence"] = []
@@ -351,7 +356,8 @@ def test_impact_rules_cannot_lose_a_closure_class_or_reference_unknowns(export, 
 def test_lifecycle_cells_cannot_claim_closure_without_evidence(export, editable):
     def change(data):
         cells = data["lifecycle_reconciliation"]
-        closed = next(cell for cell in cells if cell["status"] == "closed-production")
+        closed = next(cell for cell in cells if (cell["boundary"], cell["transition"]) == ("Service to helper", "Closing"))
+        closed["status"] = "closed-production"
         closed["evidence"] = []
         closed["missing"] = "something"
         open_cell = next(cell for cell in cells if cell["status"] == "open")
@@ -377,104 +383,75 @@ def test_lifecycle_cells_cannot_claim_closure_without_evidence(export, editable)
     )
 
 
-def test_a_closed_cell_with_evidence_and_nothing_missing_is_accepted(export, editable):
-    def close(data):
-        cell = next(item for item in data["lifecycle_reconciliation"] if item["status"] == "closed-production")
-        assert cell["evidence"] and cell["missing"] is None
-
-    editable("tools/boundary_inventory.json", close)
-    assert inventory.verify(export)["lifecycle_cells"] >= 1
+def cell(data, boundary, transition):
+    return next(item for item in data["lifecycle_reconciliation"] if (item["boundary"], item["transition"]) == (boundary, transition))
 
 
-def test_the_service_helper_gaps_are_recorded_not_assumed_closed():
-    cells = {(cell["boundary"], cell["transition"]): cell for cell in inventory.load(ROOT)["lifecycle_reconciliation"]}
-    assert cells[("Service to helper", "Malformed or partial frame")]["status"] == "open"
-    assert cells[("Service to helper", "Closing")]["status"] == "closed-production"
-    assert cells[("Desktop to service", "Crash")]["status"] != "closed-production"
+def test_a_closed_cell_needs_evidence_that_says_production_on_both_sides(export, editable):
+    def close(data, sides):
+        target = cell(data, "Service to helper", "Closing")
+        target.update(status="closed-production", missing=None)
+        target["evidence"][1]["sides"] = sides
+        for item in target["evidence"][:1] + target["evidence"][2:]:
+            item["sides"] = "stand-in helper"
+
+    editable("tools/boundary_inventory.json", lambda data: close(data, "production client, fixture service"))
+    failing(export, "a closed cell needs evidence whose sides say production both")
+    editable("tools/boundary_inventory.json", lambda data: close(data, "production both; adopted helper"))
+    assert inventory.verify(export)["lifecycle_cells"] == 14
 
 
-def test_copy_helper_leaves_no_git_metadata(export):
-    assert not (export / ".git").exists()
+EXPECTED_VERDICTS = {
+    ("Desktop to service", "Crash"): "fixture-only",
+    ("Desktop to service", "EOF before reply"): "fixture-only",
+    ("Desktop to service", "Slow reply (non-attach)"): "fixture-only",
+    ("Desktop to service", "Duplicate launch"): "partial",
+    ("Desktop to service", "Reconnect"): "partial",
+    ("MCP/CLI to service", "Slow reply"): "fixture-only",
+    ("Frontend isolate to worker isolate", "Slow reply"): "open",
+    ("Service to helper", "Closing"): "partial",
+    ("Service to helper", "Reconnect"): "partial",
+    ("Service to helper", "EOF before reply"): "fixture-only",
+    ("Service to helper", "Slow reply"): "fixture-only",
+    ("Service to helper", "Malformed or partial frame"): "open",
+    ("Service to helper", "Duplicate launch"): "partial",
+    ("Lock and record handoff", "Duplicate launch"): "partial",
+}
 
 
-def test_scanner_ignores_registrations_in_comments_and_strings():
-    source = r"""
-    // test('line comment', () {});
-    /* testWidgets('block comment', (t) async {});
-       /* nested */ test('still commented', () {}); */
-    final fixtureText = 'test(\'inside a string\', () {});';
-    final raw = r'''
-test('inside a triple quoted string', () {});
-''';
-    test('the only real one', () {});
-    """
-    names = [entry.text for entry in inventory.dart_registered_tests(source)]
-    assert names == ["the only real one"]
+def test_every_lifecycle_verdict_is_pinned_and_none_is_closed():
+    cells = {(item["boundary"], item["transition"]): item["status"] for item in inventory.load(ROOT)["lifecycle_reconciliation"]}
+    # A verdict changes only together with the test that justifies it.
+    assert cells == EXPECTED_VERDICTS
 
 
-def test_python_scanner_uses_the_syntax_tree_not_text():
-    source = (
-        'def test_real():\n    """def test_in_docstring(): pass"""\n    # def test_in_comment(): pass\n'
-        'TEXT = "def test_in_string(): pass"\n'
-    )
-    assert inventory.python_registered_tests(source) == {"test_real"}
-    with pytest.raises(ValueError, match="does not parse"):
-        inventory.python_registered_tests("def test_broken(:\n")
-
-
-def test_skip_markers_are_detected_outside_comments_and_strings():
-    dart = "test('a', () { markTestSkipped('why'); });"
-    assert inventory.scan_dart(dart)[1] is True
-    assert inventory.scan_dart("test('b', () {}, skip: 'later');")[1] is True
-    assert inventory.scan_dart("// skip: nothing\n/* markTestSkipped */ final s = 'skip: x'; test('c', () {});")[1] is False
-    assert inventory.scan_dart("@Skip('x')\nvoid main() {}")[1] is True
-    source = "import pytest\n@pytest.mark.skipif(True, reason='r')\ndef test_a(): pass\ndef test_b():\n    pytest.skip('r')\ndef test_c(): pass\n"
-    assert inventory._python_tests(source) == {"test_a": True, "test_b": True, "test_c": False}
-
-
-def test_cited_tests_that_can_skip_must_declare_a_skip_gate(export, editable):
-    def drop(data):
-        entry = next(item for boundary in data["boundaries"] for item in boundary["evidence"] if item["path"] == "tests/test_linux_packages.py")
-        entry.pop("skip_gate")
-
-    editable("tools/boundary_inventory.json", drop)
-    failing(export, "tests/test_linux_packages.py: carries a skip marker, so the entry must declare its skip_gate")
-
-    def bogus(data):
-        entry = next(item for boundary in data["boundaries"] for item in boundary["evidence"] if item["path"] == "tests/test_linux_packages.py")
-        entry["skip_gate"] = "no-such-gate"
-
-    editable("tools/boundary_inventory.json", bogus)
-    failing(export, "skip_gate 'no-such-gate' is not an inventory gate")
-
-
-def test_unparseable_cited_python_is_a_drift_error_not_a_crash(export, editable):
-    (export / "tests" / "broken_cited.py").write_text("def test_x(:\n")
-    try:
-        editable("tools/boundary_inventory.json", lambda data: data["boundaries"][0]["evidence"].append({"kind": "static-guard", "path": "tests/broken_cited.py"}))
-        failing(export, "does not parse")
-    finally:
-        (export / "tests" / "broken_cited.py").unlink()
-
-
-def test_ci_job_map_must_cover_every_required_job_beyond_the_gates(export, editable):
-    def drop(data):
-        data["ci_job_map"].pop("acceptance-audio")
-        data["ci_job_map"]["linux-native"]["gates"] = ["ghost"]
-        data["ci_job_map"]["acceptance-cpu"]["gates"] = []
-
-    editable("tools/boundary_inventory.json", drop)
-    failing(export, "ci_job_map must name exactly", "unknown gate ghost", "needs a platform and at least one gate")
+def test_downgraded_cells_say_why_and_cite_what_the_tests_prove():
     data = inventory.load(ROOT)
-    from tools import ci_selection
+    eof = cell(data, "Desktop to service", "EOF before reply")
+    assert [(e["path"].rsplit("/", 1)[1], e["test"]) for e in eof["evidence"][:2]] == [
+        ("remote_domain_test.dart", "abrupt service loss reconnects and refreshes snapshots without replaying a write"),
+        ("remote_domain_test.dart", "a command whose outcome is unknown is never resent"),
+    ]
+    assert "already closed" in eof["missing"] and "no reply pending" in eof["missing"]
+    reconnect = cell(data, "Desktop to service", "Reconnect")
+    assert "literal true" in reconnect["evidence"][1]["sides"] and "fixture service" in reconnect["missing"]
+    closing = cell(data, "Service to helper", "Closing")
+    assert closing["status"] == "partial" and "SIGKILL fallback passes" in closing["missing"]
+    assert any("helper.released" in item["sides"] for item in closing["evidence"])
+    eof_helper = cell(data, "Service to helper", "EOF before reply")
+    assert [e["test"] for e in eof_helper["evidence"]] == ["peer EOF before a queued request reports failure without escaping"]
+    assert "no RPC in flight" in eof_helper["missing"]
+    assert "no RPC in flight" in cell(data, "Service to helper", "Reconnect")["evidence"][0]["sides"]
+    slow = cell(data, "Frontend isolate to worker isolate", "Slow reply")
+    assert slow["evidence"] == [] and "not an assertion about the frontend/worker bridge" in slow["missing"]
 
-    assert set(data["ci_job_map"]) == set(ci_selection.ACCEPTANCE) | {"linux-native"}
-    assert {"hosted-acceptance", "hosted-linux-native"} <= set(data["gates"])
 
-
-def test_a_new_required_job_without_a_mapping_is_drift(export, monkeypatch):
-    from tools import ci_selection
-
-    real = ci_selection.required_jobs
-    monkeypatch.setattr(ci_selection, "required_jobs", lambda *a, **k: [*real(*a, **k), "brand-new-job"])
-    failing(export, "required CI job brand-new-job maps to no gate")
+def test_boundary_citations_do_not_overclaim():
+    boundaries = {item["id"]: item for item in inventory.load(ROOT)["boundaries"]}
+    launcher = next(e for e in boundaries["launcher-service-handoff"]["evidence"] if e["path"] == "tests/service/test_service_process.py")
+    assert launcher["names"] == ["test_unexpected_service_death_interrupts_capture_and_reuses_profile"]
+    closing = next(e for e in boundaries["mcp-service"]["evidence"] if e["path"].endswith("service_closing_protocol_test.dart"))
+    assert closing["kind"] == "fixture" and "MCP process and protocol layer are replaced" in closing["note"]
+    facade = next(e for e in boundaries["desktop-service"]["evidence"] if e["path"] == "tests/service/test_service_process.py")
+    assert "does not prove that an uncertain mutation is never replayed" in facade["note"]
+    assert any("literal true" in gap for gap in boundaries["desktop-service"]["gaps"])

@@ -21,10 +21,10 @@ GATES = set(INVENTORY["gates"])
 COMMAND_GATES = {name for name, gate in INVENTORY["gates"].items() if gate["kind"] == "command"}
 
 
-def plan_for(paths, *, host="linux", environ=None, boundaries=(), include_long=False, bundle=None, models=None):
+def plan_for(paths, *, host="linux", environ=None, boundaries=(), include_long=False, bundle=None, models=None, inventory=None):
     context = vc.Context(ROOT, environ or {}, host=host, bundle=bundle, models=models)
     return vc.build_plan(
-        INVENTORY, vc.explicit_change_set(ROOT, paths), ROOT, context,
+        inventory or INVENTORY, vc.explicit_change_set(ROOT, paths), ROOT, context,
         requested_boundaries=boundaries, include_long=include_long, files=FILES,
     )
 
@@ -173,12 +173,52 @@ def test_empty_change_set_for_boundary_requests():
 def test_shared_test_support_selects_every_dart_consumer_and_reports_importers():
     plan = plan_for(["packages/foresight_test_support/lib/service_fault_proxy.dart"])
     boundaries, checks = selected(plan)
-    assert {"desktop-service", "mcp-service", "frontend-worker-isolate", "service-helper", "service-sqlite-read-worker", "launcher-service-handoff"} <= boundaries
+    # The rule's static list plus nothing else: every closure-derived owner is already in it.
+    assert boundaries == {
+        "dart-native-ffi", "desktop-service", "frontend-worker-isolate", "harness-os",
+        "launcher-service-handoff", "mcp-service", "service-helper", "service-sqlite-read-worker",
+    }
     assert {"core-stage", "desktop-stage", "service-stage"} <= checks
     closure = plan["closure"][0]
     assert "packages/foresight_core/test/service_closing_protocol_test.dart" in closure["consumers"]
-    assert closure["consumer_count"] >= 5 and "desktop-service" in closure["boundaries"]
+    assert closure["boundaries"] == ["desktop-service", "launcher-service-handoff", "mcp-service"]
+    assert closure["consumer_count"] == len(vc.support_consumers(ROOT, ["packages/foresight_test_support/lib/service_fault_proxy.dart"], FILES))
     assert not plan["conservative"]
+
+
+def test_closure_alone_selects_a_boundary_the_rule_does_not_list():
+    # model-runtime-acceptance is absent from the rule's static list; only the import graph reaches it.
+    rule = next(item for item in INVENTORY["impact_rules"] if item["id"] == "shared-test-support")
+    assert "model-runtime-acceptance" not in rule["boundaries"]
+    plan = plan_for(["packages/foresight_test_support/lib/test_paths.dart"])
+    boundary = next(item for item in plan["boundaries"] if item["id"] == "model-runtime-acceptance")
+    assert [entry["kind"] for entry in boundary["why"]] == ["import-graph"]
+    assert "model-runtime-acceptance" in plan["closure"][0]["boundaries"]
+    assert selected(plan)[0] == BOUNDARIES - {"build-installed-product", "document-import-sandbox", "schema-bindings"}
+
+
+def test_closure_owner_outside_an_empty_rule_list_is_still_selected():
+    import copy
+
+    inventory = copy.deepcopy(INVENTORY)
+    next(item for item in inventory["impact_rules"] if item["id"] == "shared-test-support")["boundaries"] = []
+    plan = plan_for(["packages/foresight_test_support/lib/service_fault_proxy.dart"], inventory=inventory)
+    assert selected(plan)[0] == {"desktop-service", "launcher-service-handoff", "mcp-service"}
+    assert all(entry["kind"] == "import-graph" for item in plan["boundaries"] for entry in item["why"])
+
+
+def test_dart_fixture_edits_select_the_python_tests_that_read_them_and_their_twins():
+    consumers = vc.support_consumers(ROOT, ["packages/foresight_test_support/lib/gated_helper.dart"], FILES)
+    assert {
+        "packages/foresight_core/test/service_gate_test.dart",
+        "packages/foresight_core/test/service_closing_protocol_test.dart",
+        "tests/service/gated_helper.py",
+        "tests/service/test_service_process.py",
+        "packages/foresight_test_support/lib/gated_helper.py",
+    } <= set(consumers)
+    hygiene = vc.support_consumers(ROOT, ["packages/foresight_test_support/lib/test_paths.dart"], FILES)
+    assert "tests/test_dart_fixture_hygiene.py" in hygiene
+    assert "tests/test_dart_fixture_hygiene.py" in plan_for(["packages/foresight_test_support/lib/test_paths.dart"])["closure"][0]["consumers"] or len(hygiene) > vc.LIST_LIMIT * 4
 
 
 def test_support_closure_follows_transitive_imports_and_python_twin(tmp_path):
@@ -204,8 +244,18 @@ def test_support_closure_follows_transitive_imports_and_python_twin(tmp_path):
     assert vc.support_consumers(tmp_path, ["tests/service/gated_helper.py"], files) == ["tests/service/test_service_process.py"]
     assert "packages/foresight_test_support/lib/gated_helper.py" not in vc.support_consumers(tmp_path, ["packages/foresight_test_support/lib/gated_helper.py"], files)
     everything = vc.support_consumers(tmp_path, ["packages/foresight_test_support/pubspec.yaml"], files)
-    assert "packages/foresight_core/test/unrelated_test.dart" in everything and len(everything) == len(files) - 1 or everything
-    assert "packages/foresight_core/test/unrelated_test.dart" in everything
+    assert everything == sorted(
+        [
+            "packages/foresight_core/test/unrelated_test.dart",
+            "packages/foresight_core/test/x_test.dart",
+            "packages/foresight_core/test/y_test.dart",
+            "packages/foresight_test_support/lib/a.dart",
+            "packages/foresight_test_support/lib/b.dart",
+            "packages/foresight_test_support/lib/gated_helper.py",
+            "tests/service/gated_helper.py",
+            "tests/service/test_service_process.py",
+        ]
+    )
 
 
 def test_native_abi_change_reaches_bindings_workers_and_packaged_products():
@@ -360,7 +410,8 @@ def test_prerequisites_produced_earlier_in_the_run_are_distinguished_from_presen
     library.write_bytes(b"native bytes")
     present = plan_for(["native/foresight_native.h"], environ=environ)
     core = next(item for item in present["checks"] if item["id"] == "core-stage")
-    assert all(not item.get("satisfied_by") for item in core["prerequisites"][1:2])
+    library_prerequisite = next(item for item in core["prerequisites"] if item["requirement"]["kind"] == "path")
+    assert library_prerequisite["met"] and "satisfied_by" not in library_prerequisite and library_prerequisite["detail"] == str(library)
     reuse = core["reuse"][0]
     assert reuse["present"] and "reused existing output" in reuse["presented_as"] and "not freshly built" in reuse["presented_as"]
     import hashlib
@@ -393,11 +444,14 @@ def test_context_expands_placeholders_per_platform_and_environment(tmp_path):
     assert absolute.path("{build_dir}") == Path("/abs/build")
 
 
-def test_long_checks_are_deferred_in_the_plan_but_never_hidden():
-    plan = plan_for(["native/foresight_native.h"])
-    native = next(item for item in plan["checks"] if item["id"] == "native-stage")
-    assert native["long"] and native.get("deferred") if native["availability"] == "runnable" else True
-    assert plan_for(["native/foresight_native.h"], include_long=True)["include_long"] is True
+def test_long_checks_are_deferred_in_the_plan_but_never_hidden(monkeypatch):
+    monkeypatch.setattr(vc.shutil, "which", lambda name: f"/usr/bin/{name}")
+    native = next(item for item in plan_for(["native/foresight_native.h"])["checks"] if item["id"] == "native-stage")
+    assert native["availability"] == "runnable" and native["long"]
+    assert native["deferred"] == "long-running; add --include-long to execute it"
+    included = plan_for(["native/foresight_native.h"], include_long=True)
+    assert included["include_long"] is True
+    assert "deferred" not in next(item for item in included["checks"] if item["id"] == "native-stage")
 
 
 def test_subsumption_when_the_full_python_gate_will_run(monkeypatch):
@@ -418,7 +472,8 @@ def fake_runner(statuses, calls=None):
             calls.append((list(argv), dict(env), timeout))
         log_path.write_text("raw log\n")
         code = statuses.get(key, 0)
-        return {"returncode": code, "timed_out": code == "timeout", "seconds": 0.5, "log": str(log_path)}
+        # "timeout" models an entrypoint that exited 0 but only after the deadline had fired.
+        return {"returncode": 0 if code == "timeout" else code, "timed_out": code == "timeout", "seconds": 0.5, "log": str(log_path)}
 
     return run
 
@@ -482,7 +537,8 @@ def test_a_failed_check_fails_the_run_and_blocks_its_dependents(private_output, 
     assert by_id["platform-contracts"]["status"] == "failed" and by_id["platform-contracts"]["reason"] == "exit status 1"
     assert by_id["native-stage"]["status"] == "failed"
     assert by_id["core-stage"]["status"] == "not-run" and "native-stage did not pass" in by_id["core-stage"]["reason"]
-    assert by_id["shared-guards"]["status"] == "subsumed" or by_id["shared-guards"]["status"] == "passed"
+    # A native ABI edit does not select the full Python gate, so the guards run on their own.
+    assert "python-coverage" not in by_id and by_id["shared-guards"]["status"] == "passed"
 
 
 def test_subsumed_guards_follow_the_full_python_gate(private_output, monkeypatch):
@@ -592,7 +648,7 @@ def test_plan_json_has_the_documented_shape_and_runs_nothing(capsys):
     plan = data["plan"]
     assert {"change_set", "paths", "closure", "ci_selection", "boundaries", "checks", "reuse_policy", "required_platforms"} <= plan.keys()
     assert plan["kind"] == vc.PLAN_KIND and plan["schema"] == vc.PLAN_SCHEMA
-    assert all(check["why"] for check in plan["checks"]) and all("entries" not in plan["change_set"] for _ in [0])
+    assert all(check["why"] for check in plan["checks"]) and "entries" not in plan["change_set"]
 
 
 def test_human_plan_explains_selection_prerequisites_reuse_and_unverified_items(capsys):
@@ -604,19 +660,39 @@ def test_human_plan_explains_selection_prerequisites_reuse_and_unverified_items(
     assert "Conservative selection (unknown inputs)" in captured.out
 
 
-def test_boundary_request_records_the_real_source_state_and_honors_include(capsys):
+def test_boundary_request_records_the_real_source_state_and_honors_include(capsys, monkeypatch):
+    seen = {}
+
+    def collect(root, base, include):
+        seen.update(base=base, include=list(include))
+        return vc.build_change_set(
+            root, mode="git", paths_by_class={}, revision="abc123", base=base, merge_base=None,
+            dirty=True, dirty_paths=["untracked.txt"], excluded_classes=["staged", "unstaged", "untracked"],
+        )
+
+    monkeypatch.setattr(vc, "collect_git", collect)
     code, captured = cli(["--boundary", "service-helper", "--include", "committed", "--plan", "--json"], capsys)
-    data = json.loads(captured.out)
-    plan = data["plan"]
-    assert code == 0 and plan["change_set"]["paths"] == [] and plan["empty_change_set"]
-    if (ROOT / ".git").exists():
-        assert plan["change_set"]["mode"] == "git" and plan["change_set"]["revision"]
-        assert plan["change_set"]["excluded_classes"] == ["staged", "unstaged", "untracked"]
-        assert isinstance(plan["change_set"]["dirty"], bool)
-    else:
-        assert plan["change_set"]["mode"] == "boundary-request" and plan["change_set"]["dirty"] is None
+    plan = json.loads(captured.out)["plan"]
+    assert code == 0 and seen == {"base": None, "include": ["committed"]}
+    assert plan["change_set"]["mode"] == "git" and plan["change_set"]["revision"] == "abc123"
+    assert plan["change_set"]["dirty"] is True and plan["change_set"]["excluded_classes"] == ["staged", "unstaged", "untracked"]
+    assert plan["change_set"]["paths"] == [] and plan["empty_change_set"]
     assert [boundary["id"] for boundary in plan["boundaries"]] == ["service-helper"]
     assert {"service-stage", "core-stage", "native-stage", "shared-guards"} <= {check["id"] for check in plan["checks"]}
+
+
+def test_boundary_request_without_git_records_that_nothing_was_collected(capsys, monkeypatch):
+    def refuse(root, base, include):
+        raise vc.PlanError("git is not available")
+
+    monkeypatch.setattr(vc, "collect_git", refuse)
+    code, captured = cli(["--boundary", "service-helper", "--plan", "--json"], capsys)
+    change = json.loads(captured.out)["plan"]["change_set"]
+    assert code == 0 and change["mode"] == "boundary-request" and change["dirty"] is None
+    assert change["dirty_unknown"] == "no change set was collected: git is not available" and change["revision"] is None
+    # An explicit --base is never silently dropped.
+    assert vc.main(["--skip-inventory-check", "--boundary", "service-helper", "--base", "main", "--plan"], root=ROOT, environ={}) == 2
+    assert "git is not available" in capsys.readouterr().err
 
 
 def test_list_boundaries(capsys):
@@ -1229,3 +1305,64 @@ def test_reproduction_line_quotes_arguments():
     plan = {"change_set": {"mode": "explicit", "identity_sha256": "0" * 64}}
     line = vc.reproduction_lines(plan, ["--files", "a file with spaces.txt", "$(touch x)"])[0]
     assert "'a file with spaces.txt'" in line and "'$(touch x)'" in line
+
+
+# ----------------------------------------------- second review: verdict mutants
+
+
+def test_a_zero_exit_after_the_deadline_is_still_a_timeout_failure():
+    outcome = {"returncode": 0, "timed_out": True, "leaked_descendants": False, "error": None}
+    assert vc._outcome_status(outcome) == ("failed", "timed out")
+    assert vc._outcome_status({**outcome, "timed_out": False}) == ("passed", None)
+    assert vc._outcome_status({**outcome, "timed_out": False, "returncode": 3}) == ("failed", "exit status 3")
+    assert vc._outcome_status({**outcome, "timed_out": False, "error": "disk"}) == ("failed", "disk")
+
+
+def check_record(identifier, status, scope="host", kind="command"):
+    return {"id": identifier, "status": status, "scope": scope, "kind": kind}
+
+
+def test_unexecuted_platforms_counts_only_passing_host_scoped_checks():
+    plan = {"required_platforms": ["linux", "macos"]}
+    passed = [check_record("a", "passed"), check_record("b", "subsumed")]
+    assert vc.unexecuted_platforms(plan, passed, "linux") == ["macos"]
+    assert vc.unexecuted_platforms(plan, passed, "macos") == ["linux"]
+    # Neutral checks (shared guards) say nothing about a platform.
+    assert vc.unexecuted_platforms(plan, [check_record("guards", "passed", scope="neutral")], "linux") == ["linux", "macos"]
+    # A failed or unavailable host-scoped command check means the host did not execute.
+    assert vc.unexecuted_platforms(plan, [*passed, check_record("c", "failed")], "linux") == ["linux", "macos"]
+    assert vc.unexecuted_platforms(plan, [*passed, check_record("c", "unavailable")], "linux") == ["linux", "macos"]
+    # CI-only and manual checks do not make a passing host unexecuted; they block the claim themselves.
+    assert vc.unexecuted_platforms(plan, [*passed, check_record("d", "ci-only", kind="ci-only")], "linux") == ["macos"]
+    assert vc.unexecuted_platforms({"required_platforms": []}, passed, "linux") == []
+    assert vc.unexecuted_platforms({"required_platforms": ["linux"]}, passed, "linux") == []
+
+
+# ---------------------------------------- second review: run mode without Git
+
+
+def test_export_run_mode_and_inventory_guard_never_call_git(tmp_path, monkeypatch, accepting_junit):
+    export = export_tree(tmp_path / "tree")
+    # Only the export path is on PATH: any attempt to start git fails loudly.
+    monkeypatch.setenv("PATH", "/nonexistent")
+    git_calls = []
+
+    def spy(root, *arguments):
+        git_calls.append(arguments)
+        raise AssertionError("git was called")
+
+    monkeypatch.setattr(vc, "_git", spy)
+    assert boundary_inventory.main(["--root", str(export)]) == 0
+    monkeypatch.setattr(check_local_validation, "TEMP_PARENT", tmp_path.resolve())
+    monkeypatch.setattr(vc.shutil, "which", lambda name: f"/usr/bin/{name}" if name != "git" else None)
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
+    monkeypatch.setattr(vc.validation_evidence, "SHORT_TEMP_LIMIT", 500)
+    code = vc.main(
+        ["--files", "docs/testing.md", "--revision", "fixture-rev", "--base-revision", "fixture-base", "--output", str(tmp_path / "ev")],
+        root=export, environ={"PATH": "/nonexistent"},
+    )
+    summary = json.loads((tmp_path / "ev/evidence.json").read_text())
+    assert code == 0 and git_calls == []
+    assert summary["status"] == "full-validation-passed" and summary["source"]["mode"] == "explicit"
+    assert summary["source"]["revision"] == "fixture-rev" and summary["source"]["dirty"] is None
+    assert summary["tools"]["git"] is None

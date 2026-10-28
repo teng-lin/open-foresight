@@ -62,7 +62,7 @@ merge base), so a dirty tree is never confused with its `HEAD`.
    | Change | Selects |
    | --- | --- |
    | Protobuf schemas and generated bindings | Wire consumers: desktop, MCP, frontend/worker bridge and helper, plus the drift check. |
-   | Shared test support (`packages/foresight_test_support`, `tests/service/gated_helper.py`) | Every Dart gate. The plan lists the test files that import the changed file, following support-to-support imports, and the boundaries they exercise. |
+   | Shared test support (`packages/foresight_test_support`, `tests/service/gated_helper.py`) | Every Dart gate. The plan lists the test files that import the changed file (following support-to-support imports, `part` directives and conditional imports) and the Python tests that name it, such as the fixture-hygiene guard and the Dart/Python twin of a fixture, and the boundaries they exercise. A file the scan cannot read is kept as a consumer and makes the plan conservative. |
    | Native ABI | FFI, read workers, service consumers and packaged products, plus native and sanitizer gates. |
    | Runtime configuration | Model, helper, installed-product and harness consumers. |
    | Package layout | Installer, document-sandbox, launcher and harness consumers. |
@@ -181,11 +181,27 @@ The consolidation removed `docs/architecture/service-lifecycle-tests.md`; its la
 content is `git show f7c06383:docs/architecture/service-lifecycle-tests.md`. The
 inventory's `lifecycle_reconciliation` re-checks each baseline gap against
 currently registered tests, with evidence and what remains missing. A cell is
-`closed-production` only with a read test that has production on both sides. The
-reconciliation found one baseline fixture-only cell already covered (service to
-helper closing) and left the others open or partial, including the helper
-malformed-frame gap, which has no test. Statuses are claims about registered
-tests, not proof that those tests pass; CI does that.
+`closed-production` only with a read test whose recorded sides say production on
+both; the guard enforces that wording. After review, **no cell is closed**: 14
+baseline gaps were re-checked and the verdicts are pinned in a test.
+
+| Cell | Verdict | Why |
+| --- | --- | --- |
+| Desktop to service: crash, EOF before reply, slow reply | fixture-only | Only a fixture service drops or holds frames for `RemoteDomain`. The test that closes a connection before dispatch was removed from the EOF cell: nothing is pending there. |
+| Desktop to service: reconnect, duplicate launch | partial | The real-service facade test SIGTERMs with no mutation in flight and its `no_mutation_replay` field is a literal `true`, so it does not prove an uncertain mutation is never replayed; that is proven only against the fixture service. |
+| MCP to service: slow reply | fixture-only | Real MCP binary against a fixture service. |
+| Frontend to worker isolate: slow reply | open | The nearest test is a service commit/reply gate, not a bridge assertion. |
+| Service to helper: closing | partial | The gate test proves graceful release with a stand-in helper; the real-helper stop test proves only that the pid is gone, which a SIGKILL fallback also satisfies. An adopted real helper does exit with SIGTERM. This was first recorded as closed and was downgraded. |
+| Service to helper: reconnect, EOF before reply | partial, fixture-only | One real-helper crash test has no RPC in flight, so it supports restart and recovery, not channel reuse or a lost reply. |
+| Service to helper: slow reply, duplicate launch | fixture-only, partial | No real helper answers slowly; adoption is covered but two helpers on one storage are not. |
+| Service to helper: malformed or partial frame | open | No test. |
+| Lock and record handoff: duplicate launch | partial | The baseline's gap is not specified. |
+
+Two citation corrections follow the same review: the MCP boundary's
+`ServiceConnection` closing test is labeled a fixture, because the MCP process and
+protocol layer are replaced by the harness, and the launcher boundary no longer
+cites the release-build gate-stripping control. Statuses are claims about
+registered tests, not proof that those tests pass; CI does that.
 
 ## Scope of this batch
 
