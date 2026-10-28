@@ -8,8 +8,11 @@ import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_core/src/rpc_error.dart';
+import 'package:foresight_core/src/diagnostics/session.dart';
+import 'package:foresight_core/src/service_diagnostics.dart';
 import 'package:test/test.dart';
 import 'package:clock/clock.dart';
+import 'diagnostics/test_sinks.dart';
 
 class FailingDetachRecording extends Recording {
   FailingDetachRecording()
@@ -119,7 +122,84 @@ void main() {
   });
 
   test(
-    'hiding retains the verified host and finishes capture before it can restart',
+    'capture logs distinguish visibility, explicit stop and desktop departure',
+    () async {
+      final output = SinkCapture();
+      final logging = await LoggingSession.startForTesting(
+        configuration: const DiagnosticConfiguration(),
+        profilePath: '${temp.path}/profile',
+        sinkFactory: memorySink(output.port.sendPort),
+      );
+      await logging.producer.ready;
+      try {
+        await runWithServiceDiagnostics(logging.producer, () async {
+        expect(captureServiceDiagnosticEmitter(), isNotNull);
+          await restartService(longGrace);
+          await attach();
+          CountingRecording begin() {
+            final recording = CountingRecording();
+            service.application.recording = recording;
+            service.application.recordingMeeting = service.domain.store.meeting(
+              'private meeting canary',
+            );
+            return recording;
+          }
+
+          final hidden = begin();
+          await desktop.call('security.desktop_visibility', {'visible': false});
+          expect(hidden.stops, 0);
+          await desktop.call('security.detach_desktop', {});
+          await eventually(() => service.application.recording == null);
+          expect(hidden.stops, 1);
+          await attach();
+          final manual = begin();
+          await service.application.stopRecording();
+          expect(manual.stops, 1);
+          final disconnected = begin();
+          await desktop.close();
+          await eventually(() => service.application.recording == null);
+          expect(disconnected.stops, 1);
+        });
+        await service.close();
+        await logging.close();
+      expect(logging.health.admitted, greaterThan(0));
+      expect(logging.producer.rejected, 0);
+        await output.closed.future.timeout(const Duration(seconds: 5));
+        final records = output.records;
+        final requested = records.where(
+          (r) => r['event'] == 'capture.stop_requested',
+        );
+        final stopped = records.where((r) => r['event'] == 'capture.stopped');
+        expect(requested.map((r) => (r['fields'] as Map)['reason']), [
+          'desktopDetached',
+          'user',
+          'desktopDisconnected',
+        ]);
+        expect(stopped.map((r) => (r['fields'] as Map)['reason']), [
+          'desktopDetached',
+          'user',
+          'desktopDisconnected',
+        ]);
+        expect(
+          stopped.map((r) => (r['fields'] as Map)['active']),
+          everyElement(false),
+        );
+        expect(
+          records
+              .where((r) => r['event'] == 'capture.visibility_changed')
+              .map((r) => (r['fields'] as Map)['enabled']),
+          contains(false),
+        );
+        expect(jsonEncode(records), isNot(contains('private meeting canary')));
+      } finally {
+        await logging.close();
+        output.dispose();
+      }
+    },
+  );
+
+  test(
+    'hiding keeps existing capture while refusing new capture and approvals',
     () async {
       await attach();
       final recording = CountingRecording();
@@ -128,9 +208,8 @@ void main() {
         'Hidden capture',
       );
       await desktop.call('security.desktop_visibility', {'visible': false});
-      await eventually(
-        () => recording.stops == 1 && service.application.recording == null,
-      );
+      expect(recording.stops, 0);
+      expect(service.application.recording, same(recording));
       expect(service.access.hasHost, true);
       expect(service.access.hasVisibleHost, false);
       for (final operation in ['meetings.start', 'meetings.resume']) {
@@ -147,6 +226,10 @@ void main() {
       }
       await desktop.call('security.desktop_visibility', {'visible': true});
       expect(service.access.hasVisibleHost, true);
+      expect(service.application.recording, same(recording));
+      await service.application.stopRecording();
+      expect(recording.stops, 1);
+      expect(service.application.recording, isNull);
     },
   );
   // Store one note so that the notes.list reply to request [id], with its

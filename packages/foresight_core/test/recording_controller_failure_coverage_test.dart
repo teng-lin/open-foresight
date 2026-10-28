@@ -283,11 +283,11 @@ void main() {
       expect(store.rows('SELECT * FROM transcript WHERE final=0'), isEmpty);
       expect(meetingState(), 'recording');
       await app.stopRecording(
-        reason: 'Recording stopped because the desktop was hidden.',
+        reason: 'Recording stopped because the desktop connection detached.',
       );
       expect(
         app.recordingState,
-        contains('Recording stopped because the desktop was hidden.'),
+        contains('Recording stopped because the desktop connection detached.'),
       );
       expect(meetingState(), 'completed');
       final geometry = media.audio.playbackTimeline.chunk(

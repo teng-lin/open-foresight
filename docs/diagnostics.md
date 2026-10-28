@@ -57,6 +57,29 @@ up the cleared sources, signs out workspace accounts and removes leftover
 speech audio files. It does not remove the `logs` folder: only the log writer
 creates or changes files there.
 
+## Investigating a recording that stopped
+
+Recording diagnostics are included at the default `info` level; no extra setting
+is needed. Open **Settings → Diagnostics → Show logs folder** after reproducing
+the problem and inspect the background service's records around that time.
+
+- `capture.visibility_changed` records whether the desktop reported itself visible
+  (`enabled`). A visibility change alone does not stop an existing recording.
+- `capture.stop_requested` identifies the stop `reason`: `user`, `inactivity`,
+  `desktopDisconnected`, `desktopDetached`, `applicationClosing`, `captureFailure`,
+  `transcriptStorageFailure` or `controlFailure`.
+- `capture.stopped` reports the same reason, cleanup outcome and duration.
+  `active: false` means capture ownership was released; `queued` counts transcript
+  segments still pending persistence. Saved-audio transcription may continue.
+- `capture.failed` retains the first failed stage: `start`, `poll`, `nativeRoute`,
+  `publish`, `reserve`, `pause`, `stopState` or `finish`. A filesystem failure can
+  include its numeric OS error in `status`. Later cleanup failures do not replace
+  this first observation. Exception messages and audio content are not logged.
+
+Visibility changes, explicit capture stops and speech-processing failures are
+separate observations. A native route warning does not prove that recording
+stopped; compare the later stop reason and capture state.
+
 ## Configuration
 
 Logging is configured through environment variables that the desktop app

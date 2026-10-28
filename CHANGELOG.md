@@ -13,11 +13,17 @@ Notable changes to Open Foresight are recorded here. Versions follow
 - Collapse recording playback behind a Show recording button, hide live storage
   and activity updates, and remove the remaining-originals switch. Show the final
   recording status after capture stops, including failures and the reason for
-  inactivity or desktop-visibility stops.
+  inactivity or desktop-disconnection stops.
 - Skip the full registered-model content scan during service startup. Model
   downloads and registration continue to verify their checksums.
 - Keep the speech setup display stable while recording data refreshes, avoiding
   a transient setup warning that repeatedly shifts the meeting notes.
+
+- Continue an existing recording while the connected desktop window is hidden,
+  minimized or covered. Closing the desktop or explicitly stopping still ends
+  capture; hidden windows cannot approve requests or start/resume recording.
+- Log recording stop reasons and the first capture failure stage at the default
+  diagnostic level, without recording exception messages or meeting content.
 
 ## [0.1.5] - 2026-10-28
 

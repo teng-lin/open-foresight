@@ -9,6 +9,8 @@
 
 ## Context
 
+The [2026-10-28 visibility correction](0006-stop-recording-on-host-disconnect.md#visibility-correction-2026-10-28) separates window visibility from recording lifetime: an existing recording continues while the connected desktop is hidden. Detach/disconnect and the process lifetime rules below remain unchanged.
+
 The application service is shared by the Flutter desktop and the MCP adapter. Its lifetime is a side effect of desktop disconnect events, and that produces inconsistent behavior: an agent-only service never exits, while the same agent work is cut off one second after a desktop happens to close. The resource worth reclaiming is the models: the retrieval helper's embedding model, the generation runtime, the query-completion runtime, and the speech runtime while a recording exists. The embedding and generation models load during helper readiness; question detection and speech load on demand. With today's code the cheapest way to release them is to end the process, and the process is cheap to start again relative to the model loads.
 
 ### Current behavior, verified in code (`main` `ddab4116`)

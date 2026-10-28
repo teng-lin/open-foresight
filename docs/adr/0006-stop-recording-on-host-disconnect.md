@@ -19,5 +19,17 @@ Rejected: give the recording stop the same 1 s reattach grace that the desktop's
 ## Consequences
 
 - Transcription of already captured audio still finishes in the service after the stop.
-- Disconnecting only the MCP client leaves capture running while the desktop remains visible.
+- Disconnecting only the MCP client leaves capture running while the desktop remains connected.
 - [ADR 0007](0007-service-lifetime-and-desktop-agent-boundary.md) keeps this rule unchanged: recording is desktop-owned, and only the process lifetime rule changes.
+
+## Visibility correction, 2026-10-28
+
+Window visibility is separate from desktop ownership. An existing recording now
+continues when the window is hidden, minimized or covered. Visibility still gates
+new recording starts, resumes and agent approvals. Explicit Stop, desktop detach
+or disconnect, and application shutdown still finish capture immediately.
+
+A local diagnostic trace showed a clean capture stop at the exact time of a
+`security.desktop_visibility` request while the desktop and service kept running.
+This correction prevents that visibility transition from ending an authorized
+recording, and adds bounded stop-reason and first-failure-stage diagnostics.

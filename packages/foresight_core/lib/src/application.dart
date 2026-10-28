@@ -42,6 +42,7 @@ import 'dart:io';
 import 'domain.dart';
 import 'model_gate.dart';
 import 'recording.dart';
+import 'diagnostics/events.dart';
 import 'proactive_questions.dart';
 import 'dedicated_query_runtime.dart';
 import 'store.dart';
@@ -628,8 +629,10 @@ class Application implements ModelGate, GenerationReservationGate {
 
   Future<void> startRecording(int id) =>
       _recordingController.startRecording(id);
-  Future<void> stopRecording({String? reason}) =>
-      _recordingController.stopRecording(reason: reason);
+  Future<void> stopRecording({
+    String? reason,
+    DiagnosticCaptureStopReason cause = DiagnosticCaptureStopReason.user,
+  }) => _recordingController.stopRecording(reason: reason, cause: cause);
   Future<void> pauseRecording([int? id]) =>
       _recordingController.pauseRecording(id);
   Future<void> resumeRecording([int? id]) =>

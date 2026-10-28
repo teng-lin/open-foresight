@@ -7,6 +7,51 @@ import 'package:foresight_core/src/diagnostics/events.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test(
+    'capture causes and stages accept only registered diagnostic values',
+    () {
+      for (final reason in DiagnosticCaptureStopReason.values) {
+        final wire = DiagnosticRecord(
+          DiagnosticEvent.captureStopRequested,
+          DiagnosticComponent.capture,
+          fields: {DiagnosticField.reason: reason},
+        ).toWire()!;
+        expect((wire['fields'] as Map)['reason'], reason.name);
+        expect(DiagnosticRecord.validWire(wire), isTrue);
+      }
+      for (final stage in DiagnosticCaptureStage.values) {
+        final wire = DiagnosticRecord(
+          DiagnosticEvent.captureFailed,
+          DiagnosticComponent.capture,
+          fields: {DiagnosticField.stage: stage},
+        ).toWire()!;
+        expect((wire['fields'] as Map)['stage'], stage.name);
+        expect(DiagnosticRecord.validWire(wire), isTrue);
+      }
+      for (final (event, field) in [
+        (DiagnosticEvent.captureStopRequested, DiagnosticField.reason),
+        (DiagnosticEvent.captureFailed, DiagnosticField.stage),
+      ]) {
+        expect(
+          DiagnosticRecord(
+            event,
+            DiagnosticComponent.capture,
+            fields: {field: 'private payload canary'},
+          ).toWire(),
+          isNull,
+        );
+        expect(
+          DiagnosticRecord.validWire({
+            'event': event.wire,
+            'component': 'capture',
+            'fields': {field.name: 'private payload canary'},
+          }),
+          isFalse,
+        );
+      }
+    },
+  );
+
   test('allocation-free wire byte count matches the standard UTF8 encoder', () {
     final cases = <String>[
       '',
