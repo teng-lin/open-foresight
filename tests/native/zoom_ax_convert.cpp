@@ -100,6 +100,14 @@ void check_text_conversion() {
 // text must not leave UTF8String buffers behind (about 84 MB per 200k calls
 // before the conversion drained its own pool).
 void check_conversion_does_not_grow_the_heap() {
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+  // ASan's quarantine keeps freed memory, so heap growth proves nothing there;
+  // the ordinary build runs this check.
+  std::fprintf(stderr, "heap-growth check not meaningful under ASan\n");
+  return;
+#endif
+#endif
   const char accented[] = "Zo\xc3\xab \xe5\xbc\xa0\xe4\xb8\x89 Example";
   CFStringRef string = utf8_string(accented, sizeof accented - 1);
   for (int i = 0; i < 500; ++i)

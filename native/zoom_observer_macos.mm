@@ -224,8 +224,7 @@ private:
     node.value = text_attr_from_object((__bridge const void *)values[2]);
     node.identifier = text_attr_from_object((__bridge const void *)values[3]);
     id children = values[4];
-    if (int child_error =
-            ax_error_in_object((__bridge const void *)children)) {
+    if (int child_error = ax_error_in_object((__bridge const void *)children)) {
       node.children_status = attr_status_from_ax_error(child_error);
       return node;
     }
@@ -266,6 +265,8 @@ int main(int argc, char **argv) {
   foresight::zoom::MacAxReader reader;
   foresight::zoom::ZoomMacSource source(environment, reader);
   foresight::zoom::ObserverConfig config;
+  config.helper = "zoom_observer_macos";
+  config.platform = "macos";
   config.parse = foresight::zoom::parse_snapshot;
   config.parser_version = foresight::zoom::kParserVersion;
   return foresight::zoom::run_observer(source, config);

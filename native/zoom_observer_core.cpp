@@ -30,6 +30,7 @@ constexpr size_t kMaxSessionBytes = 128;
 constexpr int kMaxRequestNesting = 16;
 constexpr size_t kMaxQueuedRequests = 64;
 constexpr int kMaxDiagnostics = 32;
+constexpr int kExitUsage = 64;
 constexpr int kExitProtocol = 2;
 constexpr int kExitOutput = 3;
 
@@ -56,13 +57,15 @@ private:
 
 // Serializes frames from the reader and polling threads and owns `seq`.
 //
-// A frame is written while the lock is held, so a write blocked on a full pipe
-// holds the lock. The shutdown guard therefore only try-locks (see
-// emit_if_idle): when stdout is wedged the closing frame could not be delivered
-// anyway, and the guard exits instead of waiting behind it.
+// The main thread writes with `emit`, which may block on a full pipe while it
+// holds the lock. The reader thread and the shutdown guard must never wait
+// behind that, or a stuck consumer would stop them seeing `stop`: they use
+// `emit_bounded`, which waits a short time for the lock and for the pipe to be
+// writable, and gives up (Busy) rather than block. Bounded frames are smaller
+// than PIPE_BUF, so once the pipe is writable the write cannot block midway.
 class Writer {
 public:
-  enum class Result { Written, TooLarge, Failed };
+  enum class Result { Written, TooLarge, Failed, Busy };
 
   explicit Writer(int fd) : fd_(fd) {}
 
@@ -72,38 +75,59 @@ public:
   }
 
   Result emit(const char *type, json frame, bool terminal = false) {
+    return write_frame(type, std::move(frame), terminal, false);
+  }
+
+  Result emit_bounded(const char *type, json frame, bool terminal = false) {
     return write_frame(type, std::move(frame), terminal, true);
   }
 
-  // Like a terminal emit, but gives up instead of waiting for the lock.
-  Result emit_if_idle(const char *type, json frame) {
-    return write_frame(type, std::move(frame), true, false);
+  // The reader polls stdout for a hang-up while idle.
+  void mark_failed() {
+    bool first = false;
+    {
+      std::lock_guard<std::timed_mutex> lock(mutex_);
+      first = !closed_;
+      closed_ = true;
+    }
+    if (first && failure_)
+      failure_();
   }
 
 private:
-  Result write_frame(const char *type, json frame, bool terminal, bool wait) {
+  static constexpr size_t kAtomicWrite = 512; // PIPE_BUF on macOS
+  static constexpr int kBoundMs = 100;
+
+  Result write_frame(const char *type, json frame, bool terminal,
+                     bool bounded) {
     frame["v"] = kProtocolVersion;
     frame["type"] = type;
     Result result;
     bool first_failure = false;
     {
-      std::unique_lock<std::mutex> lock(mutex_, std::defer_lock);
-      if (wait)
+      std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+      if (bounded) {
+        if (!lock.try_lock_for(std::chrono::milliseconds(kBoundMs)))
+          return Result::Busy;
+      } else {
         lock.lock();
-      else if (!lock.try_lock())
-        return Result::Failed;
+      }
       if (closed_)
         return Result::Failed;
       frame["seq"] = seq_;
       std::string line =
           frame.dump(-1, ' ', false, json::error_handler_t::replace);
-      if (line.size() > kMaxLineBytes) {
+      if (line.size() > kMaxLineBytes ||
+          (bounded && line.size() + 1 > kAtomicWrite)) {
         result = Result::TooLarge;
       } else {
         line += '\n';
-        if (write_all(line)) {
+        Result written = write_all(line, bounded);
+        if (written == Result::Written) {
           ++seq_;
           result = Result::Written;
+        } else if (written == Result::Busy) {
+          return Result::Busy;
         } else {
           closed_ = true;
           first_failure = true;
@@ -118,7 +142,15 @@ private:
     return result;
   }
 
-  bool write_all(const std::string &data) {
+  Result write_all(const std::string &data, bool bounded) {
+    if (bounded) {
+      pollfd descriptor{fd_, POLLOUT, 0};
+      int ready = ::poll(&descriptor, 1, kBoundMs);
+      if (ready == 0)
+        return Result::Busy; // the consumer is not reading
+      if (ready < 0 || (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)))
+        return Result::Failed;
+    }
     size_t offset = 0;
     while (offset < data.size()) {
       ssize_t written =
@@ -126,14 +158,14 @@ private:
       if (written < 0) {
         if (errno == EINTR)
           continue;
-        return false;
+        return Result::Failed;
       }
       offset += static_cast<size_t>(written);
     }
-    return true;
+    return Result::Written;
   }
 
-  std::mutex mutex_;
+  std::timed_mutex mutex_;
   int fd_;
   uint64_t seq_ = 0;
   bool closed_ = false;
@@ -161,14 +193,16 @@ struct Request {
 struct Shared {
   std::mutex mutex;
   std::condition_variable requests; // new request or terminal event
-  std::condition_variable space;    // queue has room again
   std::condition_variable finished; // main loop is done
   std::deque<Request> queue;
   bool done = false;
   std::atomic<bool> cancel{false};
-  // Set by the reader when it forwards the one accepted start request.
+  // Set by the reader when it accepts the one start request (the stall guard
+  // must honor it even while the main loop is stuck before starting).
   std::atomic<int> deadline_ms{kDefaultDeadlineMs};
-  std::string session;
+  // The session the main loop has actually started; the guard reports only
+  // this.
+  std::string started_session;
   int wake_fd = -1; // write end of the reader's wake pipe
 
   // Terminal wake-up used when the main loop exits or output breaks.
@@ -227,16 +261,20 @@ bool optional_int(const json &request, const char *name, int low, int high,
 class Reader {
 public:
   Reader(Shared &shared, Writer &writer, Source &source, Diagnostics &diag,
-         int fd, int wake_fd)
+         int fd, int wake_fd, int out_fd)
       : shared_(shared), writer_(writer), source_(source), diag_(diag), fd_(fd),
-        wake_fd_(wake_fd) {}
+        wake_fd_(wake_fd), watch_out_(out_fd == fd ? -1 : out_fd) {}
 
   void run() {
     std::string line;
     char chunk[65536];
     for (;;) {
-      pollfd fds[2] = {{fd_, POLLIN, 0}, {wake_fd_, POLLIN, 0}};
-      if (::poll(fds, 2, -1) < 0) {
+      // The third entry watches stdout for a hang-up. On macOS a pipe's write
+      // end reports POLLHUP only when POLLIN is requested (a healthy write end
+      // is never readable), and not at all with no events requested.
+      pollfd fds[3] = {
+          {fd_, POLLIN, 0}, {wake_fd_, POLLIN, 0}, {watch_out_, POLLIN, 0}};
+      if (::poll(fds, 3, -1) < 0) {
         if (errno == EINTR)
           continue;
         fatal("input_error");
@@ -244,6 +282,10 @@ public:
       }
       if (fds[1].revents)
         return; // the main loop is finishing
+      if (fds[2].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        watch_out_ = -1; // report once
+        writer_.mark_failed();
+      }
       if (!fds[0].revents)
         continue;
       ssize_t count = ::read(fd_, chunk, sizeof chunk);
@@ -283,19 +325,26 @@ private:
     return shared_.deadline_ms.load();
   }
 
+  // Never blocks on queue space: a reader stuck behind a full queue could not
+  // see `stop`. A request that finds the queue full is refused with `busy`.
   // Returns false when the session is ending and nothing more should be read.
   bool push(Request request) {
-    std::unique_lock<std::mutex> lock(shared_.mutex);
-    // Backpressure instead of an unbounded queue: stop reading stdin until the
-    // main loop catches up. Cancellation and shutdown release the wait.
-    shared_.space.wait(lock, [&] {
-      return shared_.queue.size() < kMaxQueuedRequests || shared_.done ||
-             shared_.cancel.load();
-    });
-    if (shared_.done)
-      return false;
-    shared_.queue.push_back(std::move(request));
-    lock.unlock();
+    {
+      std::unique_lock<std::mutex> lock(shared_.mutex);
+      if (shared_.done)
+        return false;
+      if (shared_.queue.size() >= kMaxQueuedRequests) {
+        lock.unlock();
+        if (writer_.emit_bounded("error",
+                                 {{"id", request.id},
+                                  {"code", "busy"},
+                                  {"message", "request queue full"}}) ==
+            Writer::Result::Busy)
+          diag_.note("busy_reply_dropped");
+        return true;
+      }
+      shared_.queue.push_back(std::move(request));
+    }
     shared_.requests.notify_all();
     return true;
   }
@@ -311,22 +360,23 @@ private:
       shared_.queue.push_back(request); // terminal events bypass the bound
     }
     shared_.requests.notify_all();
-    shared_.space.notify_all();
     std::unique_lock<std::mutex> lock(shared_.mutex);
     if (shared_.finished.wait_for(lock, std::chrono::milliseconds(deadline_ms),
                                   [&] { return shared_.done; }))
       return;
-    std::string session = shared_.session;
+    std::string session = shared_.started_session;
     lock.unlock();
     diag_.note("shutdown_deadline");
     if (kind == Request::Kind::Stop)
-      writer_.emit_if_idle(
+      writer_.emit_bounded(
           "stopped",
           {{"id", request.id},
-           {"session", session.empty() ? json(nullptr) : json(session)}});
+           {"session", session.empty() ? json(nullptr) : json(session)}},
+          true);
     else if (kind == Request::Kind::Fatal)
-      writer_.emit_if_idle(
-          "error", {{"code", request.code}, {"message", "protocol error"}});
+      writer_.emit_bounded(
+          "error", {{"code", request.code}, {"message", "protocol error"}},
+          true);
     ::_exit(kind == Request::Kind::Fatal ? kExitProtocol : 0);
   }
 
@@ -385,9 +435,12 @@ private:
     if (!valid_id(id))
       return reject(id, "invalid_request");
     if (type == "clock") {
-      writer_.emit("clock", {{"id", id},
-                             {"monotonic_ms", source_.monotonic_ms()},
-                             {"uptime_ms", source_.uptime_ms()}});
+      if (writer_.emit_bounded("clock",
+                               {{"id", id},
+                                {"monotonic_ms", source_.monotonic_ms()},
+                                {"uptime_ms", source_.uptime_ms()}}) ==
+          Writer::Result::Busy)
+        diag_.note("clock_reply_dropped");
       return true;
     }
     Request out;
@@ -413,10 +466,6 @@ private:
       started_ = true;
       out.session = session->get<std::string>();
       shared_.deadline_ms = deadline;
-      {
-        std::lock_guard<std::mutex> lock(shared_.mutex);
-        shared_.session = out.session;
-      }
     } else {
       terminate(Request::Kind::Stop, out, session_deadline());
       return false;
@@ -430,6 +479,7 @@ private:
   Diagnostics &diag_;
   int fd_;
   int wake_fd_;
+  int watch_out_;
   uint64_t expected_seq_ = 0;
   bool started_ = false;
 };
@@ -501,6 +551,10 @@ public:
     session_ = request.session;
     poll_ms_ = request.poll_ms;
     started_ = true;
+    {
+      std::lock_guard<std::mutex> lock(shared_.mutex);
+      shared_.started_session = session_;
+    }
     json target = {{"pid", outcome.pid > 0 ? json(outcome.pid) : json(nullptr)},
                    {"zoom_version", nullable(outcome.zoom_version)}};
     writer_.emit(
@@ -587,6 +641,7 @@ private:
       unavailable("frame_too_large", start_ms);
       break;
     case Writer::Result::Failed:
+    case Writer::Result::Busy:
       break; // stdout is gone; the failure handler ends the session
     }
   }
@@ -643,6 +698,12 @@ Capabilities describe_capabilities(const SnapshotOutcome &outcome,
 int run_observer(Source &source, const ObserverConfig &config) {
   Writer writer(config.out_fd);
   Diagnostics diag(config.err_fd);
+  // A missing parse function would throw on the first snapshot; refuse to run.
+  if (!config.parse || config.helper.empty() || config.platform.empty() ||
+      config.parser_version.empty()) {
+    diag.note("invalid_observer_config");
+    return kExitUsage;
+  }
   Shared shared;
   int wake[2];
   if (::pipe(wake) != 0) {
@@ -661,14 +722,14 @@ int run_observer(Source &source, const ObserverConfig &config) {
       shared.queue.push_back(request);
     }
     shared.requests.notify_all();
-    shared.space.notify_all();
     shared.wake_reader();
   });
   writer.emit("hello", {{"helper", config.helper},
                         {"helper_version", config.helper_version},
                         {"parser_version", config.parser_version},
                         {"platform", config.platform}});
-  Reader reader(shared, writer, source, diag, config.in_fd, wake[0]);
+  Reader reader(shared, writer, source, diag, config.in_fd, wake[0],
+                config.out_fd);
   std::thread reader_thread([&] { reader.run(); });
 
   Session session(source, writer, shared, diag, config);
@@ -700,7 +761,6 @@ int run_observer(Source &source, const ObserverConfig &config) {
         have = true;
       }
     }
-    shared.space.notify_all();
     if (have) {
       // One request per iteration, so a burst cannot starve polling.
       switch (request.kind) {
@@ -767,7 +827,6 @@ int run_observer(Source &source, const ObserverConfig &config) {
     shared.done = true;
   }
   shared.finished.notify_all();
-  shared.space.notify_all();
   shared.wake_reader();
   reader_thread.join();
   ::close(wake[0]);

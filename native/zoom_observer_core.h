@@ -65,11 +65,14 @@ public:
 };
 
 struct ObserverConfig {
-  std::string helper = "zoom_observer_macos";
+  // Identity reported in `hello`; the platform must set all of them.
+  std::string helper;
   std::string helper_version = "1";
-  std::string platform = "macos";
+  std::string platform;
   // The platform's parser: turns a snapshot into participants and speakers.
   // The core links no parser; a Linux helper supplies its own.
+  // Required: run_observer refuses to start (exit 64) without parse, helper,
+  // platform and parser_version.
   std::function<ParseResult(const AxSnapshot &)> parse;
   std::string parser_version;
   int in_fd = 0;

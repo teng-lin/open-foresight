@@ -75,6 +75,8 @@ SnapshotOutcome gated(const std::string &state, const std::string &reason) {
   return outcome;
 }
 
+void fill_pipe(int fd);
+
 class ScriptedSource final : public Source {
 public:
   explicit ScriptedSource(std::vector<SnapshotOutcome> script)
@@ -86,6 +88,8 @@ public:
 
   SnapshotOutcome snapshot(const std::function<bool()> &cancelled) override {
     int call = ++snapshots;
+    if (fill_fd >= 0 && call == 1)
+      fill_pipe(fill_fd);
     if (stall_ms) // an uncooperative accessibility call
       std::this_thread::sleep_for(milliseconds(stall_ms));
     if (block_call == call) { // a cooperative read: ends when cancelled
@@ -116,6 +120,7 @@ public:
   std::atomic<bool> blocked{false};
   int stall_ms = 0;
   int pause_ms = 0;
+  int fill_fd = -1; // fill this pipe with junk before the first read
   int block_call = 0;
 
 private:
@@ -125,11 +130,23 @@ private:
   std::atomic<uint64_t> clock_{0};
 };
 
+// Fills a pipe's buffer so that the next write would block.
+void fill_pipe(int fd) {
+  int flags = ::fcntl(fd, F_GETFL);
+  ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+  char junk[4096] = {};
+  while (::write(fd, junk, sizeof junk) > 0) {
+  }
+  ::fcntl(fd, F_SETFL, flags);
+}
+
 ObserverConfig test_config(int in_fd, int out_fd, int err_fd) {
   ObserverConfig config;
   config.in_fd = in_fd;
   config.out_fd = out_fd;
   config.err_fd = err_fd;
+  config.helper = "zoom_observer_macos";
+  config.platform = "macos";
   config.parse = parse_snapshot;
   config.parser_version = kParserVersion;
   return config;
@@ -331,6 +348,25 @@ struct Child {
     return true;
   }
 
+  // Waits for the child to exit; kills it (by exact PID) after `timeout_ms`.
+  int reap_within(int timeout_ms, bool &timed_out) {
+    int status = 0;
+    auto deadline = steady_clock::now() + milliseconds(timeout_ms);
+    timed_out = false;
+    while (::waitpid(pid, &status, WNOHANG) == 0) {
+      if (steady_clock::now() > deadline) {
+        timed_out = true;
+        ::kill(pid, SIGKILL);
+        ::waitpid(pid, &status, 0);
+        break;
+      }
+      ::usleep(5000);
+    }
+    ::close(to_child);
+    ::close(from_child);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+  }
+
   int reap() {
     int status = 0;
     ::waitpid(pid, &status, 0);
@@ -342,7 +378,7 @@ struct Child {
 
 // Forks an observer whose snapshot() sleeps `stall_ms` without looking at
 // cancellation, like an accessibility call stuck inside Zoom.
-Child spawn_stalled(int stall_ms) {
+Child spawn_stalled(int stall_ms, bool fill_stdout = false) {
   int in[2], out[2];
   if (::pipe(in) || ::pipe(out))
     std::abort();
@@ -352,6 +388,8 @@ Child spawn_stalled(int stall_ms) {
     ::close(out[0]);
     ScriptedSource source({meeting({tile("Ada Example" + kUnmuted)})});
     source.stall_ms = stall_ms;
+    if (fill_stdout)
+      source.fill_fd = out[1];
     ObserverConfig config =
         test_config(in[0], out[1], ::open("/dev/null", O_WRONLY));
     ::_exit(run_observer(source, config));
@@ -417,9 +455,12 @@ void check_duplicate_start_keeps_session() {
                                end == std::string::npos ? std::string::npos
                                                         : end - begin);
   }
-  CHECK(line.find("\"session\":\"S1\"") != std::string::npos &&
+  // The first start is still inside its stalled read, so no session was
+  // started; the guard reports none and never the refused S2.
+  CHECK(line.find("\"session\":null") != std::string::npos &&
             line.find("S2") == std::string::npos,
-        "stopped names the live session: " + line);
+        "stopped reports no started session and never the refused one: " +
+            line);
   CHECK(child.reap() == 0, "exits 0");
 }
 
@@ -455,6 +496,41 @@ void check_eof_and_fatal_during_stall() {
     CHECK(elapsed_ms(begin) < 1500, "fatal error honors the deadline");
     CHECK(child.reap() == 2, "exit 2 after a fatal error during a stall");
   }
+}
+
+// The stop guard must not block on a stdout nobody reads.
+void check_guard_survives_a_full_stdout() {
+  Child child = spawn_stalled(6000, true);
+  child.send({{"type", "start"},
+              {"id", "a"},
+              {"session", "s"},
+              {"poll_ms", 100},
+              {"deadline_ms", 100}});
+  ::usleep(300000); // the first read fills the pipe, then stalls
+  child.send({{"type", "stop"}, {"id", "b"}});
+  bool timed_out = false;
+  int code = child.reap_within(3000, timed_out);
+  CHECK(!timed_out, "the guard exits although stdout is full and wedged");
+  CHECK(code == 0, "exit 0 after stop");
+}
+
+// Requests that never started must not be reported as a session.
+void check_guard_reports_only_a_started_session() {
+  Child child = spawn_stalled(6000);
+  child.send({{"type", "capabilities"}, {"id", "k"}}); // main loop stalls here
+  ::usleep(150000);
+  child.send({{"type", "start"},
+              {"id", "a"},
+              {"session", "never"},
+              {"poll_ms", 100},
+              {"deadline_ms", 300}});
+  child.send({{"type", "stop"}, {"id", "b"}});
+  CHECK(child.wait_output("\"stopped\"", 3000), "stopped arrives");
+  CHECK(child.output.find("never") == std::string::npos,
+        "a start that never ran is not reported: " + child.output);
+  CHECK(child.output.find("\"session\":null") != std::string::npos,
+        "stopped carries a null session");
+  CHECK(child.reap() == 0, "exits 0");
 }
 
 void check_clock_during_stall() {
@@ -755,6 +831,34 @@ void check_ref_table() {
     auto again = table.assign("w", {person(0, "solo")});
     CHECK(unique.refs == again.refs && !again.uncertain,
           "a unique name keeps its ref without identity");
+  }
+  {
+    // People still present keep their references when a newcomer needs room.
+    RefTable table(4);
+    auto first = table.assign(
+        "w", {person(1, "a"), person(2, "b"), person(3, "c"), person(4, "d")});
+    auto second = table.assign("w", {person(9, "new"), person(1, "a"),
+                                     person(2, "b"), person(3, "c")});
+    CHECK(second.refs[1] == first.refs[0] && second.refs[2] == first.refs[1] &&
+              second.refs[3] == first.refs[2],
+          "present people keep their refs when a newcomer arrives first");
+    CHECK(second.refs[0] != first.refs[3], "the newcomer is a new ref");
+    CHECK(second.uncertain, "evicting the person who left is flagged");
+    auto third = table.assign("w", {person(1, "a"), person(2, "b"),
+                                    person(3, "c"), person(9, "new")});
+    CHECK(third.refs[0] == first.refs[0] && third.refs[3] == second.refs[0],
+          "later observations stay stable");
+    CHECK(!third.uncertain, "stable and unique: certain");
+  }
+  {
+    // Equal names are never certain, even with element identity: if their
+    // tiles trade places the references would swap silently.
+    RefTable table;
+    auto first = table.assign("w", {person(1, "ann"), person(2, "ann")});
+    CHECK(first.refs[0] != first.refs[1] && first.uncertain,
+          "twins with identity are distinct but uncertain");
+    auto traded = table.assign("w", {person(2, "ann"), person(1, "ann")});
+    CHECK(traded.uncertain, "traded twin tiles stay flagged");
   }
   {
     RefTable table(4);
@@ -1083,18 +1187,23 @@ void check_polling_not_starved_by_requests() {
                  .dump() +
              "\n";
   h.send_raw(burst);
-  int answered = 0, observations_between = 0;
-  for (int guard = 0; guard < 400 && answered < kBurst; ++guard) {
+  int answered = 0, busy = 0, observations_between = 0;
+  for (int guard = 0; guard < 600 && answered + busy < kBurst; ++guard) {
     auto frame = h.read(5000);
     if (!frame)
       break;
     if ((*frame)["type"] == "capabilities")
       ++answered;
+    else if ((*frame)["type"] == "error" && (*frame)["code"] == "busy")
+      ++busy;
     else if ((*frame)["type"] == "observation" && answered > 0 &&
-             answered < kBurst)
+             answered + busy < kBurst)
       ++observations_between;
   }
-  CHECK(answered == kBurst, "every queued capabilities request is answered");
+  CHECK(answered + busy == kBurst,
+        "every request is answered or refused as busy (" +
+            std::to_string(answered) + " + " + std::to_string(busy) + ")");
+  CHECK(busy > 0, "a full queue refuses instead of blocking the reader");
   CHECK(observations_between > 0, "polling continues between queued requests");
   h.close_input();
   h.join();
@@ -1117,30 +1226,129 @@ void check_broken_stdout_ends_the_helper() {
   CHECK(source.snapshots == polled, "no accessibility reads continue");
 }
 
+// stop must not wait for queue space.
+void check_stop_is_not_queued_behind_a_full_queue() {
+  ScriptedSource source({gated("zoom_not_running", "zoom_not_running")});
+  source.pause_ms = 30;
+  Harness h(source);
+  h.expect("hello");
+  std::string burst;
+  constexpr int kBurst = 200;
+  for (int i = 0; i < kBurst; ++i)
+    burst +=
+        json{{"v", 1}, {"seq", i}, {"type", "capabilities"}, {"id", i}}.dump() +
+        "\n";
+  burst +=
+      json{{"v", 1}, {"seq", kBurst}, {"type", "stop"}, {"id", "end"}}.dump() +
+      "\n";
+  auto begin = steady_clock::now();
+  h.send_raw(burst);
+  std::vector<json> skipped;
+  json stopped = h.find("stopped", &skipped, 400);
+  CHECK(stopped["id"] == "end", "stopped arrives");
+  CHECK(elapsed_ms(begin) < 1500, "stop is honored promptly behind a burst (" +
+                                      std::to_string(elapsed_ms(begin)) +
+                                      " ms)");
+  int refused = 0;
+  for (const auto &frame : skipped)
+    refused += frame["type"] == "error";
+  CHECK(refused > 0, "the burst was refused or cancelled, not served");
+  CHECK(h.join() == 0, "exit 0");
+}
+
+// A consumer that hangs up while we are idle is noticed without a write.
+void check_idle_hangup_is_detected() {
+  ScriptedSource source({gated("zoom_not_running", "zoom_not_running")});
+  Harness h(source);
+  h.expect("hello");
+  h.close_output();
+  auto begin = steady_clock::now();
+  CHECK(h.join() == 3, "a closed stdout exits 3 even with no session");
+  CHECK(elapsed_ms(begin) < 2000, "detected promptly");
+  CHECK(h.stderr_text().find("stdout_closed") != std::string::npos,
+        "the token explains the exit");
+}
+
+void check_invalid_configuration_is_refused() {
+  int in[2], out[2], err[2];
+  if (::pipe(in) || ::pipe(out) || ::pipe(err))
+    std::abort();
+  ScriptedSource source({gated("zoom_not_running", "zoom_not_running")});
+  ObserverConfig config = test_config(in[0], out[1], err[1]);
+  config.parse = nullptr;
+  CHECK(run_observer(source, config) == 64,
+        "a missing parse function is refused");
+  config = test_config(in[0], out[1], err[1]);
+  config.platform.clear();
+  CHECK(run_observer(source, config) == 64, "a missing platform is refused");
+  config = test_config(in[0], out[1], err[1]);
+  config.helper.clear();
+  CHECK(run_observer(source, config) == 64, "a missing helper name is refused");
+  ::close(out[1]);
+  char byte;
+  CHECK(::read(out[0], &byte, 1) == 0, "nothing is written to stdout");
+  CHECK(source.snapshots == 0, "the source is never read");
+  for (int fd : {in[0], in[1], out[0], err[0], err[1]})
+    ::close(fd);
+}
+
 } // namespace
+
+// ZOOM_TEST_TRACE=1 names each test before it runs, to find a hang.
+void trace(const char *name) {
+  if (std::getenv("ZOOM_TEST_TRACE"))
+    std::fprintf(stderr, "running %s\n", name);
+}
 
 int main(int argc, char **argv) {
   (void)argc;
   (void)argv;
   std::signal(SIGPIPE, SIG_IGN);
   // Fork-based tests first, before any other thread exists.
+  trace("check_stalled_read_stop");
   check_stalled_read_stop();
+  trace("check_duplicate_start_keeps_session");
   check_duplicate_start_keeps_session();
+  trace("check_eof_and_fatal_during_stall");
   check_eof_and_fatal_during_stall();
+  trace("check_clock_during_stall");
   check_clock_during_stall();
+  trace("check_guard_survives_a_full_stdout");
+  check_guard_survives_a_full_stdout();
+  trace("check_guard_reports_only_a_started_session");
+  check_guard_reports_only_a_started_session();
+  trace("check_hello_and_clock");
   check_hello_and_clock();
+  trace("check_capabilities");
   check_capabilities();
+  trace("check_session");
   check_session();
+  trace("check_identity_flags_incomplete");
   check_identity_flags_incomplete();
+  trace("check_ref_table");
   check_ref_table();
+  trace("check_max_observation_fits_and_oversize_recovers");
   check_max_observation_fits_and_oversize_recovers();
+  trace("check_protocol_errors");
   check_protocol_errors();
+  trace("check_boundaries");
   check_boundaries();
+  trace("check_framing");
   check_framing();
+  trace("check_start_without_zoom_and_cadence");
   check_start_without_zoom_and_cadence();
+  trace("check_cooperative_cancellation");
   check_cooperative_cancellation();
+  trace("check_polling_not_starved_by_requests");
   check_polling_not_starved_by_requests();
+  trace("check_broken_stdout_ends_the_helper");
   check_broken_stdout_ends_the_helper();
+  trace("check_stop_is_not_queued_behind_a_full_queue");
+  check_stop_is_not_queued_behind_a_full_queue();
+  trace("check_idle_hangup_is_detected");
+  check_idle_hangup_is_detected();
+  trace("check_invalid_configuration_is_refused");
+  check_invalid_configuration_is_refused();
   std::printf("zoom_observer_core: %d checks, %d failures\n", checks, failures);
   return failures == 0 ? 0 : 1;
 }

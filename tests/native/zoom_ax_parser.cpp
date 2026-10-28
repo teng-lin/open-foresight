@@ -373,6 +373,14 @@ size_t heap_in_use() {
 // drain its own: otherwise every folded string and UTF8String buffer from a
 // 500 ms poll would live until exit (about 10 KB per parse of 25 tiles).
 void check_parse_does_not_grow_the_heap() {
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+  // ASan's quarantine keeps freed memory, so heap growth proves nothing there;
+  // the ordinary build runs this check.
+  std::fprintf(stderr, "heap-growth check not meaningful under ASan\n");
+  return;
+#endif
+#endif
   std::vector<AxNode> tiles;
   for (int i = 0; i < 25; ++i)
     tiles.push_back(
