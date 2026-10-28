@@ -331,7 +331,8 @@ class MeetingStore {
 
   /// Rename a participant for the whole meeting: the participant name becomes
   /// user-owned and every transcript row naming that participant is relabeled
-  /// in one statement. Returns the number of relabeled rows.
+  /// in one statement, except a row the user corrected to a different custom
+  /// name. Returns the number of relabeled rows.
   int renameParticipant(int participantId, String displayName) {
     if (renderedAttributionName(displayName).isEmpty ||
         displayName.length > maxParticipantNameLength) {
@@ -352,6 +353,7 @@ class MeetingStore {
         );
       }
       final now = DateTime.now().millisecondsSinceEpoch;
+      final previousName = participant['display_name'] as String;
       db.execute(
         'UPDATE meeting_participants SET previous_display_name=CASE WHEN display_name IS NOT ? THEN display_name ELSE previous_display_name END,'
         'rename_count=rename_count+(display_name IS NOT ?),'
@@ -368,12 +370,14 @@ class MeetingStore {
       );
       db.execute(
         "UPDATE transcript_attributions SET display_name=?,rendered_name=?,revision=revision+1,updated_ms=? "
-        "WHERE participant_id=? AND state='attributed' AND (display_name IS NOT ? OR rendered_name IS NOT ?)",
+        "WHERE participant_id=? AND state='attributed' AND (manual=0 OR display_name=?) "
+        'AND (display_name IS NOT ? OR rendered_name IS NOT ?)',
         [
           displayName,
           renderedAttributionName(displayName),
           now,
           participantId,
+          previousName,
           displayName,
           renderedAttributionName(displayName),
         ],
@@ -407,10 +411,24 @@ class MeetingStore {
 
   AttributionWriteOutcome _writeAttribution(
     int transcriptId,
-    TranscriptAttribution a, {
+    TranscriptAttribution attribution, {
     required bool overwriteManual,
   }) {
     _transcriptMeeting(transcriptId);
+    var a = attribution;
+    if (!overwriteManual &&
+        a.participantId != null &&
+        a.state == AttributionState.attributed) {
+      // A name the user gave the participant outranks the observed spelling,
+      // so a delayed or retried observation cannot undo a rename.
+      final owner = _rows(
+        'SELECT display_name FROM meeting_participants WHERE id=? AND name_manual=1',
+        [a.participantId],
+      ).firstOrNull;
+      if (owner != null && owner['display_name'] != a.displayName) {
+        a = a.withDisplayName(owner['display_name'] as String);
+      }
+    }
     final existing = _rows(
       'SELECT * FROM transcript_attributions WHERE transcript_id=?',
       [transcriptId],

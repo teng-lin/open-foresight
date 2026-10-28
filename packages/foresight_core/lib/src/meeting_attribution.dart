@@ -307,6 +307,19 @@ final class TranscriptAttribution {
       ? renderedAttributionName(displayName)
       : '';
 
+  /// The same attribution naming [name], used when a user-owned participant
+  /// name supersedes the spelling an observation carried.
+  TranscriptAttribution withDisplayName(String name) => TranscriptAttribution(
+    participantId: participantId,
+    displayName: name,
+    state: state,
+    method: method,
+    parserVersion: parserVersion,
+    policyVersion: policyVersion,
+    evidence: evidence,
+    manual: manual,
+  );
+
   /// Content equality ignoring storage bookkeeping.
   bool sameContent(TranscriptAttribution other) =>
       participantId == other.participantId &&

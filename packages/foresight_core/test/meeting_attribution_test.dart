@@ -698,6 +698,74 @@ void main() {
     });
   });
 
+  group('rename ownership', () {
+    test('a delayed observation keeps the user-assigned participant name', () {
+      final person = store.saveMeetingParticipants(meeting, [
+        participant('ax:1', 'iPhone'),
+      ]).single;
+      final old = finalRow('earlier');
+      store.saveAutomaticAttribution(old, automatic(person.id, 'iPhone'));
+      store.renameMeetingParticipant(person.id!, 'Ada Lovelace');
+      final before = revision();
+      // A retried or late observation still carries the old spelling.
+      expect(
+        store.saveAutomaticAttribution(old, automatic(person.id, 'iPhone')),
+        AttributionWriteOutcome.unchanged,
+      );
+      final fresh = finalRow('later');
+      store.saveAutomaticAttribution(fresh, automatic(person.id, 'iPhone'));
+      expect(
+        store.meetingQueries.attribution(old)!.displayName,
+        'Ada Lovelace',
+      );
+      expect(
+        store.meetingQueries.attribution(fresh)!.displayName,
+        'Ada Lovelace',
+      );
+      expect(
+        revision(),
+        before + 2,
+        reason: 'the new text and its attribution; nothing else changed',
+      );
+      // An unrelated participant is untouched by the rule.
+      final bob = store.saveMeetingParticipants(meeting, [
+        participant('ax:2', 'Bob'),
+      ]).single;
+      final other = finalRow('bob speaks');
+      store.saveAutomaticAttribution(other, automatic(bob.id, 'Robert'));
+      expect(store.meetingQueries.attribution(other)!.displayName, 'Robert');
+    });
+
+    test('a rename keeps rows the user corrected to a custom name', () {
+      final person = store.saveMeetingParticipants(meeting, [
+        participant('ax:1', 'iPhone'),
+      ]).single;
+      final plain = finalRow('auto');
+      final custom = finalRow('custom');
+      final same = finalRow('manual, same name');
+      store.saveAutomaticAttribution(plain, automatic(person.id, 'iPhone'));
+      store.setManualAttribution(
+        custom,
+        TranscriptAttribution.manual(
+          participantId: person.id,
+          displayName: 'Dr. Ada',
+        ),
+      );
+      store.setManualAttribution(
+        same,
+        TranscriptAttribution.manual(
+          participantId: person.id,
+          displayName: 'iPhone',
+        ),
+      );
+      expect(store.renameMeetingParticipant(person.id!, 'Ada'), 2);
+      expect(store.meetingQueries.attribution(plain)!.displayName, 'Ada');
+      expect(store.meetingQueries.attribution(same)!.displayName, 'Ada');
+      expect(store.meetingQueries.attribution(same)!.manual, isTrue);
+      expect(store.meetingQueries.attribution(custom)!.displayName, 'Dr. Ada');
+    });
+  });
+
   group('corrections', () {
     test('automatic observation never overwrites a manual override', () {
       final id = finalRow('contested');
