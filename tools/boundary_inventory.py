@@ -526,7 +526,7 @@ def verify(root: Path = ROOT) -> dict[str, Any]:
                 if not any(
                     item["kind"] == "production-both-sides"
                     and item["path"] == entry.get("path")
-                    and (not item.get("names") or entry.get("test") in item["names"])
+                    and entry.get("test") in item.get("names", ())
                     for boundary in boundaries
                     for item in boundary.get("evidence", ())
                 ):

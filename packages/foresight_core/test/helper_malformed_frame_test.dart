@@ -17,14 +17,20 @@ import 'package:test/test.dart';
 // of bad frames.
 //
 // The contract, for every scenario:
-//  - the pending call settles with a GrpcError, never later than its deadline;
-//  - a second call, made while the hostile peer is still attached, also
-//    settles by its own deadline (the channel is not wedged);
-//  - nothing escapes into the error zone; and
+//  - the pending call settles with a GrpcError, bounded by a small multiple of
+//    its deadline (a peer that closes settles it promptly, a stalled peer
+//    only at the deadline);
+//  - a second call made while the hostile peer is still attached settles the
+//    same way: promptly with a non-deadline code for a closing peer, and at
+//    its own, shorter deadline for a stalled one. This shows the second call
+//    is not stuck for the first call's deadline; a call queued behind a
+//    stalled connection would also end at its own deadline, so it does not by
+//    itself rule out a wedged connection;
+//  - nothing escapes into the error zone, including after teardown; and
 //  - the same Helper serves a valid replacement at the same socket within a
-//    few seconds, without being rebuilt.
-// Scenarios whose peer closes settle before the deadline. Scenarios that
-// stall settle at it. Two known deficiencies are characterized separately.
+//    few seconds, without being rebuilt, which is what shows the channel
+//    recovers.
+// Two known deficiencies are characterized separately.
 
 /// A valid, empty HTTP/2 SETTINGS frame: the peer's side of the handshake.
 final settings = Uint8List.fromList([0, 0, 0, 4, 0, 0, 0, 0, 0]);
@@ -108,8 +114,12 @@ final scenarios = [
     (client) {
       client.socket.add(settings);
       unawaited(
-        client.requestSeen.then((_) {
+        client.requestSeen.then((_) async {
           client.socket.add([0, 0, 8, 0, 0]);
+          // Flush first: destroying at once may discard the unsent bytes and
+          // turn this into a plain EOF. On macOS the bytes arrive either way
+          // (probed); the delivery test below pins them for other platforms.
+          await client.socket.flush().catchError((Object _) {});
           client.socket.destroy();
         }),
       );
@@ -179,8 +189,8 @@ const malformedMessages = [
 void main() {
   for (final hostile in scenarios) {
     test(
-      '${hostile.name}: the call settles with a GrpcError by its deadline, '
-      'the channel is not wedged, nothing escapes, and a replacement is '
+      '${hostile.name}: the call settles with a GrpcError, a second call '
+      'settles as this peer implies, nothing escapes, and a replacement is '
       'served',
       () => _guarded((uncaught) => _exercise(hostile, uncaught)),
     );
@@ -193,9 +203,42 @@ void main() {
     });
   }
 
-  test('a peer that closes before the client writes, then calls after EOF: '
-      'every call settles with a GrpcError and nothing escapes', () {
+  test('a peer that sends its handshake and closes at once, then calls made '
+      'after the channel observed the closure: every call settles with a '
+      'GrpcError and nothing escapes', () {
     return _guarded(_closedBeforeWrite);
+  });
+
+  group('the fixture delivers the bytes its scenarios claim', () {
+    // A raw client that completes the preface and sends one HEADERS frame, then
+    // reads everything the hostile peer writes until it closes.
+    final preface = 'PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n'.codeUnits;
+    final request = [0, 0, 1, 1, 4, 0, 0, 0, 1, 0x82];
+    Future<List<int>> received(Scenario scenario) async {
+      final peer = await _Peer.start(scenario.peer);
+      addTearDown(() async {
+        await peer.listener.close().catchError((Object _) => peer.listener);
+        peer.root.deleteSync(recursive: true);
+      });
+      final socket = await Socket.connect(
+        InternetAddress(peer.path, type: InternetAddressType.unix),
+        0,
+      );
+      addTearDown(socket.destroy);
+      socket.add([...preface, ...settings, ...request]);
+      return socket
+          .fold<List<int>>(<int>[], (all, chunk) => all..addAll(chunk))
+          .timeout(const Duration(seconds: 10));
+    }
+
+    test('EOF once the request arrived: the handshake, then nothing', () async {
+      expect(await received(scenarios[0]), settings);
+    });
+
+    test('half a frame header then EOF: the handshake plus the five header '
+        'bytes reach the client before the close', () async {
+      expect(await received(scenarios[1]), [...settings, 0, 0, 8, 0, 0]);
+    });
   });
 
   group('known deficiencies (characterized, not endorsed)', () {
@@ -278,6 +321,8 @@ class _Peer {
     );
     final peer = _Peer._(root, path, listener);
     listener.listen((socket) {
+      // EPIPE or ECONNRESET on the fixture's own side is not the client's fault.
+      unawaited(socket.done.catchError((Object _) {}));
       final client = Client(socket, listen: watch);
       peer.clients.add(client);
       peer.accepted.add(client);
@@ -375,11 +420,33 @@ Future<void> _exercise(Scenario hostile, List<Object> uncaught) async {
     if (hostile.settlesWhenPeerCloses) {
       expect(first.elapsed, lessThan(deadline), reason: '$code ${first.error}');
     }
-    // The peer is still attached (or its socket is dead): a second call must
-    // settle by its own, shorter deadline instead of waiting behind the first.
+    // The peer is still attached, or its socket is dead. A closing peer fails
+    // the second call promptly with a code that is not the deadline; a stalled
+    // one ends it at its own, shorter deadline, not the first call's.
     final second = await _timedPing(helper, shortDeadline);
     expect(second.error, isA<GrpcError>(), reason: hostile.name);
-    expect(second.elapsed, lessThanOrEqualTo(shortDeadline * 3));
+    final secondCode = (second.error as GrpcError).code;
+    final secondReason = '$secondCode after ${second.elapsed}';
+    if (hostile.settlesWhenPeerCloses) {
+      expect(second.elapsed, lessThan(shortDeadline), reason: secondReason);
+      expect(
+        secondCode,
+        isNot(StatusCode.deadlineExceeded),
+        reason: secondReason,
+      );
+    } else {
+      expect(secondCode, StatusCode.deadlineExceeded, reason: secondReason);
+      expect(
+        second.elapsed,
+        greaterThanOrEqualTo(shortDeadline - const Duration(milliseconds: 100)),
+        reason: secondReason,
+      );
+      expect(
+        second.elapsed,
+        lessThan(shortDeadline * 1.5),
+        reason: secondReason,
+      );
+    }
     await _serveReplacement(helper, peer);
     expect(uncaught, isEmpty);
   } catch (error) {
@@ -441,14 +508,20 @@ Future<void> _malformedMessage(
     connection.incomingStreams.listen((stream) {
       stream.incomingMessages.listen((message) {
         if (message is! HeadersStreamMessage) return;
-        stream.sendHeaders([
-          Header.ascii(':status', '200'),
-          Header.ascii('content-type', 'application/grpc'),
-        ]);
-        stream.sendData(bad.body);
-        stream.sendHeaders([Header.ascii('grpc-status', '0')], endStream: true);
-      });
-    });
+        try {
+          stream.sendHeaders([
+            Header.ascii(':status', '200'),
+            Header.ascii('content-type', 'application/grpc'),
+          ]);
+          stream.sendData(bad.body);
+          stream.sendHeaders([
+            Header.ascii('grpc-status', '0'),
+          ], endStream: true);
+        } on Object {
+          // The client went away first; that is not what this test observes.
+        }
+      }, onError: (Object _) {});
+    }, onError: (Object _) {});
   });
   final helper = Helper(peer.path, peer.root.path, manageProcess: false);
   Object? primary;
@@ -477,11 +550,12 @@ Future<void> _malformedMessage(
   }
 }
 
-/// The peer sends its handshake and closes in the same breath, so its EOF
-/// reaches the client before the client's request is dispatched; the calls
-/// that follow race a connection that is already closed. (The client's request
-/// can never precede the preface it writes on connect, so "before the client
-/// writes" means before it writes the request.)
+/// The peer sends its handshake and closes at once. The calls that follow are
+/// issued after the client's channel reported the closure (a connection-state
+/// barrier), so they race a connection the client already knows is gone. The
+/// ordering is: the peer closed, the channel observed it, then the calls.
+/// Whether the first call's request was written before or after the EOF is
+/// not ordered.
 Future<void> _closedBeforeWrite(List<Object> uncaught) async {
   final peer = await _Peer.start((client) {
     client.socket.add(settings);
@@ -490,12 +564,19 @@ Future<void> _closedBeforeWrite(List<Object> uncaught) async {
   final helper = Helper(peer.path, peer.root.path, manageProcess: false);
   Object? primary;
   try {
-    // The first call is what dials; it settles when the peer's EOF is handled.
+    // The first call is what dials. Subscribe to the channel's states before
+    // it, so the closure cannot be missed.
+    final observed = helper.channel.onConnectionStateChanged.firstWhere(
+      (state) =>
+          state == ConnectionState.idle ||
+          state == ConnectionState.transientFailure,
+    );
     final first = _timedPing(helper, deadline);
     final client = await peer.accepted.stream.first.timeout(
       const Duration(seconds: 10),
     );
     await client.closed.timeout(const Duration(seconds: 10));
+    await observed.timeout(const Duration(seconds: 10));
     // Calls made right after the peer's EOF, concurrently and then again.
     final calls = [
       for (var i = 0; i < 3; i++)

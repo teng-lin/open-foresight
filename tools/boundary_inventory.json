@@ -1087,7 +1087,7 @@
           "kind": "fixture",
           "path": "packages/foresight_core/test/helper_malformed_frame_test.dart",
           "names": [
-            "a handshake, then EOF once the request has arrived: the call settles with a GrpcError by its deadline, the channel is not wedged, nothing escapes, and a replacement is served"
+            "a handshake, then EOF once the request has arrived: the call settles with a GrpcError, a second call settles as this peer implies, nothing escapes, and a replacement is served"
           ],
           "note": "Production Helper, channel and transport against hostile raw-byte peers and a malformed-gRPC-message HTTP/2 server over a real Unix socket; two known deficiencies are characterized."
         },
@@ -2285,7 +2285,7 @@
           "sides": "production both; the service is SIGTERMed with no mutation in flight and needs a display. Its report's no_mutation_replay is a literal true in tests/service/remote_client_probe.dart, so, although it checks the persisted note is unchanged after the restart, it does not prove an uncertain mutation is never replayed"
         }
       ],
-      "missing": "The baseline matrix does not state what its G part was, so the cell is not closed. Backoff and attach-timeout behavior are fixture-only. The facade test's no_mutation_replay is still a literal true; the SIGKILL test, not that field, proves non-replay."
+      "missing": "The baseline matrix does not state what its G part was, so the cell is not closed. Backoff, attach-timeout and epoch behavior are fixture-only (epoch has no new evidence). The facade test's no_mutation_replay is still a literal true; the SIGKILL test, not that field, proves non-replay."
     },
     {
       "boundary": "MCP/CLI to service",
@@ -2394,7 +2394,7 @@
       "evidence": [
         {
           "path": "packages/foresight_core/test/helper_malformed_frame_test.dart",
-          "test": "a handshake, then EOF once the request has arrived: the call settles with a GrpcError by its deadline, the channel is not wedged, nothing escapes, and a replacement is served",
+          "test": "a handshake, then EOF once the request has arrived: the call settles with a GrpcError, a second call settles as this peer implies, nothing escapes, and a replacement is served",
           "sides": "production Helper, channel and transport over a real Unix socket; the peer is a hostile fixture writing raw bytes, not the ForesightHelper"
         },
         {
@@ -2408,8 +2408,8 @@
           "sides": "characterization of a known deficiency, not an endorsement"
         }
       ],
-      "missing": "The real ForesightHelper's own reception of a malformed or partial frame is untested; the fixture peer shows only how the client side settles. Known deficiencies, characterized in separate tests: bytes that are not HTTP/2, and a peer that closes before any frame, are reported only at the call deadline (45 s by default, 30 minutes for indexDocument). The 'Cannot add event after closing' race that HelperChannel exists to prevent is not reachable through a socket peer: replacing HelperChannel with grpc's stock channel changes no result in these tests or in 240 racing calls, so that race is pinned only by the transport-level tests in helper_channel_test.dart.",
-      "note": "Ten tests: four transport scenarios (EOF with the request in flight, half a header then EOF, half a header then silence, a huge announced payload), three malformed-message cases over valid HTTP/2, a peer that closes before the request is dispatched, and two known-deficiency characterizations. Each call settles as a GrpcError, a second call is not wedged, nothing reaches the error zone, and the same channel serves a replacement within ten seconds. Verified on macOS only: the 'peer closes before any frame' characterization expects DEADLINE_EXCEEDED and may be ECONNRESET/UNAVAILABLE on Linux, so the fixture-only verdict is not claimed for Linux until it has run there."
+      "missing": "The real ForesightHelper's own reception of a malformed or partial frame is untested; the fixture peer shows only how the client side settles. Known deficiencies, characterized in separate tests: bytes that are not HTTP/2, and a peer that closes before any frame, are reported only at the call deadline (45 s by default, 30 minutes for indexDocument). The 'Cannot add event after closing' race that HelperChannel exists to prevent was not reproduced through a socket peer (240 racing calls, three close timings), and these tests do not distinguish HelperChannel from grpc's stock channel; that race is pinned only at transport-stream level in helper_channel_test.dart. A second call is shown to settle promptly (closing peer) or at its own deadline (stalled peer); that does not by itself rule out a wedged connection, and the replacement being served is the evidence the channel recovers.",
+      "note": "Twelve tests: four transport scenarios (EOF with the request in flight, half a header then EOF, half a header then silence, a huge announced payload), three malformed-message cases over valid HTTP/2, a peer that sends its handshake and closes at once, with calls made after the channel observed the closure, two known-deficiency characterizations, and two fixture self-tests that the hostile peers deliver the bytes they claim. Each call settles as a GrpcError, a second call settles (promptly for a closing peer, at its own deadline for a stalled one), nothing reaches the error zone even after teardown, and the same channel serves a replacement within ten seconds. Verified on macOS only: the 'peer closes before any frame' characterization expects DEADLINE_EXCEEDED and may be ECONNRESET/UNAVAILABLE on Linux, so the fixture-only verdict is not claimed for Linux until it has run there."
     },
     {
       "boundary": "Service to helper",

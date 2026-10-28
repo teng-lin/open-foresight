@@ -264,6 +264,9 @@ void main() {
         s.launcher,
       );
 
+      // The desktop still holds the lost connection: the request below cannot
+      // silently go to a new client, so it was never sent anywhere.
+      expect(identical(s.domain.client, lost), isTrue);
       final result = await within(
         s.domain.command(Operation.notesSave, {
           'title': 'Sent after the loss',

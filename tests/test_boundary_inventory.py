@@ -46,7 +46,7 @@ def failing(export, *fragments):
 def test_checked_in_inventory_is_reconciled_with_every_source():
     counts = inventory.verify(ROOT)
     data = inventory.load(ROOT)
-    assert counts["boundaries"] == len(data["boundaries"]) == 12 and counts["lifecycle_cells"] == len(data["lifecycle_reconciliation"]) == 14
+    assert counts["boundaries"] == len(data["boundaries"]) == 12 and counts["lifecycle_cells"] == len(data["lifecycle_reconciliation"]) == len(EXPECTED_VERDICTS)
     assert counts["gates"] == len(data["gates"]) and counts["impact_rules"] == len(data["impact_rules"])
     assert counts["probes_mapped"] == len(json.loads((ROOT / "tools/integration_probes.json").read_text())["entries"])
     assert counts["exclusions_mapped"] == len(json.loads((ROOT / "pytest-exclusions.json").read_text()))
@@ -399,7 +399,7 @@ def test_a_closed_cell_needs_evidence_that_says_production_on_both_sides(export,
     editable("tools/boundary_inventory.json", lambda data: close(data, "production client, fixture service"))
     failing(export, "a closed cell needs evidence whose sides say production both")
     editable("tools/boundary_inventory.json", lambda data: close(data, "production both; adopted helper"))
-    assert inventory.verify(export)["lifecycle_cells"] == 14
+    assert inventory.verify(export)["lifecycle_cells"] == len(inventory.load(export)["lifecycle_reconciliation"])
 
 
 EXPECTED_VERDICTS = {
@@ -441,7 +441,7 @@ def test_a_closed_claim_must_agree_with_the_boundary_evidence_kind(export, edita
         target.update(status="closed-production", missing=None)
 
     editable("tools/boundary_inventory.json", close)
-    assert inventory.verify(export)["lifecycle_cells"] == 14  # the boundary lists these tests as production both
+    assert inventory.verify(export)["lifecycle_cells"] == len(inventory.load(export)["lifecycle_reconciliation"])  # the boundary lists these tests as production both
 
     def relabel(data):
         close(data)
@@ -536,7 +536,7 @@ def test_a_closed_cells_note_cannot_hide_a_gap(export, editable):
         target.update(status="closed-production", missing=None, note="Verified by the SIGKILL contract test.")
 
     editable("tools/boundary_inventory.json", honest)
-    assert inventory.verify(export)["lifecycle_cells"] == 14
+    assert inventory.verify(export)["lifecycle_cells"] == len(inventory.load(export)["lifecycle_reconciliation"])
 
 
 HOSTILE_SCENARIOS = [
@@ -547,7 +547,9 @@ HOSTILE_SCENARIOS = [
     "a message shorter than its length prefix",
     "a message that is not valid protobuf",
     "a compressed message without a negotiated codec",
-    "a peer that closes before the client writes, then calls after EOF",
+    "a peer that sends its handshake and closes at once, then calls made after the channel observed the closure",
+    "EOF once the request arrived: the handshake, then nothing",
+    "half a frame header then EOF: the handshake plus the five header bytes reach the client before the close",
     "KNOWN DEFICIENCY: bytes that are not HTTP/2 are reported only at the deadline",
     "KNOWN DEFICIENCY: a peer that closes before any frame is reported only at the deadline",
 ]
@@ -559,6 +561,31 @@ def test_the_hostile_peer_scenarios_cited_by_one_template_name_all_still_exist()
     source = re.sub(r"'\s*\n\s*'", "", source)  # adjacent literals the formatter wrapped
     for name in HOSTILE_SCENARIOS:
         assert name in source, name
-    assert len(inventory.dart_registered_tests(source)) == 5  # three templated tests, two literal ones in a group
+    assert len(inventory.dart_registered_tests(source)) == 7  # two templated tests, five literal ones
     assert len(re.findall(r"^\s+Scenario\(\s*'", source, re.M)) == 4
     assert source.count("MalformedMessage('") == 3
+
+
+def test_a_closed_claim_needs_the_exact_test_name_not_just_a_names_less_entry(export, editable):
+    def close(data):
+        cell(data, "Desktop to service", "Crash").update(status="closed-production", missing=None)
+
+    def drop_names(data):
+        close(data)
+        for boundary in data["boundaries"]:
+            for entry in boundary["evidence"]:
+                if entry["path"].endswith("service_crash_contract_test.dart"):
+                    entry.pop("names", None)
+
+    editable("tools/boundary_inventory.json", drop_names)
+    failing(export, "is not listed as production-both-sides evidence by any boundary")
+
+    def wrong_name(data):
+        close(data)
+        for boundary in data["boundaries"]:
+            for entry in boundary["evidence"]:
+                if entry["path"].endswith("service_crash_contract_test.dart"):
+                    entry["names"] = ["control: a request issued after the loss was seen was never sent, so the reconnect sends it once and it succeeds (not every loss is outcomeUnknown)"]
+
+    editable("tools/boundary_inventory.json", wrong_name)
+    failing(export, "is not listed as production-both-sides evidence by any boundary")

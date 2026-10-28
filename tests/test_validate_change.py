@@ -1752,7 +1752,7 @@ def test_a_prerequisite_produced_by_an_earlier_stage_is_not_shown_as_satisfied(m
 
 
 def test_core_test_support_helpers_are_shared_test_support():
-    for path in ("packages/foresight_core/test/support/current_read.dart", "packages/foresight_core/test/support/admission_lock_evidence.dart"):
+    for path in ("packages/foresight_core/test/support/current_read.dart", "packages/foresight_core/test/support/boundary_analysis.dart"):
         plan = plan_for([path])
         assert not plan["conservative"], path
         assert [entry["kind"] for entry in plan["paths"][0]["matches"]] == ["shared-test-support"]
