@@ -50,6 +50,12 @@ merge base), so a dirty tree is never confused with its `HEAD`.
    CI) and `ci_selection.select` (observe-only candidate). Their union is
    reported, each selected CI gate is mapped to its local equivalent in the
    inventory's `ci_gate_map`, and a selector failure broadens rather than aborts.
+   The other required jobs from `ci_selection.required_jobs` (the CPU, audio and
+   DEB acceptance jobs and the Arch/native job) map through `ci_job_map` to a
+   local gate or a CI-only gate, so a run cannot pass while they never ran. When
+   the sanitizer workflow's path filter (read by `ci_selection`) matches, the
+   CI-only `native-sanitizers` gate is selected. The inventory guard fails if a
+   required job has no mapping.
 2. Impact rules in [`tools/boundary_inventory.json`](../tools/boundary_inventory.json)
    select downstream consumers, not only tests beside the changed file:
 
@@ -61,6 +67,9 @@ merge base), so a dirty tree is never confused with its `HEAD`.
    | Runtime configuration | Model, helper, installed-product and harness consumers. |
    | Package layout | Installer, document-sandbox, launcher and harness consumers. |
    | Toolchain inputs, orchestration | Every boundary. |
+
+Documentation is `docs/**` and top-level Markdown only. Markdown under a source
+or test tree may be a fixture a test reads, so it stays unknown.
 
 3. Direct triggers and cited tests select their own boundary. A `*_test.dart`
    selects its package's Dart gate. Documentation selects only the shared guards.
@@ -110,10 +119,22 @@ names. Credentials, profiles, transcripts and model assets are never collected.
 | `plan-only` | Nothing executed. |
 | `failed` | At least one executed check failed or timed out. |
 | `partial` | Nothing failed, but a selected check was unavailable, deferred, manual or CI-only, or a needed platform did not execute. |
-| `full-validation-passed` | Every selected check passed here and no needed platform is unexecuted. |
+| `full-validation-passed` | Every selected check passed here, no needed platform is unexecuted, and nothing in `incomplete_reasons` applies. |
+
+A check that declares JUnit reports passes only if each report exists, was
+written during the run, parses, executed at least one test and records no
+failures or errors. An empty change set (no `--base` on a clean tree, or
+`--boundary` alone) is `partial` with a "nothing selected" reason unless you pass
+`--baseline-only`; `--files-from` rejects empty input. `--skip-inventory-check`,
+unreadable change content and a non-compliant temp root also prevent a full
+claim (the last is refused with exit 2). `dirty` is always computed from the
+staged, unstaged and untracked classes even when `--include` narrows the paths,
+and is `null` for an explicit file list, which never inspects the tree. A source
+export inside another Git checkout is refused; pass `--files`.
 
 Exit status is 0 only for a full pass (or a plan), 1 for a failure, 2 for invalid
-input or an inconsistent inventory, and 3 for a partial run. `--allow-partial`
+input, an inconsistent inventory or unwritable evidence, 3 for a partial run and
+130 after an interruption (the evidence is still written). `--allow-partial`
 turns 3 into 0 without changing the recorded status. A missing prerequisite or
 unexecuted platform cannot produce a full-validation claim.
 
