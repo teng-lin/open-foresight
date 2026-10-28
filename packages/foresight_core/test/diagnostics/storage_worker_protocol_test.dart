@@ -728,7 +728,15 @@ void main() {
       final slot = BackupDirectory('$path/logs/slot-${admitted.slot}');
       final lease = slot.open('lease');
       try {
-        expect(lease.tryExclusiveLease(), isTrue);
+        final acquired = lease.tryExclusiveLease();
+        expect(
+          acquired,
+          isTrue,
+          reason: acquired
+              ? null
+              : 'slot lease not released after RETIRED; a second checked '
+                    'attempt on it observed ${probeLease(lease).name}',
+        );
       } finally {
         lease.close();
         slot.close();
