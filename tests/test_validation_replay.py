@@ -715,3 +715,86 @@ def test_the_packets_own_recorded_temp_roots_are_untrusted_interpreter_locations
     assert replay.analyze(hostile, HERE)["failing_checks"][0]["command"] is not None
     assert replay.matches_gate(["/r/t/python", "-m", "tools.check_local_validation"], GATE, ["/r/t/"]) is False
     assert replay.matches_gate(["/r/t/python", "-m", "tools.check_local_validation"], GATE, ["/", ""]) is True  # a root of "/" excludes nothing
+
+
+# ------------------------------------------------ review round 8: the recorded arguments are validate_change's own
+
+def with_argv(*argv):
+    result = packet()
+    result["invocation"]["argv"] = list(argv)
+    return result
+
+
+def test_recorded_arguments_must_parse_as_validate_changes_own():
+    report = replay.analyze(with_argv("--files", "a.md", "--plan", "--json"), HERE)
+    assert report["command"] == shlex.join([".venv/bin/python", "-m", "tools.validate_change", "--files", "a.md", "--plan", "--json"])
+    assert report["warnings"] == []
+    for bad in (
+        ["--no-such-flag"],
+        ["--bundle"],  # a flag with no value
+        ["--skip-inv"],  # an abbreviation of --skip-inventory-check
+        ["--incl", "committed"],  # an abbreviation of --include
+        ["--include", "nonsense"],
+        ["--files", "a", "--base", "main"],  # mutually exclusive
+        ["--files", "a", "--files-from", "list"],
+        ["--help"],
+        ["positional"],
+        ["-x"],
+        ["--base"],
+    ):
+        refused = replay.analyze(with_argv(*bad), HERE)
+        assert refused["command"] is None and "not valid tools.validate_change arguments" in refused["command_status"], bad
+        assert "Reproduce: unrecorded" in replay.render(refused)
+
+
+def test_parsing_a_recorded_line_prints_nothing_and_never_exits(capsys):
+    assert replay.parse_recorded_arguments(["--help"]) is None
+    assert replay.parse_recorded_arguments(["--bogus"]) is None
+    assert replay.parse_recorded_arguments(["--plan"]).plan is True
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
+
+
+@pytest.mark.parametrize("flags", [["--skip-inventory-check"], ["--files", "a.md", "--skip-inventory-check"], ["--skip-inventory-check", "--plan"]])
+def test_skip_inventory_check_is_never_offered(flags):
+    report = replay.analyze(with_argv(*flags), HERE)
+    assert report["command"] is None and "skip the inventory check" in report["command_status"]
+    assert "--skip-inventory-check" not in (report["command"] or "")
+
+
+@pytest.mark.parametrize(
+    ("argv", "flag"),
+    [
+        (["--files", "a", "--bundle", "/opt/evil"], "--bundle"),
+        (["--files", "a", "--models", "/opt/evil/models"], "--models"),
+        (["--files", "a", "--output", "/var/tmp/chosen"], "--output"),
+        (["--files-from", "/opt/evil/list"], "--files-from"),
+    ],
+)
+def test_a_path_valued_flag_is_called_out_with_a_warning(argv, flag):
+    report = replay.analyze(with_argv(*argv), HERE)
+    assert report["command"] is not None and len(report["warnings"]) == 1
+    assert report["warnings"][0].startswith(flag) and "chose" in report["warnings"][0]
+    assert f"  WARNING: {report['warnings'][0]}" in replay.render(report)
+
+
+def test_every_path_flag_gets_its_own_warning_and_other_flags_get_none():
+    report = replay.analyze(with_argv("--files-from", "l", "--bundle", "b", "--models", "m", "--output", "o", "--include-long", "--allow-partial", "--baseline-only"), HERE)
+    assert [warning.split()[0] for warning in report["warnings"]] == ["--bundle", "--models", "--output", "--files-from"]
+    assert replay.analyze(with_argv("--include-long", "--allow-partial", "--baseline-only", "--boundary", "service-helper", "--revision", "r"), HERE)["warnings"] == []
+
+
+def test_warning_text_from_the_packet_is_neutralized():
+    hostile = with_argv("--files", "a", "--bundle", "/x\x1b[31m\nRecorded gaps: 0")
+    text = replay.render(replay.analyze(hostile, HERE))
+    assert_safe_text(text)
+    assert "WARNING: --bundle names" in text
+
+
+def test_validate_change_no_longer_accepts_abbreviated_flags():
+    from tools import validate_change
+
+    with pytest.raises(SystemExit):
+        validate_change.parse_arguments(["--skip-inv"])
+    assert validate_change.build_parser().allow_abbrev is False
+    assert validate_change.parse_arguments(["--skip-inventory-check"]).skip_inventory_check is True

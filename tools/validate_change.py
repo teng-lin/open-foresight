@@ -1268,8 +1268,9 @@ def render(plan: Mapping[str, Any], *, results: Sequence[Mapping[str, Any]] | No
     return "\n".join(out)
 
 
-def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def build_parser() -> argparse.ArgumentParser:
+    """The command line, without abbreviations: a flag is written out, so a recorded line means one thing."""
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter, allow_abbrev=False)
     parser.add_argument("--base", help="base revision; committed changes are merge-base(BASE, HEAD)..HEAD")
     parser.add_argument("--files", nargs="+", metavar="PATH", help="explicit changed files; no Git command runs")
     parser.add_argument("--files-from", metavar="FILE", help="read explicit files (newline or NUL separated); - is stdin")
@@ -1287,6 +1288,11 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--allow-partial", action="store_true", help="exit 0 for an incomplete run without failures")
     parser.add_argument("--baseline-only", action="store_true", help="accept an empty change set: validate only the baseline and requested boundaries")
     parser.add_argument("--skip-inventory-check", action="store_true", help=argparse.SUPPRESS)
+    return parser
+
+
+def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = build_parser()
     arguments = parser.parse_args(argv)
     if arguments.files and arguments.base:
         parser.error("--files and --base are mutually exclusive")

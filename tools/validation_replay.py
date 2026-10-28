@@ -25,6 +25,8 @@ and `git rev-parse` (without optional locks) and the tools' `--version` probes
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 from collections.abc import Callable, Mapping, Sequence
 import json
 import os
@@ -230,21 +232,55 @@ NEUTRAL_HOST: dict[str, Any] = {
 }
 
 
-def reproduction_command(packet: Mapping[str, Any], root: Path = validation_evidence.ROOT) -> tuple[str | None, str]:
-    """The recorded invocation as one shell-quoted line, or None with the reason it is not offered.
+# Flags whose value points validate_change at a file or directory the packet's author chose.
+PATH_FLAGS = (("bundle", "--bundle"), ("models", "--models"), ("output", "--output"), ("files_from", "--files-from"))
+
+
+def parse_recorded_arguments(arguments: Sequence[str]) -> argparse.Namespace | None:
+    """The recorded arguments as validate_change itself reads them, or None if it would refuse them.
+
+    Nothing is executed: parsing only. An unknown flag, an abbreviation, a missing
+    value or any other parse error is a refusal (argparse would exit), not a
+    command to print.
+    """
+    from tools import validate_change
+
+    sink = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(sink), contextlib.redirect_stdout(sink):
+            return validate_change.parse_arguments(list(arguments))
+    except SystemExit:
+        return None
+
+
+def reproduction_command(packet: Mapping[str, Any], root: Path = validation_evidence.ROOT) -> tuple[str | None, str, list[str]]:
+    """The recorded invocation as one shell-quoted line (or None with the reason), and warnings about it.
 
     Only `tools.validate_change`, the one entrypoint that records packets, is
     offered, so a packet cannot make the replay print `pip install ...` or any
-    other repository tool with attacker arguments.
+    other repository tool with attacker arguments. Its arguments must parse as
+    validate_change's own, `--skip-inventory-check` is never offered, and every
+    path-valued flag is called out: it points the run at something the packet's
+    author chose.
     """
     invocation = packet["invocation"]
     entrypoint = invocation.get("entrypoint") or "tools.validate_change"
     arguments = invocation.get("argv", [])
     if entrypoint not in REPLAYABLE_ENTRYPOINTS or not (root / "tools" / f"{entrypoint[6:]}.py").is_file():
-        return None, "unrecorded: the recorded entrypoint is not one this replay offers (only tools.validate_change)"
+        return None, "unrecorded: the recorded entrypoint is not one this replay offers (only tools.validate_change)", []
     if not isinstance(arguments, list) or not all(isinstance(token, str) for token in arguments):
-        return None, "unrecorded: the recorded arguments are not a list of text"
-    return shlex.join([".venv/bin/python", "-m", entrypoint, *arguments]), "recorded, unverified"
+        return None, "unrecorded: the recorded arguments are not a list of text", []
+    parsed = parse_recorded_arguments(arguments)
+    if parsed is None:
+        return None, "unrecorded: the recorded arguments are not valid tools.validate_change arguments", []
+    if parsed.skip_inventory_check:
+        return None, "unrecorded: the recorded arguments skip the inventory check, which this replay never offers", []
+    warnings = [
+        f"{flag} names {getattr(parsed, name)}, a location the packet's author chose; check it before running"
+        for name, flag in PATH_FLAGS
+        if getattr(parsed, name) is not None
+    ]
+    return shlex.join([".venv/bin/python", "-m", entrypoint, *arguments]), "recorded, unverified", warnings
 
 
 def failing_checks(packet: Mapping[str, Any], gates: Mapping[str, Sequence[str]] | None = None) -> list[dict[str, Any]]:
@@ -338,7 +374,7 @@ def analyze(
     known = {gap["code"] for gap in recorded}
     recorded += [gap for gap in validation_evidence.derive_gaps(packet) if gap["code"] not in known]
     mismatches = host_mismatches(packet, here)
-    command, command_status = reproduction_command(packet)
+    command, command_status, warnings = reproduction_command(packet)
     failing = failing_checks(packet, gates)
     report = {
         "provenance": "recorded, unverified: read from the packet, not re-checked",
@@ -348,6 +384,7 @@ def analyze(
         "source": {key: packet["source"].get(key) for key in ("mode", "revision", "base", "merge_base", "identity_sha256", "dirty")},
         "command": command,
         "command_status": command_status,
+        "warnings": warnings,
         "cwd": packet["invocation"].get("cwd"),
         "root": packet["invocation"].get("root"),
         "failing_checks": failing[:LIST_LIMIT],
@@ -368,6 +405,7 @@ def render(report: Mapping[str, Any]) -> str:
     ]
     if report["command"]:
         lines += [f"Reproduce from {report['root']} (recorded cwd {report['cwd']}):", f"  {report['command']}"]
+        lines.extend(f"  WARNING: {warning}" for warning in report["warnings"])
     else:
         lines.append(f"Reproduce: {report['command_status']}")
     for check in report["failing_checks"]:

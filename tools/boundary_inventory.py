@@ -353,6 +353,9 @@ def verify(root: Path = ROOT) -> dict[str, Any]:
             for subsumed in gate.get("subsumes", ()):
                 if subsumed not in gates:
                     fail(f"gate {name}: unknown subsumed gate {subsumed}")
+            relies_on = gate.get("wiring_unverified_relies_on")
+            if relies_on is not None and not (isinstance(relies_on, list) and relies_on and all(isinstance(item, str) and ":" in item for item in relies_on)):
+                fail(f"gate {name}: wiring_unverified_relies_on must list file:job strings")
             for acknowledgement in ("local_only", "wiring_unverified_reason"):
                 if acknowledgement in gate and not (isinstance(gate[acknowledgement], str) and gate[acknowledgement].strip()):
                     fail(f"gate {name}: {acknowledgement} needs a reason")

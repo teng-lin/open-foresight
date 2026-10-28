@@ -193,7 +193,12 @@ The replay never runs a recorded command and reads no environment; on this host
 it runs only `git status` and `git rev-parse` (without optional locks) and the
 tools' `--version` probes (`flutter --version` may touch the Flutter SDK cache),
 each with a 10 second limit. A failed probe on either side, an unreadable
-revision or dirty state here, and an unidentified image are gaps, never matches. A packet cannot hide a gap by omitting it: the gaps its contents imply are
+revision or dirty state here, and an unidentified image are gaps, never matches. The
+recorded arguments must parse as `tools.validate_change`'s own (no abbreviations,
+unknown flags or parse errors: those print "unrecorded"), `--skip-inventory-check`
+is never offered, and each path-valued flag (`--bundle`, `--models`, `--output`,
+`--files-from`) is called out with a warning, because it points the run at a
+location the packet's author chose. A packet cannot hide a gap by omitting it: the gaps its contents imply are
 added to the ones it recorded. A replay that lists no gap still does not prove a
 hosted failure reproduces; the recorded conditions are the ones this tool could
 observe. `--check` exits 1 while any gap remains and 2 for an unreadable or
@@ -209,7 +214,11 @@ is a whole token in an executing position: the command itself (after keywords,
 assignments and wrappers such as `env`, `time`, `timeout`, `xvfb-run`,
 `dbus-run-session`), or the argument of `bash`, `sh`, `source`, `.`, `exec` or a
 `python` interpreter that has no flag stopping it from running the script (`-n`,
-`-c`). Anything else is not a call: `shellcheck tools/build.sh`, `bash -n`,
+`-c`). The segment must also *start* with something that executes: an interpreter,
+a wrapper, a container launcher (`docker run`, `podman run`) or a repository script
+that passes its tail on (`tools/run_ci_user.py ... -- bash tools/build.sh`), so
+`echo use bash tools/build.sh`, `grep`, `git commit -m x ...` and `command -v`
+never count. Anything else is not a call: `shellcheck tools/build.sh`, `bash -n`,
 `python -m py_compile`, `ruff check`, `xargs`, `find -exec`, `cat`, `cp`, `chmod`,
 `git add`, a quoted string, a comment, or a here-document body. A path with `..`
 is never a script. A workflow job or step whose YAML `if:` is literally false
@@ -248,7 +257,9 @@ evaluated, so a value the condition would skip still counts.
 A gate (on a platform) with only `may_call` evidence is **wiring unverified**: it
 is listed in the default output and in `--json` as `wiring_unverified`, it is
 never counted as a pass, and it must be acknowledged with a
-`wiring_unverified_reason` on the gate in the inventory. A new unverified gate
+`wiring_unverified_reason` on the gate in the inventory, together with
+`wiring_unverified_relies_on`: the `workflow:job` entries the acknowledgement rests
+on. The guard fails if one of them no longer reaches the gate. A new unverified gate
 therefore fails the guard, and an acknowledged gate that gains an exact caller is
 a stale declaration. On the current tree that is `integration-virtual-audio`
 alone (a test pins the set): it runs only through `bash tools/linux_acceptance.sh
@@ -259,8 +270,16 @@ the `arch-drift.yml` build (`build.sh --platform linux`, whose missing `--stage`
 is `all`) and macOS by the literal matrix in `macos.yml`. Gates that also have a
 direct caller print their `may_call` entries as "May also run (not verified)".
 Hard limits (256 KiB and 5000 lines per script, 200 scripts and 5000 calls per
-step, 1 MiB per workflow) are problems when hit, never silent truncation, and
-each text is tokenized once.
+step, 1 MiB per workflow, 4 MiB of text lexed in total) are problems when hit,
+never silent truncation. Each text is tokenized once, a script is lexed once per
+run however many steps reach it, and only the first 64 arguments of a call are
+kept: a longer call is marked so that its stage, suite and platform count as
+unknown. A here-document is skipped only when it is plain and terminated (`<<EOF`,
+`<<'EOF'`, `<<\EOF`, `<<END-OF`, several on one line); a body fed to a shell, with
+a delimiter mixing quotes, or never terminated is read as `may_call`. A gate that
+states a literal `--platform` is satisfied only by a call for that platform. A
+workflow file that cannot be read (a broken symlink, binary or unreadable file) or
+an unhashable key is a problem line, never a traceback.
 
 The check also rejects a workflow that calls a repository script that no longer
 exists and fails on any workflow shape it does not understand. It reads only

@@ -388,7 +388,7 @@ def dispatched(tmp_path, argument):
     root = tree(tmp_path, {"ci.yml": workflow(f"bash tools/d.sh {argument}")}, scripts=("tools/build.sh", "tools/check_dart_bindings.py"))
     (root / "tools/d.sh").write_text(DISPATCHER)
     stages = ("package", "native", "core", "desktop", "hidden", "function")
-    gates = {name: {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", name], "wiring_unverified_reason": "dispatcher"} for name in stages}
+    gates = {name: {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", name], "wiring_unverified_reason": "dispatcher", "wiring_unverified_relies_on": [".github/workflows/ci.yml:build"]} for name in stages}
     return parity.check(root, {"gates": gates})
 
 
@@ -407,7 +407,7 @@ def test_a_one_line_false_if_or_an_exit_in_a_case_arm_cannot_hide_later_commands
     script = "if false; then echo skipped; fi\ncase $1 in a) exit 0 ;; esac\nf() { exit 1; }\nfor i in 1; do exit 2; done\nbash tools/build.sh --stage native\n"
     root = tree(tmp_path, {"ci.yml": workflow("bash tools/d.sh a")})
     (root / "tools/d.sh").write_text(script)
-    gates = {"native-stage": {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", "native"], "wiring_unverified_reason": "via d.sh"}}
+    gates = {"native-stage": {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", "native"], "wiring_unverified_reason": "via d.sh", "wiring_unverified_relies_on": [".github/workflows/ci.yml:build"]}}
     report = parity.check(root, {"gates": gates})
     assert report["gates"]["native-stage"]["may_call"] == [".github/workflows/ci.yml:build via tools/d.sh"]
     assert report["wiring_unverified"] == ["native-stage"] and report["problems"] == []
@@ -496,7 +496,7 @@ def test_wiring_unverified_must_be_acknowledged_and_must_not_go_stale(tmp_path):
     undeclared = tree(tmp_path / "a", {"ci.yml": workflow('bash tools/build.sh --stage "$S"')})
     problems = parity.check(undeclared, inventory(**NATIVE))["problems"]
     assert problems == ["gate native-stage: no step calls it as a top-level command (.github/workflows/ci.yml:build); call it directly or declare wiring_unverified_reason"]
-    declared = {"gates": {"native-stage": {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", "native"], "wiring_unverified_reason": "reviewed"}}}
+    declared = {"gates": {"native-stage": {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", "native"], "wiring_unverified_reason": "reviewed", "wiring_unverified_relies_on": [".github/workflows/ci.yml:build"]}}}
     assert parity.check(undeclared, declared)["problems"] == []
     direct = tree(tmp_path / "b", {"ci.yml": workflow("bash tools/build.sh --stage native")})
     assert parity.check(direct, declared)["problems"] == ["gate native-stage: declared wiring_unverified_reason but it now has direct evidence or none; remove the stale declaration"]
@@ -779,7 +779,6 @@ def test_scripts_and_heredoc_bodies_are_never_exact(tmp_path):
         "cat <<<EOF\nbash tools/build.sh --stage native\nEOF",
         "# cat <<EOF\nbash tools/build.sh --stage native\nEOF",
         "echo a\\<<EOF\nbash tools/build.sh --stage native",
-        "echo 1<<2\nbash tools/build.sh --stage native",
     ],
 )
 def test_a_heredoc_opens_only_outside_quotes_comments_and_arithmetic(tmp_path, command):
@@ -807,7 +806,7 @@ def test_find_heredoc_reports_where_the_delimiter_and_tab_stripping_are():
     assert parity._find_heredoc('cat <<<"x"; cat <<EOF') == (16, False, "EOF")  # a here-string does not hide a later heredoc
     assert parity._find_heredoc("cat <<-'X Y'") == (4, True, "X Y")
     assert parity._find_heredoc('cat <<  "EOF" | sh') == (4, False, "EOF")
-    for line in ('echo "<<EOF"', "echo <<<EOF", "echo 1<<2", "cat <<'unterminated", "x=$((1<<3))", "# <<EOF", "(( 1<<EOF ))", "echo $((1<<2"):
+    for line in ('echo "<<EOF"', "echo <<<EOF", "cat <<'unterminated", "x=$((1<<3))", "# <<EOF", "(( 1<<EOF ))", "echo $((1<<2"):
         assert parity._find_heredoc(line) is None, line
     assert parity.split_heredocs("sh <<E\nbash tools/a.sh\nE\nz") == ("sh \nz", ["bash tools/a.sh"])
     assert parity.split_heredocs("cat <<E\nbody\nE") == ("cat ", [])
@@ -981,3 +980,263 @@ def test_only_the_gates_that_pass_platform_get_a_per_platform_requirement(tmp_pa
     assert report["problems"] == [] and report["gates"]["bindings-check"]["platforms"] == []
     assert parity._wants_platform(["bash", "x", "--platform", "{platform}"]) and not parity._wants_platform(["bash", "--platform", "linux"])
     assert not parity._wants_platform(["--platform"])
+
+
+# ------------------------------------------------- review round 8: heads, budgets, heredoc words, punctuation, hostile files
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo use bash tools/build.sh --stage native",
+        "grep -q bash tools/build.sh --stage native",
+        "git commit -m x bash tools/build.sh --stage native",
+        "command -v tools/build.sh --stage native",
+        "command -V bash tools/build.sh --stage native",
+        "type tools/build.sh",
+        "which bash tools/build.sh",
+        "printf '%s' bash tools/build.sh",
+        "xargs bash tools/build.sh --stage native",
+        "ls -l bash tools/build.sh",
+        "FOO=1 echo bash tools/build.sh --stage native",
+        "if echo bash tools/build.sh --stage native; then true; fi",
+    ],
+)
+def test_a_script_after_a_word_that_does_not_execute_its_arguments_is_not_a_call(tmp_path, command):
+    gate = calling(tmp_path, command, extra=NATIVE)["gates"]["native-stage"]
+    assert gate["called_by"] == [] and gate["may_call"] == [], command
+    assert parity.calls_in(command) == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'tools/run_ci_user.py --workspace "$W" -- bash tools/build.sh --stage native',
+        ".venv/bin/python tools/run_ci_user.py --workspace x -- xvfb-run -a bash tools/build.sh --stage native",
+        "docker run --rm -v a:b image bash tools/build.sh --stage native",
+        "podman run image python3 tools/build.sh --stage native",
+        "timeout 5 env FOO=1 bash tools/build.sh --stage native",
+        "sudo -E bash tools/build.sh --stage native",
+    ],
+)
+def test_a_chain_that_starts_with_an_executor_still_reaches_the_script(tmp_path, command):
+    gate = calling(tmp_path, command, extra=NATIVE)["gates"]["native-stage"]
+    assert [*gate["called_by"], *gate["may_call"]] == [".github/workflows/ci.yml:build"], command
+
+
+def test_a_call_with_more_arguments_than_the_limit_keeps_only_the_limit_and_forgets_the_discriminators():
+    command = "bash tools/build.sh " + "x " * 500 + "--stage core"
+    [(script, args, exact)] = parity.calls_in(command)
+    assert script == "tools/build.sh" and exact and len(args) == parity.ARGUMENT_LIMIT + len(parity._TRUNCATED)
+    assert args[-3:] == ("--stage=$TRUNCATED", "--suite=$TRUNCATED", "--platform=$TRUNCATED")
+    # An unknown stage is evidence, not a pass: the call cannot be exact for any one stage gate.
+    gate = {"gates": {"native-stage": {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", "native"]}}}
+    assert parity.satisfies(parity.Call("w", "s", "tools/build.sh", args, None, True), "tools/build.sh", gate["gates"]["native-stage"]["argv"]) == "ambiguous"
+    short = parity.calls_in("bash tools/build.sh --stage native")[0][1]
+    assert short == ("--stage", "native")
+
+
+def test_the_call_limit_stops_a_text_early_instead_of_after_the_fact():
+    text = "env tools/a.sh " * 8000
+    found = parity.calls_in(text, limit=10)
+    assert len(found) == 11  # limit + 1: enough for the caller to see that it was exceeded
+    assert len(parity.calls_in("env tools/a.sh " * 5)) == 5
+    assert all(len(args) <= parity.ARGUMENT_LIMIT + len(parity._TRUNCATED) for _script, args, _exact in parity.calls_in(text, limit=100))
+
+
+def test_a_script_reached_by_many_steps_is_lexed_once(tmp_path, monkeypatch):
+    steps = "\n".join("      - run: bash tools/big.sh" for _ in range(20))
+    text = f"on: push\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    steps:\n{steps}\n"
+    root = tree(tmp_path, {"ci.yml": text})
+    (root / "tools/big.sh").write_text("bash tools/build.sh --stage native\n" * 50)
+    lexed = []
+    real = parity._lex_script
+    monkeypatch.setattr(parity, "_lex_script", lambda path, script: lexed.append(script) or real(path, script))
+    report = parity.check(root, inventory(**NATIVE))
+    assert lexed.count("tools/big.sh") == 1 and len(lexed) == len(set(lexed))
+    assert report["gates"]["native-stage"]["may_call"] == [".github/workflows/ci.yml:j via tools/big.sh"]
+
+
+def test_the_total_budget_is_a_fail_closed_problem(tmp_path, monkeypatch):
+    steps = "\n".join(f"      - run: bash tools/s{i}.sh" for i in range(5))
+    root = tree(tmp_path, {"ci.yml": f"on: push\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    steps:\n{steps}\n"})
+    for i in range(5):
+        (root / f"tools/s{i}.sh").write_text("echo hello\n" * 100)
+    monkeypatch.setattr(parity, "MAX_TOTAL_BYTES", 1500)
+    problems = parity.check(root, inventory(**NATIVE))["problems"]
+    assert any("analysis budget of 1500 bytes was exhausted" in problem and "wiring unverified" in problem for problem in problems)
+    monkeypatch.setattr(parity, "MAX_TOTAL_BYTES", 10)
+    assert any("exhausted before" in problem for problem in parity.check(root, inventory(**NATIVE))["problems"])
+    monkeypatch.setattr(parity, "MAX_TOTAL_BYTES", 4 * 1024 * 1024)
+    assert not [problem for problem in parity.check(root, inventory(**NATIVE))["problems"] if "budget" in problem]
+
+
+def test_a_script_with_too_many_calls_is_a_problem_once(tmp_path, monkeypatch):
+    root = tree(tmp_path, {"ci.yml": workflow("bash tools/big.sh", "bash tools/big.sh")})
+    (root / "tools/big.sh").write_text("env tools/a.sh\n" * 20)
+    monkeypatch.setattr(parity, "MAX_CALLS_PER_STEP", 5)
+    problems = [problem for problem in parity.check(root, inventory(**NATIVE))["problems"] if "tools/big.sh" in problem]
+    assert len(problems) == 1 and "more than 5 calls" in problems[0]
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("cat <<\\EOF\nbash tools/build.sh --stage native\nEOF\nbash tools/build.sh --stage native", [True]),
+        ("cat <<A <<B\nbash tools/build.sh --stage native\nA\nbash tools/build.sh --stage native\nB\nbash tools/build.sh --stage native", [True]),
+        ("cat <<END-OF\nbash tools/build.sh --stage native\nEND-OF\nbash tools/build.sh --stage native", [True]),
+        ("cat <<-X.Y\n\tbash tools/build.sh --stage native\n\tX.Y\nbash tools/build.sh --stage native", [True]),
+        ("cat <<a\\b\nbash tools/build.sh --stage native\nab\nbash tools/build.sh --stage native", [True]),
+        ("cat <<'A' <<\"B\"\nbash tools/build.sh --stage native\nA\nbash tools/build.sh --stage native\nB", []),
+    ],
+)
+def test_heredoc_words_are_parsed_as_the_shell_reads_them(command, expected):
+    main, bodies = parity.split_heredocs(command)
+    assert bodies == []
+    assert [exact for _script, _args, exact in parity.calls_in(main)] == expected, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'cat <<E"O"F\nbash tools/build.sh --stage native\nEOF',
+        "cat <<EOF\nbash tools/build.sh --stage native",
+        "cat <<A <<B\nbash tools/build.sh --stage native\nA\nbash tools/build.sh --stage native",
+        "bash <<EOF\nbash tools/build.sh --stage native\nEOF",
+        "cat <<E'O'F\nbash tools/build.sh --stage native\nEOF",
+    ],
+)
+def test_a_heredoc_that_may_be_something_else_is_read_as_may_call_never_dropped(tmp_path, command):
+    main, bodies = parity.split_heredocs(command)
+    assert bodies and any("tools/build.sh" in body for body in bodies)
+    gate = calling(tmp_path, command, extra=NATIVE)["gates"]["native-stage"]
+    assert gate["called_by"] == [] and gate["may_call"] == [".github/workflows/ci.yml:build via <heredoc>"], command
+
+
+def test_find_heredocs_returns_every_document_on_a_line_with_its_delimiter_form():
+    assert parity._find_heredocs("cat <<A <<-'B C' <<\\D") == [(4, False, "A", False), (8, True, "B C", False), (17, False, "D", False)]
+    assert parity._find_heredocs('cat <<E"O"F')[0][2:] == ("EOF", True)
+    assert parity._find_heredocs("cat <<END-OF")[0][2] == "END-OF"
+    assert parity._find_heredocs("cat <<'x") == [] and parity._find_heredocs("cat << ") == []
+    assert parity._find_heredoc("cat <<EOF") == (4, False, "EOF")
+
+
+@pytest.mark.parametrize(
+    ("command", "exact"),
+    [
+        ("(true)&&tools/build.sh --stage native", False),
+        ("(true) && tools/build.sh --stage native", False),
+        ("true;(tools/build.sh --stage native)", False),
+        ("{ true; }&&tools/build.sh --stage native", False),
+        ("true||tools/build.sh --stage native", False),
+        ("true;tools/build.sh --stage native", True),
+        ("true&tools/build.sh --stage native", True),
+        ("tools/build.sh --stage native 2>&1|tee log", True),
+        ("tools/build.sh --stage native&>log", True),
+        ("true|tools/build.sh --stage native", True),
+    ],
+)
+def test_fused_punctuation_is_split_before_the_call_is_classified(command, exact):
+    assert [(script, tier) for script, _args, tier in parity.calls_in(command)] == [("tools/build.sh", exact)], command
+
+
+def test_pieces_split_operators_but_keep_redirects_whole():
+    assert parity._pieces(")&&") == [")", "&&"]
+    assert parity._pieces("&&&") == ["&&", "&"]
+    assert parity._pieces(">&") == [">&"] and parity._pieces("2") == ["2"] and parity._pieces("&>") == ["&>"]
+    assert parity._pieces(";\n") == [";", "\n"] and parity._pieces("word") == ["word"]
+
+
+def test_hostile_workflow_files_are_problem_lines_never_tracebacks(tmp_path):
+    root = tree(tmp_path, {"ok.yml": workflow("bash tools/build.sh --stage native")})
+    workflows = root / ".github/workflows"
+    (workflows / "dangling.yml").symlink_to(workflows / "nowhere.yml")
+    (workflows / "binary.yml").write_bytes(b"\xff\xfe\x00\x01 not text \x80")
+    (workflows / "unhashable.yml").write_text("on: push\n? [a, b]\n: 1\n? [a, b]\n: 2\njobs: {}\n")
+    (workflows / "complex.yml").write_text("on: push\n? [a, b]\n: 1\njobs: {}\n")
+    problems = parity.check(root, inventory(**NATIVE))["problems"]
+    joined = "\n".join(problems)
+    assert "dangling.yml: cannot be read (FileNotFoundError)" in joined
+    assert "binary.yml: cannot be read (UnicodeDecodeError)" in joined
+    assert "unhashable.yml: duplicate keys" in joined
+    assert "complex.yml" in joined and "Traceback" not in joined
+
+
+def test_an_unreadable_workflow_directory_entry_is_reported(tmp_path):
+    root = tree(tmp_path, {"ok.yml": workflow("bash tools/build.sh --stage native"), "locked.yml": "on: push\njobs: {}\n"})
+    locked = root / ".github/workflows/locked.yml"
+    locked.chmod(0)
+    try:
+        problems = parity.check(root, inventory(**NATIVE))["problems"]
+    finally:
+        locked.chmod(0o644)
+    if os.geteuid() != 0:  # root reads a mode-0 file; there is nothing to report then
+        assert any("locked.yml: cannot be read (PermissionError)" in problem for problem in problems)
+
+
+# ----------------------------------- acknowledgements rest on named jobs, and a gate that states a platform is compared
+
+def acknowledged_gate(reason="reviewed", relies_on=(".github/workflows/ci.yml:build",)):
+    gate = {"kind": "command", "argv": ["bash", "tools/build.sh", "--stage", "native"], "wiring_unverified_reason": reason}
+    if relies_on is not None:
+        gate["wiring_unverified_relies_on"] = list(relies_on) if isinstance(relies_on, tuple) else relies_on
+    return {"gates": {"native-stage": gate}}
+
+
+def test_an_acknowledgement_must_name_a_job_that_still_reaches_the_gate(tmp_path):
+    root = tree(tmp_path, {"ci.yml": workflow('bash tools/build.sh --stage "$S"')})
+    assert parity.check(root, acknowledged_gate())["problems"] == []
+    gone = parity.check(root, acknowledged_gate(relies_on=[".github/workflows/ci.yml:vanished"]))["problems"]
+    assert gone == ["gate native-stage: wiring_unverified_reason relies on .github/workflows/ci.yml:vanished, which no longer reaches it; revisit the acknowledgement"]
+    for relies_on in (None, [], "ci.yml:build", [3]):
+        problems = parity.check(root, acknowledged_gate(relies_on=relies_on))["problems"]
+        assert problems == ["gate native-stage: wiring_unverified_reason needs wiring_unverified_relies_on, the workflow:job entries it rests on"], relies_on
+    assert parity.check(root, acknowledged_gate())["gates"]["native-stage"]["reached_by"] == [".github/workflows/ci.yml:build"]
+
+
+def test_deleting_the_job_an_acknowledgement_rests_on_fails_the_guard(tmp_path):
+    with_job = tree(tmp_path / "a", {"ci.yml": workflow('bash tools/build.sh --stage "$S"')})
+    other = tree(tmp_path / "b", {"ci.yml": workflow('bash tools/build.sh --stage "$S"', job="renamed")})
+    assert parity.check(with_job, acknowledged_gate())["problems"] == []
+    assert any("relies on .github/workflows/ci.yml:build, which no longer reaches it" in problem for problem in parity.check(other, acknowledged_gate())["problems"])
+
+
+def test_the_real_acknowledgement_rests_on_jobs_that_exist():
+    report = parity.check(ROOT)
+    gate = report["gates"]["integration-virtual-audio"]
+    inventory_gate = parity.boundary_inventory.load(ROOT)["gates"]["integration-virtual-audio"]
+    assert inventory_gate["wiring_unverified_relies_on"] and set(inventory_gate["wiring_unverified_relies_on"]) <= set(gate["reached_by"])
+    assert report["problems"] == []
+
+
+@pytest.mark.parametrize(
+    ("runs_on", "command", "kind"),
+    [
+        ("ubuntu-24.04", "bash tools/build.sh --platform linux --stage native", "called"),
+        ("macos-15", "bash tools/build.sh --platform linux --stage native", "called"),  # the flag decides, not the runner
+        ("ubuntu-24.04", "bash tools/build.sh --platform macos --stage native", "none"),
+        ("ubuntu-24.04", "bash tools/build.sh --stage native", "called"),  # no flag: the runner decides
+        ("macos-15", "bash tools/build.sh --stage native", "none"),
+        ("[self-hosted]", "bash tools/build.sh --stage native", "may"),
+        ("ubuntu-24.04", 'bash tools/build.sh --platform "$P" --stage native', "may"),
+        ("ubuntu-24.04", "bash tools/build.sh --platform=linux --stage native", "called"),
+    ],
+)
+def test_a_gate_that_states_its_platform_is_satisfied_only_by_a_call_for_it(tmp_path, runs_on, command, kind):
+    text = f"on: push\njobs:\n  j:\n    runs-on: {runs_on}\n    steps:\n      - run: {json.dumps(command)}\n"
+    root = tree(tmp_path, {"ci.yml": text})
+    gate = parity.check(root, {"gates": {"native-stage": {"kind": "command", "argv": ["bash", "tools/build.sh", "--platform", "linux", "--stage", "native"], "platforms": ["linux"], "local_only": "x"}}})["gates"]["native-stage"]
+    assert (bool(gate["called_by"]), bool(gate["may_call"])) == {"called": (True, False), "none": (False, False), "may": (False, True)}[kind]
+
+
+def test_many_calls_in_one_segment_do_not_copy_the_rest_of_the_segment_each_time():
+    import tracemalloc
+
+    text = "env tools/a.sh " * 6000
+    tracemalloc.start()
+    try:
+        found = parity.calls_in(text)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert len(found) == 6000
+    assert peak < 80 * 1024 * 1024, peak  # quadratic copying of the tail takes over a gigabyte

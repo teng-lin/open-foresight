@@ -493,3 +493,13 @@ def test_wiring_unverified_must_carry_a_reason(export, editable):
     editable("tools/boundary_inventory.json", blank)
     failing(export, "gate integration-virtual-audio: wiring_unverified_reason needs a reason")
     assert inventory.load(ROOT)["gates"]["integration-virtual-audio"]["wiring_unverified_reason"].strip()
+
+
+@pytest.mark.parametrize("value", [[], "macos.yml:job", ["no-colon"], [3], {"a": "b:c"}])
+def test_wiring_unverified_relies_on_must_name_file_job_entries(export, editable, value):
+    def damage(data):
+        data["gates"]["integration-virtual-audio"]["wiring_unverified_relies_on"] = value
+
+    editable("tools/boundary_inventory.json", damage)
+    failing(export, "gate integration-virtual-audio: wiring_unverified_relies_on must list file:job strings")
+    assert inventory.load(ROOT)["gates"]["integration-virtual-audio"]["wiring_unverified_relies_on"]
