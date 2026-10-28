@@ -694,3 +694,131 @@ def test_packets_created_in_the_same_second_are_ordered_by_their_recorded_start_
     assert report_module.sequence({"invocation": {"started_epoch": True}}) == 0.0 and report_module.sequence({"invocation": {"started_epoch": float("nan")}}) == 0.0
     assert report_module.sequence({"invocation": None}) == 0.0 and report_module.sequence({"invocation": {"started_epoch": "9"}}) == 0.0
     assert report_module.sequence({"invocation": {"started_epoch": 12}}) == 12.0
+
+
+# ------------------------------------------------------------------ review round: memory, timestamps, trust
+
+def many_checks(count, **kwargs):
+    item = packet(0, **kwargs)
+    item["checks"] = [check("alpha-stage", "passed", seconds=1.0) for _ in range(count)]
+    return item
+
+
+def test_a_packet_with_too_many_checks_is_a_rejection_and_makes_the_report_incomplete(tmp_path, capsys):
+    assert report_module.MAX_CHECKS_PER_PACKET == 256
+    write(tmp_path, "ok.json", many_checks(report_module.MAX_CHECKS_PER_PACKET))
+    write(tmp_path, "huge.json", {**many_checks(report_module.MAX_CHECKS_PER_PACKET + 1), "created_utc": "2026-10-02T00:00:00Z"})
+    result = report_module.build_report(tmp_path, INVENTORY, 1)
+    assert count(result, "too-many-checks") == 1 and result["inputs"]["run_packets_used"] == 1
+    assert result["complete"] is False and totals(result)["all_observations"]["observations"] == report_module.MAX_CHECKS_PER_PACKET
+    baseline = tmp_path.parent / "b.json"
+    assert report_module.main([str(tmp_path), "--write-baseline", str(baseline)], inventory=INVENTORY) == 3 and not baseline.exists()
+    assert "too-many-checks 1" in report_module.render(result)
+
+
+def test_the_total_observation_cap_stops_ingestion_and_makes_the_report_incomplete(tmp_path, monkeypatch):
+    monkeypatch.setattr(report_module, "MAX_OBSERVATIONS", 25)
+    for index in range(4):
+        write(tmp_path, f"p{index}.json", many_checks(10) | {"created_utc": f"2026-10-0{index + 1}T00:00:00Z"})
+    result = report_module.build_report(tmp_path, INVENTORY, 1)
+    assert result["complete"] is False and count(result, "observation-cap") == 1
+    assert result["inputs"]["run_packets_used"] == 2 and totals(result)["all_observations"]["observations"] == 20
+
+
+def test_a_parsed_packet_is_not_retained_after_its_rows_are_taken(tmp_path, monkeypatch):
+    import gc
+    import weakref
+
+    class Parsed(dict):
+        pass
+
+    refs = []
+    real = report_module.json.loads
+
+    def tracking(data):
+        gc.collect()
+        assert all(ref() is None for ref in refs), "an earlier parsed packet is still alive while the next is read"
+        parsed = Parsed(real(data))
+        refs.append(weakref.ref(parsed))
+        return parsed
+
+    monkeypatch.setattr(report_module.json, "loads", tracking)
+    for index in range(5):
+        write(tmp_path, f"p{index}.json", packet(index))
+    result = report_module.build_report(tmp_path, INVENTORY, 1)
+    gc.collect()
+    assert len(refs) == 5 and result["inputs"]["run_packets_used"] == 5
+    assert all(ref() is None for ref in refs)
+
+
+def test_a_row_is_a_slotted_record_of_closed_fields_and_nothing_else(tmp_path):
+    rows = report_module.ingest(build_dir(tmp_path, [packet(0)]), {"alpha-stage": ("boundary-one",)})["rows"]
+    [row] = rows
+    assert isinstance(row, report_module.Row) and not hasattr(row, "__dict__")
+    assert row["check"] == "alpha-stage" and row.boundaries == ("boundary-one",)
+    row["attempt"] = "repeat"
+    assert row.attempt == "repeat"
+    with pytest.raises(AttributeError):
+        row.packet = {}
+
+
+@pytest.mark.parametrize("identity", ["g" * 64, "A" * 64, "a" * 63, "a" * 65, "x" * 100_000, "", "../etc/passwd", 7])
+def test_an_identity_that_is_not_a_sha256_is_unidentified_and_never_kept(tmp_path, identity):
+    item = packet(0)
+    item["source"]["identity_sha256"] = identity
+    [row] = report_module.ingest(build_dir(tmp_path, [item]), {"alpha-stage": ()})["rows"]
+    assert row.identity is None and row.attempt == "unidentified"
+
+
+NOW = datetime(2026, 10, 28, 12, 0, 0)
+
+
+def stamped(index, stamp, **kwargs):
+    item = packet(index, **kwargs)
+    item["created_utc"] = stamp
+    return item
+
+
+@pytest.mark.parametrize(
+    ("stamp", "accepted"),
+    [
+        ("1999-01-01T00:00:00Z", False), ("2025-12-31T23:59:59Z", False), ("2026-01-01T00:00:00Z", True), ("2026-10-28T12:00:00Z", True),
+        ("2026-10-29T12:00:00Z", True), ("2026-10-29T12:00:01Z", False), ("2099-01-01T00:00:00Z", False),
+    ],
+)
+def test_a_timestamp_outside_the_plausible_window_is_rejected(tmp_path, stamp, accepted):
+    write(tmp_path, "p.json", stamped(0, stamp))
+    result = report_module.build_report(tmp_path, INVENTORY, 1, now=NOW)
+    assert result["inputs"]["run_packets_used"] == int(accepted) and count(result, "implausible-timestamp") == int(not accepted)
+    assert result["complete"] is True  # a forged date loses nothing real
+
+
+def test_a_back_dated_forgery_cannot_displace_a_real_failed_first_run(tmp_path):
+    same = "f" * 64
+    write(tmp_path, "real.json", stamped(0, "2026-10-01T12:00:00Z", status="failed", identity=same))
+    write(tmp_path, "forged.json", stamped(1, "1999-01-01T00:00:00Z", identity=same))
+    result = report_module.build_report(tmp_path, INVENTORY, 1, now=NOW)
+    assert one(result["by_check"], attempt="first")["failed"] == 1 and count(result, "implausible-timestamp") == 1
+    assert not [row for row in result["by_check"] if row["key"]["attempt"] == "repeat"]
+
+
+def test_the_report_says_its_inputs_are_unauthenticated_and_counts_distinct_sources(tmp_path):
+    items = [packet(0, hosted=True), packet(1, hosted=True), packet(2), packet(3)]
+    for item in items[:2]:  # the same hosted run twice
+        item["environment"].update(GITHUB_RUN_ID="100", GITHUB_RUN_ATTEMPT="1")
+    result = build(tmp_path, items, minimum=1)
+    assert result["sources"] == {"hosted_runs": 1, "local_origins": 1}
+    assert "unauthenticated" in result["trust"] and "pull requests you did not collect yourself" in result["trust"]
+    text = report_module.render(result)
+    assert "Inputs are unauthenticated" in text and "1 hosted runs, 1 local origins" in text
+    nowhere = tmp_path / "nowhere"
+    nowhere.mkdir()
+    assert report_module.build_report(nowhere, INVENTORY, 1)["sources"] == {"hosted_runs": 0, "local_origins": 0}
+    assert "100" not in text  # the run id is counted, never shown
+
+
+def test_a_rerun_attempt_of_a_hosted_run_is_a_distinct_source(tmp_path):
+    items = [packet(0, hosted=True), packet(1, hosted=True), packet(2, hosted=True)]
+    for item, (run, attempt) in zip(items, (("100", "1"), ("100", "2"), ("101", "1")), strict=True):
+        item["environment"].update(GITHUB_RUN_ID=run, GITHUB_RUN_ATTEMPT=attempt)
+    assert build(tmp_path, items, minimum=1)["sources"] == {"hosted_runs": 3, "local_origins": 0}

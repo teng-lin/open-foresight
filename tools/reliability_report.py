@@ -40,11 +40,13 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -61,19 +63,25 @@ MAX_DEPTH = 6  # `gh run download` nests an artifact four directories below the 
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
 TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
 PLATFORMS = ("linux", "macos")
+IDENTITY = re.compile(r"[0-9a-f]{64}")
 # check status -> outcome in ci_stats' vocabulary; only success and failure are eligible for a rate
 OUTCOMES = {"passed": "success", "failed": "failure"}
 EXCLUDED = {
     "unavailable": "unavailable", "not-run": "not-run", "manual": "not-applicable", "ci-only": "not-applicable",
     "subsumed": "subsumed", "planned": "planned",
 }
+MAX_CHECKS_PER_PACKET = 256  # a real packet records fewer than 30 checks
+MAX_OBSERVATIONS = 200_000  # rows kept in memory for the whole report
+EPOCH = datetime(2026, 1, 1)  # no packet can predate the project's evidence format
+FUTURE_SLACK = timedelta(days=1)
 REJECTIONS = (
     "not-a-regular-file", "too-large", "unreadable", "not-json", "not-an-evidence-summary", "invalid-evidence",
-    "bad-timestamp", "duplicate", "file-cap", "byte-budget", "depth-cap",
+    "bad-timestamp", "implausible-timestamp", "duplicate", "file-cap", "byte-budget", "depth-cap", "too-many-checks",
+    "observation-cap",
 )
 # Data that exists but was not read: the report cannot claim to be complete. (Content that is invalid, a duplicate or
 # deliberately ignored, such as a symlink, is a rejection that loses nothing.)
-INCOMPLETE = ("unreadable", "too-large", "file-cap", "byte-budget", "depth-cap")
+INCOMPLETE = ("unreadable", "too-large", "file-cap", "byte-budget", "depth-cap", "too-many-checks", "observation-cap")
 
 
 def collect_files(directory: Path) -> tuple[list[Path], Counter[str], bool]:
@@ -172,7 +180,31 @@ def classify(check: Mapping[str, Any]) -> tuple[str, str | None]:
     return EXCLUDED.get(status, "unknown"), EXCLUDED.get(status, "unknown")
 
 
-def observations(packet: Mapping[str, Any], created: datetime, services: Mapping[str, tuple[str, ...]]) -> list[dict[str, Any]]:
+@dataclass(slots=True)
+class Row:
+    """One check of one run packet, reduced to closed-vocabulary fields; indexable like a mapping."""
+
+    created: datetime
+    identity: str | None
+    check: str
+    boundaries: tuple[str, ...]
+    platform: str
+    origin: str
+    selection: str
+    cache: str
+    outcome: str
+    excluded: str | None
+    seconds: float | None
+    attempt: str = "unidentified"
+
+    def __getitem__(self, name: str) -> Any:
+        return getattr(self, name)
+
+    def __setitem__(self, name: str, value: Any) -> None:
+        setattr(self, name, value)
+
+
+def observations(packet: Mapping[str, Any], created: datetime, services: Mapping[str, tuple[str, ...]]) -> list[Row]:
     """One observation per recorded check of a run packet, with only closed-vocabulary fields."""
     platform = packet["host"].get("platform")
     environment = packet["environment"]
@@ -183,21 +215,30 @@ def observations(packet: Mapping[str, Any], created: datetime, services: Mapping
         name = check["id"]
         outcome, excluded = classify(check)
         result.append(
-            {
-                "created": created,
-                "identity": identity if isinstance(identity, str) and identity else None,
-                "check": name if name in services else "unknown-check",
-                "boundaries": services.get(name, ()),
-                "platform": platform if platform in PLATFORMS else "other",
-                "origin": "hosted" if environment.get("GITHUB_ACTIONS") == "true" else "local",
-                "selection": "conservative" if selection is True else "narrowed" if selection is False else "unknown",
-                "cache": cache_state(check),
-                "outcome": outcome,
-                "excluded": excluded,
-                "seconds": finite_seconds(check.get("seconds")) if outcome in ("success", "failure") else None,
-            }
+            Row(
+                created=created,
+                identity=identity if isinstance(identity, str) and IDENTITY.fullmatch(identity) else None,
+                check=name if name in services else "unknown-check",
+                boundaries=services.get(name, ()),
+                platform=platform if platform in PLATFORMS else "other",
+                origin="hosted" if environment.get("GITHUB_ACTIONS") == "true" else "local",
+                selection="conservative" if selection is True else "narrowed" if selection is False else "unknown",
+                cache=cache_state(check),
+                outcome=outcome,
+                excluded=excluded,
+                seconds=finite_seconds(check.get("seconds")) if outcome in ("success", "failure") else None,
+            )
         )
     return result
+
+
+def source_key(packet: Mapping[str, Any]) -> str:
+    """Which run or machine a packet came from, as an opaque key that is counted and never shown."""
+    environment = packet["environment"]
+    if environment.get("GITHUB_ACTIONS") == "true":
+        return "hosted:" + str(environment.get("GITHUB_RUN_ID")) + ":" + str(environment.get("GITHUB_RUN_ATTEMPT"))
+    account = packet["account"]
+    return "local:" + str(account.get("uid")) + ":" + str((account.get("nss") or {}).get("name")) + ":" + str(packet["host"].get("release"))
 
 
 def sequence(packet: Mapping[str, Any]) -> float:
@@ -206,13 +247,19 @@ def sequence(packet: Mapping[str, Any]) -> float:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else 0.0
 
 
-def ingest(directory: Path, services: Mapping[str, tuple[str, ...]]) -> dict[str, Any]:
+def ingest(directory: Path, services: Mapping[str, tuple[str, ...]], now: datetime | None = None) -> dict[str, Any]:
     files, rejected, complete = collect_files(directory)
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     seen: set[str] = set()
-    packets: list[tuple[datetime, float, str, Mapping[str, Any]]] = []
+    sources: set[str] = set()
+    # Each packet is reduced to its rows at once and dropped: nothing parsed is retained.
+    kept: list[tuple[datetime, float, str, list[Row]]] = []
     budget = MAX_TOTAL_BYTES
+    total = 0
     plans = 0
+    packet: Any = None
     for path in files:
+        packet = None  # the previous packet is released before the next one is read
         data, reason = read_packet(path)
         if data is None:
             rejected[reason or "unreadable"] += 1
@@ -220,7 +267,6 @@ def ingest(directory: Path, services: Mapping[str, tuple[str, ...]]) -> dict[str
         budget -= len(data)
         if budget < 0:
             rejected["byte-budget"] += 1
-            complete = False
             break
         digest = hashlib.sha256(data).hexdigest()
         if digest in seen:
@@ -232,8 +278,12 @@ def ingest(directory: Path, services: Mapping[str, tuple[str, ...]]) -> dict[str
         except (ValueError, RecursionError):
             rejected["not-json"] += 1
             continue
+        del data
         if not isinstance(packet, dict) or packet.get("kind") != validation_evidence.KIND:
             rejected["not-an-evidence-summary"] += 1
+            continue
+        if isinstance(packet.get("checks"), list) and len(packet["checks"]) > MAX_CHECKS_PER_PACKET:
+            rejected["too-many-checks"] += 1
             continue
         try:
             validation_evidence.validate_summary(packet)
@@ -241,19 +291,23 @@ def ingest(directory: Path, services: Mapping[str, tuple[str, ...]]) -> dict[str
             if created is None:
                 rejected["bad-timestamp"] += 1
                 continue
+            if not EPOCH <= created <= now + FUTURE_SLACK:
+                rejected["implausible-timestamp"] += 1
+                continue
             if packet["mode"] != "run":
                 plans += 1
                 continue
-            packets.append((created, sequence(packet), digest, packet))
+            rows = observations(packet, created, services)
+            if total + len(rows) > MAX_OBSERVATIONS:
+                rejected["observation-cap"] += 1
+                break
+            total += len(rows)
+            sources.add(source_key(packet))
+            kept.append((created, sequence(packet), digest, rows))
         except Exception:  # noqa: BLE001 - untrusted input: whatever it breaks is a rejection, not a traceback
             rejected["invalid-evidence"] += 1
-    packets.sort(key=lambda item: (item[0], item[1], item[2]))
-    rows: list[dict[str, Any]] = []
-    for created, _sequence, _digest, packet in packets:
-        try:
-            rows.extend(observations(packet, created, services))
-        except Exception:  # noqa: BLE001
-            rejected["invalid-evidence"] += 1
+    kept.sort(key=lambda item: (item[0], item[1], item[2]))
+    rows = [row for _created, _sequence, _digest, items in kept for row in items]
     first_seen: set[tuple[Any, ...]] = set()
     for row in rows:
         key = (row["identity"], row["check"], row["platform"], row["origin"])
@@ -266,7 +320,10 @@ def ingest(directory: Path, services: Mapping[str, tuple[str, ...]]) -> dict[str
         else:
             row["attempt"] = "first"
             first_seen.add(key)
-    return {"rows": rows, "rejected": rejected, "complete": complete, "plans": plans, "packets": len(packets), "files": len(files)}
+    return {
+        "rows": rows, "rejected": rejected, "complete": complete, "plans": plans, "packets": len(kept), "files": len(files),
+        "sources": sources,
+    }
 
 
 def summarize(rows: Sequence[Mapping[str, Any]], minimum: int) -> dict[str, Any]:
@@ -335,9 +392,9 @@ def overall(rows: Sequence[Mapping[str, Any]], minimum: int) -> list[dict[str, A
     return result
 
 
-def build_report(directory: Path, inventory: Mapping[str, Any], minimum: int = DEFAULT_MINIMUM_SAMPLE) -> dict[str, Any]:
+def build_report(directory: Path, inventory: Mapping[str, Any], minimum: int = DEFAULT_MINIMUM_SAMPLE, now: datetime | None = None) -> dict[str, Any]:
     services, _boundaries = known_ids(inventory)
-    ingested = ingest(directory, services)
+    ingested = ingest(directory, services, now)
     rows = ingested["rows"]
     rejected = {reason: ingested["rejected"].get(reason, 0) for reason in REJECTIONS}
     complete = ingested["complete"] and not any(rejected[reason] for reason in INCOMPLETE)
@@ -352,6 +409,11 @@ def build_report(directory: Path, inventory: Mapping[str, Any], minimum: int = D
             "last": max(stamps).strftime(TIMESTAMP) if stamps else None,
         },
         "baseline": "fresh: this window only; no earlier or frozen window is read or compared",
+        "trust": TRUST,
+        "sources": {
+            "hosted_runs": sum(1 for key in ingested["sources"] if key.startswith("hosted:")),
+            "local_origins": sum(1 for key in ingested["sources"] if key.startswith("local:")),
+        },
         "inputs": {
             "files_considered": ingested["files"], "run_packets_used": ingested["packets"],
             "plan_only_packets_not_counted": ingested["plans"], "rejected": rejected,
@@ -374,6 +436,12 @@ def build_report(directory: Path, inventory: Mapping[str, Any], minimum: int = D
     }
 
 
+TRUST = (
+    "Inputs are unauthenticated: this report describes the packets it was given and is only as trustworthy as the directory. "
+    "Do not point it at artifacts from pull requests you did not collect yourself."
+)
+
+
 def _cell(value: Any) -> str:
     if value is None:
         return "-"
@@ -394,6 +462,7 @@ def render(report: Mapping[str, Any]) -> str:
         "# Validation reliability report",
         "",
         f"Window: {window['first'] or 'none'} to {window['last'] or 'none'}. {report['baseline']}.",
+        f"{report['trust']} Distinct sources in this window: {report['sources']['hosted_runs']} hosted runs, {report['sources']['local_origins']} local origins.",
         f"Complete: {'yes' if report['complete'] else 'NO, a cap cut the read short'}. Minimum sample: {report['minimum_sample']} eligible runs.",
         "",
         "## Inputs",

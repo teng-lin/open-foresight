@@ -330,15 +330,28 @@ boundary. It reuses `ci_stats.failure_rate` and `ci_stats.percentile`.
 
 What it refuses to do is the point:
 
+- **Inputs are unauthenticated.** The report cannot tell a real packet from a forged
+  one: it describes the packets it was given and is only as trustworthy as the
+  directory. Do not point it at artifacts from pull requests you did not collect
+  yourself. The report says so in its header and `trust` field, and counts (never
+  shows) the distinct hosted runs and local origins behind its window. A
+  `created_utc` before 2026-01-01 or more than a day in the future is rejected as
+  implausible, so a back-dated forgery cannot take a real failure's first-run slot;
+  that is a cheap check, not authentication, and a plausibly dated forgery still
+  counts. A change identity is used only if it is a lowercase SHA-256 hex digest.
 - **Packets are untrusted.** Only regular files (never symlinks) up to 8 MiB are
   read, to a depth of 6 directories (a `gh run download` layout nests an artifact
   four deep), with caps of 5000 files, 500 directories and 256 MiB in total. Each
   packet must pass the evidence validation. Rejections are counted by class (not a
   regular file, too large, unreadable, not JSON, not an evidence summary, invalid,
-  bad timestamp, duplicate, depth cap, file cap, byte budget) and never shown. Data
+  bad or implausible timestamp, duplicate, depth cap, file cap, byte budget, too many
+  checks, observation cap) and never shown. Data
   that exists but was not read makes the report incomplete: a directory deeper than
   the cap, an unlistable directory, an unreadable or oversized file, a hit file,
-  directory or byte cap. An incomplete report is printed with that marked, the exit
+  directory or byte cap, a packet with more than 256 checks, and more than 200,000
+  observations in all. Each packet is reduced to its observations at once and
+  dropped, so memory is bounded by the observation cap, not by the bytes read. An
+  incomplete report is printed with that marked, the exit
   status is 3, and no baseline is written from it. Content that is invalid, a
   duplicate, a symlink or a pipe loses nothing and leaves it complete.
 - **Nothing a packet wrote is printed.** Groups use gate ids (of any kind, so manual
