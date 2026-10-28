@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/desktop.dart';
-import 'package:foresight_core/src/meeting_attribution.dart';
+import '../test_support/core_fixture.dart';
 import 'package:open_foresight/shell/workspace_tab.dart';
 
 import 'controller_fixture.dart';

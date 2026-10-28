@@ -33,7 +33,6 @@ part 'notes_view.dart';
 part 'assistant_views.dart';
 part 'ai_views.dart';
 part 'audio_views.dart';
-part 'transcript_actions.dart';
 
 const _meetingAssistantMinWidth = 760.0;
 
