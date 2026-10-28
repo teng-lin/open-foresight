@@ -382,7 +382,9 @@ void main() {
       type: InternetAddressType.unix,
     );
     await server.serve(address: address, port: 0);
+    addTearDown(server.shutdown);
     final socket = await Socket.connect(address, 0);
+    addTearDown(socket.destroy);
     unawaited(
       socket.done.then<void>(
         (_) {},
