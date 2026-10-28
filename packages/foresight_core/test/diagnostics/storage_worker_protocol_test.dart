@@ -806,20 +806,25 @@ void main() {
         held = false;
         holder.close();
         expect(ownAdmissionDescriptors(path), ownBefore);
-        // The deferral changed no state. A description inherited by a
-        // concurrent fork may outlive holder.close() until that child execs, so
-        // only a confirmed-held retry is tolerated, within the default bound.
+        // A description inherited by a concurrent fork may outlive
+        // holder.close() until that child execs. Observe the lock itself, within
+        // the default bound, until the checked probe acquires it; held is that
+        // known window, anything else is unexplained. Then call the product once.
         await eventually(
           () {
-            final reply = classify(worker);
-            if (reply.result == DiagnosticWorkerResult.ok) return true;
-            expect(reply.result, DiagnosticWorkerResult.retry);
-            expect(probeAdmissionLock(path), AdmissionLockProbe.held);
-            return false;
+            final probe = probeAdmissionLock(path);
+            expect(
+              probe,
+              anyOf(AdmissionLockProbe.free, AdmissionLockProbe.held),
+              reason: 'unexplained admission lock state',
+            );
+            return probe == AdmissionLockProbe.free;
           },
-          label: 'classify succeeds once admission contention clears',
+          label: 'inherited admission description released',
           describe: () => admissionLockEvidence(path),
         );
+        // The deferral changed no state: the same request now succeeds.
+        expectWorkerOk(classify(worker), path, 'classify after release');
         expect(
           worker.handle(6, jsonBytes(record())).result,
           DiagnosticWorkerResult.ok,
