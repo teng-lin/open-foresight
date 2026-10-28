@@ -161,7 +161,7 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
             children: [
               Text(
                 capture
-                    ? 'Audio will be captured while the desktop recording controls are visible. Closing or hiding the app stops recording.'
+                    ? 'Recording continues while you use another app or hide this window. Use Stop or close Open Foresight to finish recording.'
                     : action,
               ),
               const SizedBox(height: 16),

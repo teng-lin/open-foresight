@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'application_services/recording_audio_work.dart';
@@ -7,6 +8,8 @@ import 'native_lifetime.dart';
 import 'persistence/recording_media.dart';
 import 'recording_capture.dart';
 import 'rpc_error.dart';
+import 'service_diagnostics.dart';
+import 'diagnostics/events.dart';
 
 abstract interface class DurableCaptureRoute {
   RecordingCaptureSnapshot poll();
@@ -122,6 +125,7 @@ final class DurableCaptureController {
   final Timer Function(Duration, void Function()) createTimer;
   final void Function(String) state;
   final void Function() changed;
+  final _diagnostics = captureServiceDiagnosticEmitter();
   AudioSession? session;
   AudioSpan? _span;
   final _routes = <_Route>[];
@@ -205,7 +209,7 @@ final class DurableCaptureController {
       );
       return _starting = _startSpan().whenComplete(() => _starting = null);
     } catch (error, stack) {
-      _fail(error, stack);
+      _fail(error, stack, stage: DiagnosticCaptureStage.start);
       rethrow;
     }
   }
@@ -269,7 +273,9 @@ final class DurableCaptureController {
       poll();
       _schedule();
     } catch (error, stack) {
-      if (!_stopRequested) _fail(error, stack);
+      if (!_stopRequested) {
+        _fail(error, stack, stage: DiagnosticCaptureStage.start);
+      }
       try {
         await _finishSpan('interrupted');
       } catch (_) {}
@@ -342,7 +348,7 @@ final class DurableCaptureController {
       }
       changed();
     } catch (error, stack) {
-      _fail(error, stack);
+      _fail(error, stack, stage: DiagnosticCaptureStage.poll);
     }
   }
 
@@ -413,7 +419,11 @@ final class DurableCaptureController {
       );
     }
     if (snapshot.error != null) {
-      _fail(StateError(snapshot.error!), StackTrace.current);
+      _fail(
+        StateError(snapshot.error!),
+        StackTrace.current,
+        stage: DiagnosticCaptureStage.nativeRoute,
+      );
     }
   }
 
@@ -431,7 +441,7 @@ final class DurableCaptureController {
           _hint(() => work.published(chunk));
         } catch (error, stack) {
           _spanPublicationFailed = true;
-          _fail(error, stack);
+          _fail(error, stack, stage: DiagnosticCaptureStage.publish);
         }
       }
     }().whenComplete(() => route.publishing = null);
@@ -462,7 +472,9 @@ final class DurableCaptureController {
     route.reserving = route.owner
         .reserve(values)
         .catchError((Object error, StackTrace stack) {
-          if (_sealing == null && !_stopRequested) _fail(error, stack);
+          if (_sealing == null && !_stopRequested) {
+            _fail(error, stack, stage: DiagnosticCaptureStage.reserve);
+          }
         })
         .whenComplete(() => route.reserving = null);
   }
@@ -500,7 +512,7 @@ final class DurableCaptureController {
       _emit('Recording paused');
       changed();
     } catch (error, stack) {
-      _fail(error, stack);
+      _fail(error, stack, stage: DiagnosticCaptureStage.pause);
       rethrow;
     }
   }
@@ -587,7 +599,7 @@ final class DurableCaptureController {
         try {
           media.audio.setCaptureState(session!.id, AudioCaptureState.stopping);
         } catch (error, stack) {
-          _fail(error, stack);
+          _fail(error, stack, stage: DiagnosticCaptureStage.stopState);
         }
         await _finishSpan(_failure == null ? 'stop' : 'interrupted');
         media.audio.setCaptureState(
@@ -603,7 +615,7 @@ final class DurableCaptureController {
       if (_failure != null) _throwFailure();
       _emit('Audio saved · transcription continues in the background');
     } catch (error, stack) {
-      _fail(error, stack);
+      _fail(error, stack, stage: DiagnosticCaptureStage.finish);
       if (session != null && _span == null) {
         try {
           if (!media.audio.session(session!.id)!.captureState.terminal) {
@@ -638,10 +650,26 @@ final class DurableCaptureController {
     state(value);
   }
 
-  void _fail(Object error, StackTrace stack) {
+  void _fail(
+    Object error,
+    StackTrace stack, {
+    required DiagnosticCaptureStage stage,
+  }) {
     if (_failure != null) return;
     _failure = error;
     _failureStack = stack;
+    try {
+      _diagnostics?.emit(
+        DiagnosticEvent.captureFailed,
+        fields: () => {
+          DiagnosticField.stage: stage,
+          if (error is FileSystemException && error.osError != null)
+            DiagnosticField.status: error.osError!.errorCode,
+        },
+      );
+    } catch (_) {
+      // Retain the first production failure even if diagnostics cannot accept it.
+    }
     currentVolumes.fillRange(0, currentVolumes.length, 0);
     _echo['active'] = false;
     lastError =

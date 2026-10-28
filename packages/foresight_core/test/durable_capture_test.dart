@@ -8,12 +8,15 @@ import 'package:foresight_core/src/persistence/audio_store.dart';
 import 'package:foresight_core/src/persistence/recording_media.dart';
 import 'package:foresight_core/src/recording.dart';
 import 'package:foresight_core/src/store.dart';
+import 'package:foresight_core/src/service_diagnostics.dart';
+import 'package:foresight_core/src/diagnostics/session.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:test/test.dart';
 
 import 'sql_support_test_bootstrap.dart';
 import 'fixtures/durable_capture_routes.dart';
+import 'diagnostics/test_sinks.dart';
 
 final class Work implements RecordingAudioWorkPort {
   final prepared = <AudioSpan>[], sealed = <AudioSpan>[];
@@ -133,6 +136,71 @@ void main() {
       expect(platform.routes.every((r) => r.retired), isTrue);
     },
   );
+
+  for (final publication in [false, true]) {
+    test(
+      'capture diagnostics retain the first ${publication ? 'publication' : 'native route'} failure without payloads',
+      () async {
+        final output = SinkCapture();
+        final logging = await LoggingSession.startForTesting(
+          configuration: const DiagnosticConfiguration(),
+          profilePath: io.File(store.path).parent.path,
+          sinkFactory: memorySink(output.port.sendPort),
+        );
+        await logging.producer.ready;
+        final previous = owner;
+        await previous.stop();
+        owner = runWithServiceDiagnostics(
+          logging.producer,
+          () => DurableCaptureController(
+            media: media,
+            meetingId: previous.meetingId,
+            modelRevision: previous.modelRevision,
+            work: work,
+            platform: platform,
+            now: previous.now,
+            createTimer: previous.createTimer,
+            state: states.add,
+            changed: () {},
+          ),
+        );
+        try {
+          await owner.start();
+          if (publication) {
+            platform.routes.first.audio(0, corrupt: true);
+          } else {
+            platform.routes.first.error = 'private capture failure canary';
+          }
+          owner.poll();
+          await expectLater(
+            owner.stop(),
+            publication ? throwsFormatException : throwsStateError,
+          );
+          expect(platform.routes.every((r) => r.retired), isTrue);
+          owner.poll();
+          await logging.close();
+          expect(logging.health.admitted, greaterThan(0));
+          expect(logging.producer.rejected, 0);
+          await output.closed.future.timeout(const Duration(seconds: 5));
+          final failures = output.records.where(
+            (r) => r['event'] == 'capture.failed',
+          );
+          expect(failures, hasLength(1));
+          expect(
+            (failures.single['fields'] as Map)['stage'],
+            publication ? 'publish' : 'nativeRoute',
+          );
+          expect(
+            output.records.toString(),
+            isNot(contains('private capture failure canary')),
+          );
+        } finally {
+          await logging.close();
+          output.dispose();
+        }
+      },
+    );
+  }
   test(
     'more than four retained silent chunks survive Stop without ASR drain',
     () async {

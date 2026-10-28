@@ -23,6 +23,7 @@ import 'profile_paths.dart';
 import 'rpc_error.dart';
 import 'service_admission.dart';
 import 'service_diagnostics.dart';
+import 'diagnostics/events.dart';
 import 'service_gates.dart';
 import 'service_framing.dart';
 import 'service_lifetime.dart';
@@ -770,6 +771,7 @@ class ApplicationService {
       unawaited(
         application
             .stopRecording(
+              cause: DiagnosticCaptureStopReason.desktopDisconnected,
               reason:
                   'Recording stopped because the desktop connection closed.',
             )
@@ -911,8 +913,8 @@ class ApplicationService {
     },
     onDetached: _exitIfIdle,
     stopRecording: () => application.stopRecording(
-      reason:
-          'Recording stopped because the desktop was hidden or disconnected.',
+      cause: DiagnosticCaptureStopReason.desktopDetached,
+      reason: 'Recording stopped because the desktop connection detached.',
     ),
     preference: domain.store.preference,
     setPreference: domain.store.setPreference,

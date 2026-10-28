@@ -28,6 +28,9 @@ void main() {
                 DiagnosticField.category => DiagnosticCategory.unavailable,
                 DiagnosticField.outcome => DiagnosticOutcome.completed,
                 DiagnosticField.provider => DiagnosticProvider.unknown,
+                DiagnosticField.reason =>
+                  DiagnosticCaptureStopReason.transcriptStorageFailure,
+                DiagnosticField.stage => DiagnosticCaptureStage.nativeRoute,
                 DiagnosticField.event => DiagnosticEvent.invalidConfiguration,
                 DiagnosticField.active ||
                 DiagnosticField.enabled ||
