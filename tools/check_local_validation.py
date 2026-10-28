@@ -49,14 +49,30 @@ def workflow_lint() -> int:
     if failed:
         return 1
     return subprocess.run(
-        [executables["actionlint"]], cwd=ROOT, timeout=300, check=False
+        [executables["actionlint"], *workflow_files()], cwd=ROOT, timeout=300, check=False
     ).returncode
+
+
+def workflow_files() -> list[str]:
+    """Explicit workflow files when no Git root exists, else nothing (project discovery).
+
+    actionlint finds its project by searching parents for `.git` and refuses to run
+    in a source export without one. Naming the same files it would discover keeps
+    the guard identical inside a repository and working in an archive.
+    """
+    if any((directory / ".git").exists() for directory in (ROOT, *ROOT.parents)):
+        return []
+    workflows = ROOT / ".github/workflows"
+    return sorted(
+        path.relative_to(ROOT).as_posix() for pattern in ("*.yml", "*.yaml") for path in workflows.glob(pattern)
+    )
 
 
 def shared_tasks(python: str) -> list[tuple[str, list[str]]]:
     """Cross-language metadata checks run even when only Dart files changed."""
     return [
         ("skip-inventory", [python, "tools/check_integration_inventory.py"]),
+        ("boundary-inventory", [python, "-m", "tools.boundary_inventory"]),
         ("document-links", [python, "-m", "tools.check_document_links"]),
         ("subprocess-timeouts", [python, "tools/check_subprocess_timeouts.py"]),
         ("ruff", [python, "-m", "ruff", "check", "."]),

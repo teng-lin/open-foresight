@@ -38,6 +38,7 @@ recording backups. [CONTRIBUTING](../CONTRIBUTING.md) covers development checks;
 ## Testing and releases
 
 - [Integration and model/device gates](testing.md)
+- [Boundary validation and evidence](boundary-validation.md)
 - [Installed GUI approval](installed-gui-approval.md)
 - [Installer acceptance](release-acceptance.md)
 - [CI, dependency reuse and preview installers](ci.md)

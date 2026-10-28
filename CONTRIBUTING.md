@@ -116,6 +116,21 @@ coverage gate after the shared guards pass. This command supplements the native,
 Dart, service and platform acceptance commands above; it does not certify
 unexecuted platforms. Evidence paths are printed and remain available on failure.
 
+To see which boundaries a change reaches, run the applicable existing entrypoints
+and record what remains unverified, use the planner:
+
+```sh
+.venv/bin/python -m tools.validate_change --base origin/main --plan
+.venv/bin/python -m tools.validate_change --base origin/main
+```
+
+It selects downstream consumers (shared test support, bindings, native ABI,
+runtime configuration, packaging, toolchain and orchestration inputs), keeps
+unknown inputs conservative, and never narrows a required CI check. It writes an
+evidence summary and exits nonzero unless every selected check passed on every
+needed platform. Without Git metadata, pass `--files`. See
+[boundary validation](docs/boundary-validation.md).
+
 CI runs `ruff check .`, `mypy`, and `python tools/check_subprocess_timeouts.py`.
 Install the pinned development requirements first. Mypy checks every production
 Python script, including unannotated function bodies; tests with dynamic native
