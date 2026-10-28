@@ -1,3 +1,4 @@
+import 'fixtures/owned_rpc_server.dart';
 import 'sql_support_test_bootstrap.dart';
 import 'package:foresight_test_support/transcript_index_service.dart';
 import 'package:foresight_test_support/desktop_identity.dart';
@@ -8,6 +9,7 @@ import 'dart:io';
 import 'package:clock/clock.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
+import 'package:foresight_core/src/helper_channel.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/capture_process.dart';
 import 'package:foresight_test_support/hooked_service.dart';
@@ -141,56 +143,6 @@ class CleanupRuntime extends ArtifactGenerator {
       if (failCleanup) throw StateError('fixture stream cleanup failed');
     }
   }
-}
-
-// These peers belong to the fixture, including connections accepted while its
-// service is closing. Graceful gRPC shutdown alone can await an unfinished peer
-// stream forever. Fence acceptance, retire our sockets, then join transports.
-final class _FixtureRpcServer {
-  _FixtureRpcServer({required List<Service> services})
-    : _server = Server.create(services: services);
-  final Server _server;
-  late final ServerSocket _listener;
-  late final StreamSubscription<Socket> _accepts;
-  final _sockets = <Socket>[];
-  final _serving = <Future<void>>[];
-  Future<void>? _closing;
-  Map<ServerTransportConnection, Iterable<ServiceCall>> get handlers =>
-      _server.handlers;
-
-  Future<void> serve({
-    required InternetAddress address,
-    required int port,
-  }) async {
-    _listener = await ServerSocket.bind(address, port);
-    _accepts = _listener.listen((socket) {
-      _sockets.add(socket);
-      final serving = _server.serveConnection(
-        connection: ServerTransportConnection.viaSocket(socket),
-      );
-      _serving.add(serving);
-      serving.ignore();
-    });
-  }
-
-  Future<void> shutdown() => _closing ??= () async {
-    print('RPC_FIXTURE_CLOSE phase=0 sockets=${_sockets.length}');
-    await _listener.close();
-    await _accepts.cancel();
-    final connections = _server.handlers.keys.toList();
-    print('RPC_FIXTURE_CLOSE phase=1 connections=${connections.length}');
-    for (final socket in _sockets) {
-      socket.destroy();
-    }
-    await Future.wait([
-      ..._serving,
-      for (final connection in connections) connection.terminate(),
-    ]);
-    print('RPC_FIXTURE_CLOSE phase=2');
-    await _server.shutdown();
-    await eventually(() => _server.handlers.isEmpty);
-    print('RPC_FIXTURE_CLOSE phase=3');
-  }();
 }
 
 void main() {
@@ -351,7 +303,7 @@ void main() {
       store.close();
     }
     final rag = ResumeRag();
-    final server = _FixtureRpcServer(
+    final server = OwnedRpcServer(
       services: [rag, AdoptionControl(control.State())],
     );
     await server.serve(
@@ -376,7 +328,7 @@ void main() {
   }
 
   test('fixture shutdown retires an unfinished real RPC stream', () async {
-    final server = _FixtureRpcServer(services: [EmbeddingService()]);
+    final server = OwnedRpcServer(services: [EmbeddingService()]);
     final address = InternetAddress(
       '${profile.runtime}/fixture.sock',
       type: InternetAddressType.unix,
@@ -427,6 +379,46 @@ void main() {
     }
   });
 
+  test('fixture teardown closes its owned pending RPC transport', () async {
+    final rag = EmbeddingService()..embeddingGate = Completer<void>();
+    final path = '${root.path}/owned.sock';
+    final fixture = await OwnedRpcServer.start(
+      Server.create(services: [rag]),
+      path,
+    );
+    final channel = HelperChannel(
+      InternetAddress(path, type: InternetAddressType.unix),
+      port: 0,
+      options: const ChannelOptions(credentials: ChannelCredentials.insecure()),
+    );
+    Object? callError;
+    final observed = RagServiceClient(channel)
+        .computeEmbedding(ComputeEmbeddingRequest(text: 'owned fixture'))
+        .then<void>(
+          (_) {},
+          onError: (Object error) {
+            callError = error;
+          },
+        );
+    addTearDown(() async {
+      if (!rag.embeddingGate!.isCompleted) rag.embeddingGate!.complete();
+      await channel.shutdown();
+      await observed;
+    });
+    try {
+      await rag.embeddingEntered.future.timeout(const Duration(seconds: 3));
+      await fixture.close().timeout(const Duration(seconds: 3));
+      await observed.timeout(const Duration(seconds: 3));
+      expect(callError, isA<GrpcError>());
+      expect(rag.embeddingGate!.isCompleted, isFalse);
+    } finally {
+      if (!rag.embeddingGate!.isCompleted) rag.embeddingGate!.complete();
+      // Retire the controlled old-code timeout without leaving its listener peer.
+      for (final socket in fixture.sockets) {
+        socket.destroy();
+      }
+    }
+  });
   test(
     'status lifetime numbers preserve fractional preferences without stamping',
     () async {
@@ -895,7 +887,7 @@ void main() {
     'desktop departure waits for an executing serialized mutation',
     () async {
       final rag = DelayedIndexService();
-      final server = _FixtureRpcServer(
+      final server = OwnedRpcServer(
         services: [rag, TranscriptIndexService(rag)],
       );
       await server.serve(
@@ -937,7 +929,7 @@ void main() {
     'desktop departure cancels and joins leased import indexing before idle exit',
     () async {
       final rag = DelayedIndexService();
-      final server = _FixtureRpcServer(
+      final server = OwnedRpcServer(
         services: [rag, TranscriptIndexService(rag)],
       );
       await server.serve(
@@ -1196,7 +1188,7 @@ void main() {
     'unleased model configuration holds idle exit until the helper operation settles',
     () async {
       final rag = ResumeRag();
-      final server = _FixtureRpcServer(
+      final server = OwnedRpcServer(
         services: [rag, TranscriptIndexService(rag)],
       );
       await server.serve(
@@ -1236,7 +1228,7 @@ void main() {
         'UNLEASED_NOTES_PHASE ${jsonEncode({'phase': phase, 'elapsed_us': phaseClock.elapsedMicroseconds, 'embedding_entered': rag.embeddingEntered.isCompleted, 'work_settled': workSettled, 'work_error_type': workError, 'active_enhancements': service.application.activeEnhancements, 'transcript_computing': service.application.transcriptComputing})}',
       );
       mark(0);
-      final server = _FixtureRpcServer(
+      final server = OwnedRpcServer(
         services: [rag, TranscriptIndexService(rag)],
       );
       await server.serve(
@@ -1320,7 +1312,7 @@ void main() {
     'cancelled proactive retrieval drains without waiting for its server response',
     () async {
       final rag = ProactiveRag()..release.complete();
-      final server = _FixtureRpcServer(
+      final server = OwnedRpcServer(
         services: [rag, TranscriptIndexService(rag)],
       );
       await server.serve(
@@ -1373,7 +1365,7 @@ void main() {
     'cancelled proactive generation stays busy until native cleanup settles',
     () async {
       final rag = StreamRag()..release.complete();
-      final server = _FixtureRpcServer(
+      final server = OwnedRpcServer(
         services: [rag, TranscriptIndexService(rag)],
       );
       await server.serve(
@@ -1450,7 +1442,7 @@ void main() {
     'unleased meeting indexing holds idle exit only while its helper mutation executes',
     () async {
       final rag = DelayedIndexService();
-      final server = _FixtureRpcServer(
+      final server = OwnedRpcServer(
         services: [rag, TranscriptIndexService(rag)],
       );
       await server.serve(
@@ -1502,7 +1494,7 @@ void main() {
       'streamed answer $mode stays dispatched until its cleanup settles',
       () async {
         final rag = StreamRag()..release.complete();
-        final server = _FixtureRpcServer(
+        final server = OwnedRpcServer(
           services: [rag, TranscriptIndexService(rag)],
         );
         await server.serve(
@@ -1725,7 +1717,7 @@ while True:
     'orphaned live transcript embedding alone refuses idle shutdown until settled',
     () async {
       final rag = EmbeddingService()..embeddingGate = Completer<void>();
-      final server = _FixtureRpcServer(
+      final server = OwnedRpcServer(
         services: [rag, TranscriptIndexService(rag)],
       );
       await server.serve(
@@ -1918,7 +1910,7 @@ while True:
     'workspace clear leaves an orphaned enhancement producer busy until embedding settles',
     () async {
       final rag = EmbeddingService()..embeddingGate = Completer<void>();
-      final server = _FixtureRpcServer(
+      final server = OwnedRpcServer(
         services: [rag, TranscriptIndexService(rag)],
       );
       await server.serve(

@@ -798,36 +798,53 @@ void main() {
       throwsA(isA<DiagnosticStorageUnavailable>()),
     );
   });
-  test('tampered other slot cannot prevent genuine failure classification', () {
-    final profile = _profile();
-    final storage = DiagnosticStorage.admit(
-      profile,
-      DiagnosticIdentity.random(),
-      DiagnosticRole.service,
-    )!;
-    addTearDown(storage.close);
-    final other = storage.slot == 0 ? 1 : 0;
-    Directory('$profile/logs/slot-$other').deleteSync(recursive: true);
-    Link('$profile/logs/slot-$other').createSync(_profile());
-    expect(
-      storage.classify(
+  test(
+    'tampered other slot cannot prevent genuine failure classification',
+    () async {
+      const name =
+          'tampered other slot cannot prevent genuine failure classification';
+      if (await _runAdmissionProcess(name, {
+        'case': 'tampered-classification',
+        'has_error': true,
+        'failure_order': 1,
+        'identity_checks': 1,
+      })) {
+        return;
+      }
+      final profile = _profile();
+      final storage = DiagnosticStorage.admit(
+        profile,
+        DiagnosticIdentity.random(),
         DiagnosticRole.service,
-        error: true,
-        genuineFailure: true,
-      ),
-      isTrue,
-    );
-    expect(storage.failed, isFalse);
-    final value =
-        jsonDecode(
-              File(
-                '$profile/logs/slot-${storage.slot}/manifest.json',
-              ).readAsStringSync(),
-            )
-            as Map;
-    expect(value['has_error'], isTrue);
-    expect(value['failure_order'], 1);
-  });
+      )!;
+      addTearDown(storage.close);
+      final other = storage.slot == 0 ? 1 : 0;
+      Directory('$profile/logs/slot-$other').deleteSync(recursive: true);
+      Link('$profile/logs/slot-$other').createSync(_profile());
+      expect(
+        storage.classify(
+          DiagnosticRole.service,
+          error: true,
+          genuineFailure: true,
+        ),
+        isTrue,
+      );
+      expect(storage.failed, isFalse);
+      final value =
+          jsonDecode(
+                File(
+                  '$profile/logs/slot-${storage.slot}/manifest.json',
+                ).readAsStringSync(),
+              )
+              as Map;
+      expect(value['has_error'], isTrue);
+      expect(value['failure_order'], 1);
+      expect(value['session'], storage.session);
+      print(
+        'STORAGE_ADMISSION_COMPLETE ${jsonEncode({'case': 'tampered-classification', 'has_error': value['has_error'], 'failure_order': value['failure_order'], 'identity_checks': 1})}',
+      );
+    },
+  );
   test(
     'fixed storage rotates three segments with private modes and no inherited descriptors',
     () {
