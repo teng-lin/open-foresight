@@ -101,21 +101,118 @@ MeetingAudioClientActions actions(
 );
 
 void main() {
-  testWidgets('recording capacity estimate becomes explicitly unavailable', (
+  testWidgets(
+    'expanded live playback hides activity through every capture phase',
+    (tester) async {
+      final c = Connection();
+      Future<void> show(MeetingAudioPhysicalState physical) =>
+          tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: Column(
+                  children: [
+                    MeetingAudioPanel(
+                      page: page(
+                        1,
+                        sessions: [session('active')],
+                        physical: physical,
+                        estimatedRemainingRecordingUs: 5400000000,
+                      ),
+                      sessions: [session('active')],
+                      actions: actions(c),
+                      onMore: () {},
+                      hasMore: false,
+                      loading: false,
+                    ),
+                    const Text(
+                      'Meeting notes',
+                      key: ValueKey('notes-position'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+      await show(MeetingAudioPhysicalState.starting);
+      expect(find.byType(Slider), findsNothing);
+      await tester.tap(find.text('Show recording'));
+      await tester.pump();
+      final notes = tester.getTopLeft(
+        find.byKey(const ValueKey('notes-position')),
+      );
+      for (final phase in MeetingAudioPhysicalState.values.where(
+        (phase) => phase != MeetingAudioPhysicalState.idle,
+      )) {
+        await show(phase);
+        expect(find.byType(Slider), findsOneWidget);
+        expect(find.text('Hide recording'), findsOneWidget);
+        expect(find.text('Recording'), findsNothing);
+        expect(find.textContaining('Recording storage'), findsNothing);
+        expect(
+          find.textContaining('Estimated recording time remaining'),
+          findsNothing,
+        );
+        expect(
+          tester.getTopLeft(find.byKey(const ValueKey('notes-position'))),
+          notes,
+        );
+      }
+      await show(MeetingAudioPhysicalState.idle);
+      expect(find.text('Saved recording'), findsOneWidget);
+      expect(find.byTooltip('Play audio'), findsOneWidget);
+      expect(c.calls, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'live capture hides stale audio pages and transient read problems',
+    (tester) async {
+      final c = Connection();
+      for (final current in <AudioMeetingReadPage?>[
+        null,
+        page(1, sessions: [session('stale')]),
+        page(1, supported: false),
+      ]) {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: MeetingAudioPanel(
+                recording: true,
+                page: current,
+                sessions: [session('stale')],
+                actions: actions(c),
+                onMore: () {},
+                hasMore: true,
+                loading: true,
+                problem: 'Recording audio could not be loaded.',
+                onRetry: () {},
+              ),
+            ),
+          ),
+        );
+        expect(find.text('Recording audio could not be loaded.'), findsNothing);
+        expect(find.text('Retry'), findsNothing);
+        expect(find.byType(Slider), findsNothing);
+        expect(
+          find.textContaining('unavailable in this app session'),
+          findsNothing,
+        );
+        expect(find.text('Keep remaining originals'), findsNothing);
+      }
+      expect(c.calls, isEmpty);
+    },
+  );
+
+  testWidgets('saved playback starts collapsed and can be shown or hidden', (
     tester,
   ) async {
-    final c = Connection();
-    Future<void> showCapacity(int? remaining) => tester.pumpWidget(
+    final c = Connection()..reply = (_, _) async => null;
+    await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: MeetingAudioPanel(
-            page: page(
-              1,
-              sessions: [session('active')],
-              physical: MeetingAudioPhysicalState.recording,
-              estimatedRemainingRecordingUs: remaining,
-            ),
-            sessions: [session('active')],
+            page: page(1, sessions: [session('saved')]),
+            sessions: [session('saved')],
             actions: actions(c),
             onMore: () {},
             hasMore: false,
@@ -124,79 +221,21 @@ void main() {
         ),
       ),
     );
-    await showCapacity(5400000000);
-    expect(
-      find.text('Estimated recording time remaining: 1 hr 30 min'),
-      findsOneWidget,
-    );
-    await showCapacity(0);
-    expect(
-      find.text('Estimated recording time remaining: 0 min'),
-      findsOneWidget,
-    );
-    await showCapacity(null);
-    expect(
-      find.text('Estimated recording time remaining: unavailable'),
-      findsOneWidget,
-    );
-    expect(find.textContaining('1 hr 30 min'), findsNothing);
-    expect(find.textContaining('remaining: 0'), findsNothing);
-    expect(c.calls, isEmpty);
-  });
-
-  testWidgets('paused capacity wraps at large text and hides after stop', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(320, 900);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    final semantics = tester.ensureSemantics();
-    try {
-      final c = Connection();
-      Future<void> showCapacity(MeetingAudioPhysicalState physical) =>
-          tester.pumpWidget(
-            MaterialApp(
-              home: Scaffold(
-                body: MediaQuery(
-                  data: const MediaQueryData(textScaler: TextScaler.linear(2)),
-                  child: SingleChildScrollView(
-                    child: MeetingAudioPanel(
-                      page: page(
-                        1,
-                        physical: physical,
-                        estimatedRemainingRecordingUs: 123456000000,
-                      ),
-                      sessions: [session('saved')],
-                      actions: actions(c),
-                      onMore: () {},
-                      hasMore: false,
-                      loading: false,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          );
-      await showCapacity(MeetingAudioPhysicalState.paused);
-      expect(
-        find.text('Estimated recording time remaining: 34 hr 17 min'),
-        findsOneWidget,
-      );
-      expect(
-        find.bySemanticsLabel(RegExp('Estimated recording time remaining')),
-        findsOneWidget,
-      );
-      expect(tester.takeException(), isNull);
-      await showCapacity(MeetingAudioPhysicalState.idle);
-      expect(
-        find.textContaining('Estimated recording time remaining'),
-        findsNothing,
-      );
-      expect(c.calls, isEmpty);
-    } finally {
-      semantics.dispose();
-    }
+    expect(find.text('Show recording'), findsOneWidget);
+    expect(find.byType(Slider), findsNothing);
+    expect(find.textContaining('Recording storage'), findsNothing);
+    await tester.tap(find.text('Show recording'));
+    await tester.pump();
+    expect(find.text('Hide recording'), findsOneWidget);
+    expect(find.byType(Slider), findsOneWidget);
+    expect(find.text('Keep remaining originals'), findsNothing);
+    await tester.tap(find.byTooltip('Play audio'));
+    await tester.pump();
+    expect(c.calls.single.$1, Operation.recordingsPlay);
+    await tester.tap(find.text('Hide recording'));
+    await tester.pump();
+    expect(find.byType(Slider), findsNothing);
+    expect(find.text('Show recording'), findsOneWidget);
   });
 
   test(
@@ -394,6 +433,8 @@ void main() {
         ),
       );
       await show(false);
+      await tester.tap(find.text('Show recording'));
+      await tester.pump();
       expect(
         find.textContaining('unavailable in this app session'),
         findsOneWidget,
@@ -427,6 +468,9 @@ void main() {
         ),
       ),
     );
+    expect(find.text('Audio worker requires restart'), findsNothing);
+    await tester.tap(find.text('Show recording'));
+    await tester.pump();
     expect(find.text('Audio worker requires restart'), findsOneWidget);
     expect(find.byTooltip('Play audio'), findsOneWidget);
     await tester.pump();

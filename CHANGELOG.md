@@ -10,9 +10,10 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
-- Keep routine saved-audio processing messages from repeatedly shifting the
-  recording view. Show the final recording status after capture stops, including
-  failures and the reason for inactivity or desktop-visibility stops.
+- Collapse recording playback behind a Show recording button, hide live storage
+  and activity updates, and remove the remaining-originals switch. Show the final
+  recording status after capture stops, including failures and the reason for
+  inactivity or desktop-visibility stops.
 
 ## [0.1.5] - 2026-10-28
 

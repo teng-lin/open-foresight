@@ -62,6 +62,8 @@ extension _MeetingAudioViews on MeetingsController {
   }
 
   Widget meetingAudioPanel(int id) => MeetingAudioPanel(
+    key: ValueKey('meeting-audio-$id'),
+    recording: recording != null && recordingMeeting == id,
     page: _reads.audio.page,
     sessions: _reads.audio.sessions,
     actions: _meetingAudioActions(id),

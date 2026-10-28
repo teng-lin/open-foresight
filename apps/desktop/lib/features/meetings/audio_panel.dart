@@ -11,6 +11,7 @@ class MeetingAudioPanel extends StatefulWidget {
     required this.onMore,
     required this.hasMore,
     required this.loading,
+    this.recording = false,
     this.problem,
     this.onRetry,
   });
@@ -19,7 +20,7 @@ class MeetingAudioPanel extends StatefulWidget {
   final MeetingAudioPlayerActions actions;
   final VoidCallback onMore;
   final VoidCallback? onRetry;
-  final bool hasMore, loading;
+  final bool hasMore, loading, recording;
   final String? problem;
   @override
   State<MeetingAudioPanel> createState() => _MeetingAudioPanelState();
@@ -27,9 +28,40 @@ class MeetingAudioPanel extends StatefulWidget {
 
 class _MeetingAudioPanelState extends State<MeetingAudioPanel> {
   String? _selected;
+  bool _expanded = false;
   @override
   Widget build(BuildContext context) {
     final page = widget.page;
+    if (!widget.recording &&
+        (page == null || page.meeting.sessionCount == 0) &&
+        widget.sessions.isEmpty &&
+        widget.problem == null) {
+      return const SizedBox.shrink();
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TextButton.icon(
+          key: const ValueKey('toggle-meeting-audio'),
+          onPressed: () => setState(() => _expanded = !_expanded),
+          icon: Icon(_expanded ? Icons.expand_less : Icons.headphones_outlined),
+          label: Text(_expanded ? 'Hide recording' : 'Show recording'),
+        ),
+        if (_expanded) _content(),
+      ],
+    );
+  }
+
+  Widget _content() {
+    final page = widget.page;
+    // Live capture is authoritative while saved-audio reads catch up. Even
+    // when explicitly expanded, live audio presents only the playback bar.
+    final capturing =
+        widget.recording ||
+        (page != null &&
+            page.meeting.physicalState != MeetingAudioPhysicalState.idle);
+    if (capturing && widget.problem != null) return const SizedBox.shrink();
     if (widget.problem case final problem?)
       return ListTile(
         title: Text(problem),
@@ -48,7 +80,11 @@ class _MeetingAudioPanelState extends State<MeetingAudioPanel> {
         ),
       );
     final sessions = widget.sessions;
-    if (sessions.isEmpty) return const Text('Loading recordings…');
+    if (sessions.isEmpty) {
+      return capturing
+          ? const SizedBox.shrink()
+          : const Text('Loading recordings…');
+    }
     final selected =
         sessions.where((s) => s.id == _selected).firstOrNull ??
         sessions
@@ -59,12 +95,12 @@ class _MeetingAudioPanelState extends State<MeetingAudioPanel> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (page.serviceError.isNotEmpty)
+        if (!capturing && page.serviceError.isNotEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: Text(page.serviceError),
           ),
-        if (sessions.length > 1 || widget.hasMore)
+        if (!capturing && (sessions.length > 1 || widget.hasMore))
           Row(
             children: [
               Expanded(
@@ -90,17 +126,9 @@ class _MeetingAudioPanelState extends State<MeetingAudioPanel> {
                 ),
             ],
           ),
-        if (page.meeting.physicalState != MeetingAudioPhysicalState.idle)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Text(switch (page.meeting.estimatedRemainingRecordingUs) {
-              final remaining? =>
-                'Estimated recording time remaining: ${_remainingTime(remaining)}',
-              null => 'Estimated recording time remaining: unavailable',
-            }),
-          ),
         MeetingAudioPlayer(
           key: ValueKey(selected.id),
+          playbackOnly: capturing,
           session: selected,
           playback: page.playbackSessionId == selected.id
               ? page.playback
@@ -110,13 +138,4 @@ class _MeetingAudioPanelState extends State<MeetingAudioPanel> {
       ],
     );
   }
-}
-
-String _remainingTime(int us) {
-  if (us <= 0) return '0 min';
-  final minutes = us ~/ 60000000;
-  if (minutes == 0) return 'less than 1 min';
-  if (minutes < 60) return '$minutes min';
-  final hours = minutes ~/ 60, remainder = minutes % 60;
-  return remainder == 0 ? '$hours hr' : '$hours hr $remainder min';
 }

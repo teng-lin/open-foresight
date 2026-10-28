@@ -32,11 +32,13 @@ class MeetingAudioPlayer extends StatefulWidget {
     required this.session,
     required this.playback,
     required this.actions,
+    this.playbackOnly = false,
     this.transcriptTarget,
   });
   final AudioSessionPresentation session;
   final AudioPlaybackPresentation playback;
   final MeetingAudioPlayerActions actions;
+  final bool playbackOnly;
   final AudioTranscriptSeekTarget? transcriptTarget;
   @override
   State<MeetingAudioPlayer> createState() => _MeetingAudioPlayerState();
@@ -153,6 +155,27 @@ class _MeetingAudioPlayerState extends State<MeetingAudioPlayer> {
         !_busy &&
         !exporting;
     final theme = Theme.of(context);
+    if (widget.playbackOnly) {
+      return Semantics(
+        container: true,
+        label: 'Meeting recording',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _playbackControls(session, position, canControl, playing),
+            if (_commandError.isNotEmpty)
+              Semantics(
+                liveRegion: true,
+                child: Text(
+                  _commandError,
+                  style: TextStyle(color: theme.colorScheme.error),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
     return Semantics(
       container: true,
       label: 'Meeting recording',
@@ -172,7 +195,6 @@ class _MeetingAudioPlayerState extends State<MeetingAudioPlayer> {
               _playbackControls(session, position, canControl, playing),
               _statusMessages(session, hasAudio, partial, exporting, theme),
               _storageDetails(session, theme),
-              if (session.canChangeRetention) _retentionControl(session),
               _actionButtons(
                 session,
                 canExport,
@@ -370,25 +392,6 @@ class _MeetingAudioPlayerState extends State<MeetingAudioPlayer> {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _retentionControl(AudioSessionPresentation session) {
-    return SwitchListTile.adaptive(
-      contentPadding: EdgeInsets.zero,
-      title: const Text('Keep remaining originals'),
-      subtitle: const Text(
-        'Uses more storage. Already removed originals cannot be restored.',
-      ),
-      value: session.retainLossless,
-      onChanged: _busy
-          ? null
-          : (value) => unawaited(
-              _perform(
-                () => widget.actions.setRetainLossless(session.id, value),
-                'Couldn’t update the recording preference. Try again.',
-              ),
-            ),
     );
   }
 
