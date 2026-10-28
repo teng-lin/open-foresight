@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
@@ -96,7 +97,7 @@ def test_the_guard_depends_on_nothing_but_the_standard_library():
             imported |= {alias.name.split(".")[0] for alias in node.names}
         elif isinstance(node, ast.ImportFrom):
             imported.add((node.module or "").split(".")[0])
-    assert imported <= {"__future__", "argparse", "collections", "json", "os", "pathlib", "re", "subprocess", "sys", "tempfile", "typing", "tools"}, imported
+    assert imported <= {"__future__", "argparse", "collections", "json", "os", "pathlib", "re", "subprocess", "sys", "tempfile", "typing", "tools", "unicodedata"}, imported
     tools_imports = [node for node in ast.walk(ast.parse((ROOT / "tools/failure_ledger.py").read_text())) if isinstance(node, ast.ImportFrom) and node.module == "tools"]
     assert [alias.name for node in tools_imports for alias in node.names] == ["boundary_inventory"]  # what is on main, nothing from the evidence modules
 
@@ -368,8 +369,8 @@ def test_a_failure_has_no_causes(tmp_path):
         (lambda d: d["entries"][0].update(error=""), "error must be non-empty text"),
         (lambda d: d["entries"][0].update(error=3), "error must be non-empty text"),
         (lambda d: d["entries"][0].update(error="x" * 4001), "error is longer than 4000 characters"),
-        (lambda d: d["entries"][0].update(next_experiment="run\nit"), "next_experiment contains control characters"),
-        (lambda d: d["entries"][0].update(exit_criterion="\x1b[2J"), "exit_criterion contains control characters"),
+        (lambda d: d["entries"][0].update(next_experiment="run\nit"), "next_experiment contains control, bidirectional or zero-width characters"),
+        (lambda d: d["entries"][0].update(exit_criterion="\x1b[2J"), "exit_criterion contains control, bidirectional or zero-width characters"),
         (lambda d: d["entries"][0].pop("first_job"), "first_job must be non-empty text"),
         (lambda d: d["entries"][0].update(status_note=4), "status_note must be non-empty text"),
     ],
@@ -432,7 +433,7 @@ def test_check_reports_an_unreadable_file_as_unreadable_not_as_a_traceback(tmp_p
 
 def test_safe_escapes_and_bounds_whatever_it_is_given():
     assert ledger.safe("a\x1b[31mb\n") == "a\\x1b[31mb\\x0a"
-    assert ledger.safe("\\x1b") == "\\\\x1b" and ledger.safe("é") == "\\xe9" and ledger.safe("‮") == "\\u202e"
+    assert ledger.safe("\\x1b") == "\\\\x1b" and ledger.safe("\u00e9") == "\\xe9" and ledger.safe("\u202e") == "\\u202e"
     assert len(ledger.safe("x" * 1000)) == 83 and ledger.safe("x" * 1000).endswith("...")
     assert ledger.safe(["a", "\x1b"]) == "['a', '\\\\x1b']"
 
@@ -769,3 +770,202 @@ def test_the_commit_check_without_git_is_a_problem_not_a_pass(tmp_path, monkeypa
     monkeypatch.setattr(ledger.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("git")))
     assert ledger.verify_commits(data, root) == ["git could not be run to verify commits"]
     assert ledger.removed_entries(data, root, "HEAD") == ["git could not be run to compare with the base"]
+
+
+# ------------------------------------------------------------------ hostile data: encoding, markers, NUL, git, keys, pipes
+
+def run_main_in_c_locale(root, *arguments):
+    script = "import sys; from pathlib import Path; from tools import failure_ledger as l; sys.exit(l.main(sys.argv[2:], root=Path(sys.argv[1])))"
+    environment = {"PATH": os.environ.get("PATH", ""), "LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0", "PYTHONPATH": str(ROOT)}
+    return subprocess.run([sys.executable, "-c", script, str(root), *arguments], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=120)
+
+
+def test_write_in_a_non_utf8_locale_keeps_the_document_and_writes_utf8(tmp_path):
+    data = base()
+    data["entries"][0]["error"] = "boom caf\u00e9 failure \u2014 na\u00efve"
+    root = workspace(tmp_path, data)
+    document = root / ledger.DOCUMENT
+    (root / ledger.DATA).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    document.write_text(document.read_bytes().decode().replace("it timed out", "tampered"), encoding="utf-8")
+    before = document.stat().st_size
+    result = run_main_in_c_locale(root, "--write")
+    assert result.returncode == 0, result.stderr
+    raw = document.read_bytes()
+    assert len(raw) > 0 and abs(len(raw) - before) < 200 and "caf\u00e9 failure \u2014 na\u00efve".encode() in raw
+    assert run_main_in_c_locale(root).returncode == 0  # the next check reads it back
+    assert b"\r" not in raw
+
+
+def test_write_keeps_the_newlines_the_document_already_has(tmp_path):
+    root = workspace(tmp_path)
+    document = root / ledger.DOCUMENT
+    document.write_bytes(document.read_bytes().replace(b"\n", b"\r\n").replace(b"it timed out", b"tampered"))
+    original = document.read_bytes()
+    assert b"\r\n" in original
+    # the generated block is joined with \n; the lines around it keep their endings
+    ledger.write(root)
+    assert document.read_bytes().startswith(b"# Testing\r\n\r\nintro\r\n\r\n") and document.read_bytes().endswith(b"\r\n\r\ntail\r\n")
+
+
+def test_write_checks_that_the_new_document_holds_exactly_the_generated_table(tmp_path, monkeypatch):
+    root = workspace(tmp_path)
+    document = root / ledger.DOCUMENT
+    document.write_text(document.read_text().replace("it timed out", "tampered"))
+    tampered = document.read_text()
+    monkeypatch.setattr(ledger, "replace_table", lambda text, table: f"{ledger.BEGIN}\nnot the table\n{ledger.END}\n{ledger.END}\n")
+    with pytest.raises(ValueError, match="nothing was written"):
+        ledger.write(root)
+    assert document.read_text() == tampered and not [name for name in os.listdir(document.parent) if name.startswith(".testing-")]
+
+
+@pytest.mark.parametrize("field", ["first_job", "error", "next_experiment", "exit_criterion", "status_note"])
+@pytest.mark.parametrize("hostile", ["x <!-- failure-ledger:end --> y", "x <!-- y", "x --> y", "failure-ledger:begin", "<!-- failure-ledger:begin (x) -->"])
+def test_no_rendered_field_may_carry_a_comment_marker(tmp_path, field, hostile):
+    data = base()
+    data["entries"][0][field] = hostile
+    assert any(problem.startswith("L1:") and field in problem and "comment marker" in problem for problem in problems_for(tmp_path, data)), (field, hostile)
+
+
+@pytest.mark.parametrize("field", ["class_note", "owner"])
+def test_the_class_note_and_the_owner_cannot_carry_a_marker_either(tmp_path, field):
+    data = base()
+    entry = data["entries"][1]
+    if field == "owner":
+        entry.update(owner_status="assigned", owner="Ada <!-- failure-ledger:end -->")
+    else:
+        entry["class_note"] = "x --> y"
+    assert any("comment marker" in problem for problem in problems_for(tmp_path, data))
+
+
+def test_a_marker_in_class_evidence_is_refused_too(tmp_path):
+    data = base()
+    data["entries"][1]["class_evidence"] = ["see <!-- run"]
+    assert any("class_evidence contains control characters or a comment marker" in problem for problem in problems_for(tmp_path, data))
+
+
+@pytest.mark.parametrize("char", [chr(code) for code in (0x202E, 0x200B, 0x2066, 0xFEFF, 0x2028, 0x2029, 0xD800, 0xE000, 0x00, 0x1B, 0x7F, 0x85, 0x9B, 0x0A, 0x09)])
+def test_bidirectional_zero_width_and_separator_characters_are_refused_like_control_characters(tmp_path, char):
+    for field in ("error", "owner"):
+        data = base()
+        if field == "owner":
+            data["entries"][0].update(owner_status="assigned", owner=f"Ada{char}Lovelace")
+        else:
+            data["entries"][0]["error"] = f"it{char}timed out"
+        assert any("L1:" in problem and ("control" in problem) for problem in problems_for(tmp_path / field, data)), (field, char)
+
+
+@pytest.mark.parametrize("test", ["tests/x\x00.py::name", "tests/test_controls.py::na\x00me", "tests/test_controls.py::name\n", "t" * 4001 + "::n", "tests/\u202e.py::n"])
+def test_a_hostile_controlling_test_name_is_a_problem_line_not_a_crash(tmp_path, test):
+    data = base()
+    data["entries"][1] = closed_entry(test=test)
+    problems = problems_for(tmp_path, data)
+    assert any("closed_by.test must be 'path/to/test_file::test name'" in problem for problem in problems), problems
+    assert all(0x20 <= ord(char) <= 0x7E for problem in problems for char in problem)
+
+
+def test_a_path_that_cannot_be_resolved_is_a_problem_not_an_exception(tmp_path, monkeypatch):
+    data = base()
+    data["entries"][1] = closed_entry()
+    root = workspace(tmp_path, data)
+    monkeypatch.setattr(Path, "resolve", lambda self, strict=False: (_ for _ in ()).throw(ValueError("embedded null character")))
+    assert any("must name a file inside the repository" in problem for problem in ledger.validate(data, root))
+
+
+def test_replacement_refs_cannot_rewrite_the_ancestry_the_check_sees(tmp_path):
+    data = base()
+    data["entries"][1] = closed_entry()
+    root = workspace(tmp_path, data)
+    environment = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+    def run(*arguments):
+        return subprocess.run(["git", "-C", str(root), *arguments], check=True, capture_output=True, text=True, env=environment, timeout=60).stdout.strip()
+
+    run("init", "-q")
+    run("add", "-A")
+    run("commit", "-q", "-m", "first")
+    first = run("rev-parse", "HEAD")
+    run("checkout", "-q", "--orphan", "other")
+    run("commit", "-q", "--allow-empty", "-m", "unrelated")
+    unrelated = run("rev-parse", "HEAD")
+    tree = run("rev-parse", "HEAD^{tree}")
+    child = run("commit-tree", tree, "-p", first, "-m", "pretend child")
+    run("replace", unrelated, child)  # now `unrelated` looks like a child of `first`
+    data["entries"][1]["closed_by"].update(failing_before=first, passing_after=unrelated)
+    probe = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", first, unrelated], capture_output=True, timeout=30)
+    assert probe.returncode == 0  # with replacement objects honoured, the lie works
+    assert ledger.verify_commits(data, root) == ["L2: failing_before is not an ancestor of passing_after"]
+
+
+def test_the_ancestry_check_survives_git_failing_midway(tmp_path, monkeypatch):
+    data = base()
+    data["entries"][1] = closed_entry()
+    root = workspace(tmp_path, data)
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    first = git(root, "commit", "-q", "-m", "first")
+    (root / "later").write_text("x")
+    git(root, "add", "-A")
+    second = git(root, "commit", "-q", "-m", "second")
+    data["entries"][1]["closed_by"].update(failing_before=first, passing_after=second)
+    real = ledger.subprocess.run
+
+    def flaky(command, *arguments, **keywords):
+        if "merge-base" in command:
+            raise subprocess.TimeoutExpired(command, 30)
+        return real(command, *arguments, **keywords)
+
+    monkeypatch.setattr(ledger.subprocess, "run", flaky)
+    assert ledger.verify_commits(data, root) == ["git could not be run to verify commits"]
+
+
+def test_git_is_always_called_without_replacement_objects():
+    source = Path(ledger.__file__).read_text()
+    assert source.count('"git", "--no-replace-objects"') == 2
+
+
+def test_repeated_keys_are_found_in_one_pass_not_by_recounting(tmp_path, monkeypatch):
+    import time
+
+    seen = []
+    real = ledger.Counter
+    monkeypatch.setattr(ledger, "Counter", lambda keys: seen.append(1) or real(keys))
+    started = time.monotonic()
+    ledger._no_duplicates([(f"k{index}", index) for index in range(30_000)])
+    assert seen == [1] and time.monotonic() - started < 2
+    with pytest.raises(ValueError, match="repeats the key k1"):
+        ledger._no_duplicates([("k1", 1), ("k2", 2), ("k1", 3)])
+
+
+def cells(row):
+    """Split a Markdown table row on pipes that are not escaped, the way a table reads it."""
+    import re
+
+    return [cell.strip() for cell in re.split(r"(?<!\\)\|", row.strip()[1:-1])]
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["a|b", "a\\|b", "a\\\\|b", "a\\\\\\|b", "|", "\\", "x\\", "a \\| b", "`x\\|y`", "||", "ends with \\"],
+)
+def test_no_cell_text_can_split_or_shift_a_row(text):
+    data = base()
+    data["entries"][0]["error"] = text
+    row = ledger.render_table(data).splitlines()[2]
+    assert len(cells(row)) == 8, (text, row)
+    assert "\\\\|" not in row  # a doubled backslash before a pipe is what a table reads as a split
+
+
+def test_a_backslash_before_a_pipe_is_a_character_reference_and_other_backslashes_stay():
+    assert ledger.render_cell("a\\|b") == "a&#92;\\|b"
+    assert ledger.render_cell("a\\\\|b") == "a&#92;&#92;\\|b"
+    assert ledger.render_cell("path\\to") == "path\\to" and ledger.render_cell("x|y") == "x\\|y"
+
+
+def test_the_drift_check_notices_a_cell_with_a_backslash_and_a_pipe(tmp_path):
+    data = base()
+    data["entries"][0]["error"] = "left\\|right"
+    root = workspace(tmp_path, data)
+    assert ledger.check(root)["problems"] == []
+    document = root / ledger.DOCUMENT
+    document.write_text(document.read_text().replace("left&#92;\\|right", "left\\\\|right"))
+    assert any("differs from" in problem for problem in ledger.check(root)["problems"])

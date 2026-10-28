@@ -41,6 +41,7 @@ Exit status: 0 consistent, 1 problems, 2 an input could not be read.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from collections.abc import Mapping, Sequence
 import json
 import os
@@ -49,6 +50,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from typing import Any
 
 from tools import boundary_inventory
@@ -88,8 +90,7 @@ def safe(value: Any, limit: int = 80) -> str:
 
 
 def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    keys = [key for key, _value in pairs]
-    repeated = sorted({key for key in keys if keys.count(key) > 1})
+    repeated = sorted(key for key, count in Counter(key for key, _value in pairs).items() if count > 1)
     if repeated:
         raise ValueError("a JSON object repeats the key " + ", ".join(safe(key, 40) for key in repeated))
     return dict(pairs)
@@ -126,6 +127,23 @@ def load(root: Path = ROOT) -> dict[str, Any]:
     return ledger
 
 
+MARKER_TEXT = ("failure-ledger:", "<!--", "-->")
+
+
+def unsafe_text(value: str) -> str | None:
+    """Why [value] may not appear in the document, or None.
+
+    Control, format (bidirectional and zero-width) and separator characters are
+    refused, and so is anything that could open or close a comment: a field must
+    not be able to end the generated block or hide the rest of the page.
+    """
+    if any(unicodedata.category(char) in ("Cc", "Cf", "Zl", "Zp", "Cs", "Co") for char in value):
+        return "contains control, bidirectional or zero-width characters"
+    if any(marker in value for marker in MARKER_TEXT):
+        return "contains a comment marker or failure-ledger: text"
+    return None
+
+
 def _text(entry: Mapping[str, Any], field: str, problems: list[str], where: str, *, required: bool = True) -> str | None:
     value = entry.get(field)
     if value is None and not required:
@@ -136,8 +154,9 @@ def _text(entry: Mapping[str, Any], field: str, problems: list[str], where: str,
     if len(value) > MAX_TEXT:
         problems.append(f"{where}: {field} is longer than {MAX_TEXT} characters")
         return None
-    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
-        problems.append(f"{where}: {field} contains control characters")
+    reason = unsafe_text(value)
+    if reason:
+        problems.append(f"{where}: {field} {reason}")
         return None
     return value
 
@@ -146,6 +165,9 @@ def _texts(entry: Mapping[str, Any], field: str, problems: list[str], where: str
     value = entry.get(field)
     if not isinstance(value, list) or len(value) > MAX_LIST or not all(isinstance(item, str) and item.strip() and len(item) <= MAX_TEXT for item in value):
         problems.append(f"{where}: {field} must be a short list of non-empty text")
+        return []
+    if any(unsafe_text(item) for item in value):
+        problems.append(f"{where}: {field} contains control characters or a comment marker")
         return []
     return list(value)
 
@@ -156,12 +178,15 @@ def _closing(entry: Mapping[str, Any], problems: list[str], where: str, root: Pa
         problems.append(f"{where}: a closed entry needs closed_by with a test, failing_before and passing_after (a rerun closes nothing)")
         return
     test, before, after = closed_by["test"], closed_by["failing_before"], closed_by["passing_after"]
-    if not isinstance(test, str) or "::" not in test or not all(part.strip() for part in test.split("::", 1)):
-        problems.append(f"{where}: closed_by.test must be 'path/to/test_file::test name'")
+    if not isinstance(test, str) or len(test) > MAX_TEXT or "::" not in test or not all(part.strip() for part in test.split("::", 1)) or unsafe_text(test):
+        problems.append(f"{where}: closed_by.test must be 'path/to/test_file::test name' (short, with no control characters)")
     else:
         path_text, name = test.split("::", 1)
         candidate = root / path_text
-        inside = candidate.resolve().is_relative_to(root.resolve())
+        try:
+            inside = candidate.resolve().is_relative_to(root.resolve())
+        except (OSError, ValueError, RuntimeError):  # a NUL, an overlong name or a symlink loop
+            inside = False
         if not inside or ".." in Path(path_text).parts or Path(path_text).is_absolute():
             problems.append(f"{where}: closed_by.test must name a file inside the repository")
         else:
@@ -298,8 +323,8 @@ def _owner(entry: Mapping[str, Any], problems: list[str], where: str) -> None:
     if state not in OWNER_STATUSES:
         problems.append(f"{where}: owner_status must be assigned, unassigned or not-applicable; an entry with no owner must say unassigned")
     elif state == "assigned":
-        if not isinstance(owner, str) or not owner.strip() or len(owner) > 200 or owner.strip().lower().startswith("unassigned") or any(ord(char) < 0x20 for char in owner):
-            problems.append(f"{where}: an assigned owner must be a name, not blank or 'unassigned'")
+        if not isinstance(owner, str) or not owner.strip() or len(owner) > 200 or owner.strip().lower().startswith("unassigned") or unsafe_text(owner):
+            problems.append(f"{where}: an assigned owner must be a name, not blank, 'unassigned', or text with control characters or comment markers")
     elif owner is not None:
         problems.append(f"{where}: owner must be null when owner_status is {state}")
 
@@ -318,8 +343,15 @@ def _status(entry: Mapping[str, Any], problems: list[str], where: str, root: Pat
 
 
 def render_cell(value: str) -> str:
-    """One table cell: a single line, with the pipe that would split it escaped."""
-    return " ".join(value.split()).replace("|", "\\|")
+    """One table cell: a single line in which no pipe can split the row.
+
+    A pipe is written `\\|`. Backslashes that come right before a pipe would turn
+    that escape into `\\\\|`, which a Markdown table reads as a split, so each is
+    written as the character reference `&#92;` first.
+    """
+    text = " ".join(value.split())
+    text = re.sub(r"\\+(?=\|)", lambda run: "&#92;" * len(run.group(0)), text)
+    return text.replace("|", "\\|")
 
 
 def render_row(entry: Mapping[str, Any]) -> list[str]:
@@ -356,7 +388,7 @@ def replace_table(document: str, table: str) -> str:
 def _git(root: Path, *arguments: str) -> int | None:
     """Exit status of a Git command in [root], or None if Git could not be run."""
     try:
-        return subprocess.run(["git", "-C", str(root), *arguments], capture_output=True, timeout=30, check=False).returncode
+        return subprocess.run(["git", "--no-replace-objects", "-C", str(root), *arguments], capture_output=True, timeout=30, check=False).returncode
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -382,7 +414,10 @@ def verify_commits(ledger: Mapping[str, Any], root: Path = ROOT) -> list[str]:
                 missing = True
         if missing:
             continue
-        if _git(root, "merge-base", "--is-ancestor", closed_by["failing_before"], closed_by["passing_after"]):
+        ordered = _git(root, "merge-base", "--is-ancestor", closed_by["failing_before"], closed_by["passing_after"])
+        if ordered is None:
+            return [*problems, "git could not be run to verify commits"]
+        if ordered:
             problems.append(f"{entry['id']}: failing_before is not an ancestor of passing_after")
     return problems
 
@@ -392,7 +427,7 @@ def removed_entries(ledger: Mapping[str, Any], root: Path, base: str) -> list[st
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/@^~-]{0,200}", base) or base.startswith("-"):
         return [f"--base {safe(base)} is not a revision name"]
     try:
-        result = subprocess.run(["git", "-C", str(root), "show", f"{base}:{DATA}"], capture_output=True, timeout=30, check=False)
+        result = subprocess.run(["git", "--no-replace-objects", "-C", str(root), "show", f"{base}:{DATA}"], capture_output=True, timeout=30, check=False)
     except (OSError, subprocess.SubprocessError):
         return ["git could not be run to compare with the base"]
     if result.returncode:
@@ -454,10 +489,13 @@ def write(root: Path = ROOT) -> Path:
     path = root / DOCUMENT
     if path.is_symlink():
         raise ValueError(f"{DOCUMENT} is a symbolic link")
-    updated = replace_table(read_bounded(path, MAX_DOCUMENT_BYTES), render_table(ledger))
+    table = render_table(ledger)
+    updated = replace_table(read_bounded(path, MAX_DOCUMENT_BYTES), table)
+    if extract_table(updated) != table:
+        raise ValueError(f"the regenerated {DOCUMENT} would not contain exactly the generated table; nothing was written")
     descriptor, temporary = tempfile.mkstemp(prefix=".testing-", dir=path.parent)
     try:
-        with os.fdopen(descriptor, "w") as stream:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
             stream.write(updated)
             stream.flush()
             os.fsync(stream.fileno())
