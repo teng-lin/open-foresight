@@ -31,7 +31,7 @@ void main() {
       OperationScope.service,
       handlers(OperationScope.service),
     );
-    expect(application.operations, hasLength(91));
+    expect(application.operations, hasLength(94));
     expect(service.operations, {
       Operation.answerStream,
       Operation.googleSignIn,

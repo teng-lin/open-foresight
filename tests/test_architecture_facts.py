@@ -52,7 +52,7 @@ class CurrentFactsTest(PacketTest):
         self.assertEqual(facts.application_schema_version, 25)
         self.assertEqual(facts.request_key_lifetime_hours, 24)
         self.assertEqual(facts.workspace_epoch_key, "workspaceEpoch")
-        self.assertEqual(len(facts.operations), 100)
+        self.assertEqual(len(facts.operations), 103)
         self.assertEqual(facts.operations[0], "recordingsRead")
         self.assertEqual(facts.operation_wires[-1], "service.stop_if_idle")
         self.assertEqual(len(facts.mcp_tools), 32)
@@ -96,7 +96,7 @@ class DriftTest(PacketTest):
 
     def test_old_operation_count_is_rejected(self) -> None:
         self.replace(
-            facts_tool.SERVICE_DOC, "declares 100 operations", "declares 75 operations"
+            facts_tool.SERVICE_DOC, "declares 103 operations", "declares 75 operations"
         )
         self.assertTrue(any("stated as 75" in e for e in self.errors()))
 

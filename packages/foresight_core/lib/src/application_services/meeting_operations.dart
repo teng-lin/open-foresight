@@ -1,4 +1,5 @@
 import 'service_workspace_ports.dart';
+import '../meeting_attribution.dart';
 import '../meeting_speakers.dart';
 import '../operation_registry.dart';
 import '../operation_requests.dart';
@@ -105,6 +106,60 @@ final class MeetingOperations {
     await indexer.indexMeeting(request.id, current: current);
   }
 
+  // A correction changes the transcript's rendered text, so cached note input
+  // is dropped and the meeting is reprojected like any other transcript edit.
+  Future<void> _attributionChanged(
+    int meeting,
+    bool Function()? current,
+  ) async {
+    if (recording.recordingMeeting == meeting && recording.recording != null) {
+      notes.scheduleLiveTranscript(meeting);
+    } else {
+      notes.invalidateTranscript(meeting);
+    }
+    await indexer.indexMeeting(meeting, current: current);
+  }
+
+  Future<void> attribute(
+    MeetingsAttributeRequest request, {
+    bool Function()? current,
+  }) async {
+    final meeting = queries.transcriptMeeting(request.id);
+    final TranscriptAttribution correction;
+    try {
+      correction = request.name == null
+          ? TranscriptAttribution.manualUnnamed()
+          : TranscriptAttribution.manual(displayName: request.name!);
+    } on ArgumentError {
+      throw RpcError(
+        RpcErrorCode.invalidArgument,
+        'The name must contain a visible character.',
+      );
+    }
+    domain.store.setManualAttribution(request.id, correction);
+    await _attributionChanged(meeting, current);
+  }
+
+  Future<void> resetAttribution(
+    MeetingsResetAttributionRequest request, {
+    bool Function()? current,
+  }) async {
+    final meeting = queries.transcriptMeeting(request.id);
+    if (domain.store.resetAttribution(request.id)) {
+      await _attributionChanged(meeting, current);
+    }
+  }
+
+  Future<void> renameParticipant(
+    MeetingsRenameParticipantRequest request, {
+    bool Function()? current,
+  }) async {
+    final meeting = queries.participantMeeting(request.id);
+    if (domain.store.renameMeetingParticipant(request.id, request.name) > 0) {
+      await _attributionChanged(meeting, current);
+    }
+  }
+
   Future<void> generateMeeting(
     int id,
     String kind, {
@@ -197,6 +252,18 @@ final class MeetingOperations {
       Operation.meetingsRename,
       (request, {current}) =>
           domain.store.meetingStore.renameMeeting(request.id, request.title),
+    ),
+    TypedOperationHandler<MeetingsAttributeRequest>(
+      Operation.meetingsAttribute,
+      (request, {current}) => attribute(request, current: current),
+    ),
+    TypedOperationHandler<MeetingsResetAttributionRequest>(
+      Operation.meetingsResetAttribution,
+      (request, {current}) => resetAttribution(request, current: current),
+    ),
+    TypedOperationHandler<MeetingsRenameParticipantRequest>(
+      Operation.meetingsRenameParticipant,
+      (request, {current}) => renameParticipant(request, current: current),
     ),
     TypedOperationHandler<MeetingsGetRequest>(
       Operation.meetingsGet,

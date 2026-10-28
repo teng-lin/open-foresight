@@ -185,6 +185,105 @@ void main() {
     });
   });
 
+  group('correction operations', () {
+    Future<Object?> call(String operation, Map<String, Object?> arguments) =>
+        app.call(operation, {
+          ...arguments,
+          'workspace_epoch': store.workspaceEpoch,
+        });
+
+    test(
+      'attribute names a segment and survives automatic observation',
+      () async {
+        await call('meetings.attribute', {'id': spoken, 'name': '  Dr. Ada  '});
+        var stored = store.meetingQueries.attribution(spoken)!;
+        expect(stored.manual, isTrue);
+        expect(stored.displayName, '  Dr. Ada  ');
+        expect(stored.renderedName, 'Dr. Ada');
+        expect(
+          store.saveAutomaticAttribution(spoken, named('Robot')),
+          AttributionWriteOutcome.protectedByManual,
+        );
+        await call('meetings.attribute', {'id': spoken});
+        stored = store.meetingQueries.attribution(spoken)!;
+        expect(stored.state, AttributionState.unknown);
+        expect(stored.manual, isTrue);
+        expect(
+          store.meetingQueries.transcript(meeting).first.participantName,
+          isNull,
+        );
+        await call('meetings.reset_attribution', {'id': spoken});
+        expect(store.meetingQueries.attribution(spoken), isNull);
+        // Resetting an unattributed segment is a harmless no-op.
+        await call('meetings.reset_attribution', {'id': plain});
+      },
+    );
+
+    test('a correction reaches the next summary and the index', () async {
+      await call('meetings.attribute', {'id': spoken, 'name': 'Alice Chen'});
+      await app.generateSummary(meeting);
+      expect(runtime.summaries.single, contains('Alice Chen: We should ship'));
+      expect(
+        store.rows("SELECT revision FROM meetings WHERE id=?", [
+          meeting,
+        ]).single['revision'],
+        greaterThan(2),
+      );
+    });
+
+    test('rename participant relabels its rows', () async {
+      final person = store.saveMeetingParticipants(meeting, [
+        MeetingParticipant(
+          scope: 's',
+          identityKey: 'k',
+          displayName: 'iPhone',
+          firstSeenMs: 0,
+          lastSeenMs: 1,
+        ),
+      ]).single;
+      store.saveAutomaticAttribution(
+        spoken,
+        TranscriptAttribution(
+          participantId: person.id,
+          displayName: 'iPhone',
+          state: AttributionState.attributed,
+        ),
+      );
+      await call('meetings.rename_participant', {
+        'id': person.id,
+        'name': 'Ada Lovelace',
+      });
+      expect(
+        store.meetingQueries.transcript(meeting).first.participantName,
+        'Ada Lovelace',
+      );
+    });
+
+    test('invalid and unknown targets are refused without writes', () async {
+      for (final arguments in [
+        {'id': spoken, 'name': ''},
+        {'id': spoken, 'name': '\u200b'},
+        {'id': spoken, 'name': 'x' * 501},
+        {'id': 99999, 'name': 'Alice'},
+      ]) {
+        await expectLater(
+          call('meetings.attribute', arguments),
+          throwsA(isA<RpcError>()),
+          reason: '$arguments',
+        );
+      }
+      await expectLater(
+        call('meetings.reset_attribution', {'id': 99999}),
+        throwsA(isA<RpcError>()),
+      );
+      await expectLater(
+        call('meetings.rename_participant', {'id': 99999, 'name': 'A'}),
+        throwsA(isA<RpcError>()),
+      );
+      expect(store.rows('SELECT * FROM transcript_attributions'), isEmpty);
+    });
+  });
+
   group('staleness', () {
     test(
       'an attribution change during generation rejects the stale input',

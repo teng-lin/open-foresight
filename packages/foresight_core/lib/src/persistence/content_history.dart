@@ -83,6 +83,19 @@ final class ContentHistory {
     [id],
   );
 
+  /// The attribution a correction or reset is about to replace; an approval
+  /// is bound to exactly this row.
+  List<Map<String, Object?>> attribution(int transcriptId) => _rows(
+    'SELECT transcript_id,participant_id,display_name,state,method,manual,revision FROM transcript_attributions WHERE transcript_id=?',
+    [transcriptId],
+  );
+
+  /// The participant name a rename is about to replace.
+  List<Map<String, Object?>> participant(int id) => _rows(
+    'SELECT id,display_name,name_manual,rename_count FROM meeting_participants WHERE id=?',
+    [id],
+  );
+
   static const derivedKinds = {
     'summary',
     'actions',

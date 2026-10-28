@@ -34,6 +34,34 @@ final class MeetingOperationsQueries {
     return MeetingDetails.fromRow(row);
   }
 
+  /// The meeting owning a transcript segment, for correction invalidation.
+  int transcriptMeeting(int transcriptId) {
+    final row = _rows('SELECT meeting_id FROM transcript WHERE id=?', [
+      transcriptId,
+    ]).firstOrNull;
+    if (row == null) {
+      throw RpcError(
+        RpcErrorCode.notFound,
+        'Transcript segment not found: $transcriptId',
+      );
+    }
+    return row['meeting_id'] as int;
+  }
+
+  int participantMeeting(int participantId) {
+    final row = _rows(
+      'SELECT meeting_id FROM meeting_participants WHERE id=?',
+      [participantId],
+    ).firstOrNull;
+    if (row == null) {
+      throw RpcError(
+        RpcErrorCode.notFound,
+        'Participant not found: $participantId',
+      );
+    }
+    return row['meeting_id'] as int;
+  }
+
   List<MeetingDetails> list() => _rows(
     'SELECT m.*,d.created,d.reminder FROM meetings m LEFT JOIN meeting_details d ON d.meeting_id=m.id ORDER BY m.id',
   ).map(MeetingDetails.fromRow).toList();

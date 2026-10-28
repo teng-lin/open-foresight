@@ -71,6 +71,83 @@ const meetingsRenameDescriptor = OperationDescriptor(
   ]),
 );
 
+const meetingsAttributeDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsAttributeInput>(),
+  scope: OperationScope.application,
+  readOnly: false,
+  approval: ApprovalPolicy.overwrite,
+  capability: CapabilityPolicy.ordinary,
+  requiresHelper: false,
+  modelGate: ModelGatePolicy.none,
+  notifiesChanges: true,
+  response: ResponseShape.result,
+  carriesWorkspaceEpoch: true,
+  acceptsIdempotencyKey: false,
+  stampsAgentActivity: true,
+  leaseBusy: true,
+  createsLease: true,
+  arguments: OperationArgumentSchema([
+    ArgumentField("id", ArgumentKind.integer),
+    ArgumentField(
+      "name",
+      ArgumentKind.string,
+      nullable: true,
+      minimumLength: 1,
+      maximumLength: 500,
+    ),
+  ]),
+);
+
+const meetingsResetAttributionDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsResetAttributionInput>(),
+  scope: OperationScope.application,
+  readOnly: false,
+  approval: ApprovalPolicy.overwrite,
+  capability: CapabilityPolicy.ordinary,
+  requiresHelper: false,
+  modelGate: ModelGatePolicy.none,
+  notifiesChanges: true,
+  response: ResponseShape.result,
+  carriesWorkspaceEpoch: true,
+  acceptsIdempotencyKey: false,
+  stampsAgentActivity: true,
+  leaseBusy: true,
+  createsLease: true,
+  arguments: OperationArgumentSchema([
+    ArgumentField("id", ArgumentKind.integer),
+  ]),
+);
+
+const meetingsRenameParticipantDescriptor = OperationDescriptor(
+  resultDecoder: ResultCodec(decodeNothing),
+  requestEncoder: OperationInputEncoder<MeetingsRenameParticipantInput>(),
+  scope: OperationScope.application,
+  readOnly: false,
+  approval: ApprovalPolicy.overwrite,
+  capability: CapabilityPolicy.ordinary,
+  requiresHelper: false,
+  modelGate: ModelGatePolicy.none,
+  notifiesChanges: true,
+  response: ResponseShape.result,
+  carriesWorkspaceEpoch: true,
+  acceptsIdempotencyKey: false,
+  stampsAgentActivity: true,
+  leaseBusy: true,
+  createsLease: true,
+  arguments: OperationArgumentSchema([
+    ArgumentField("id", ArgumentKind.integer),
+    ArgumentField(
+      "name",
+      ArgumentKind.string,
+
+      minimumLength: 1,
+      maximumLength: 500,
+    ),
+  ]),
+);
+
 const meetingsGetDescriptor = OperationDescriptor(
   resultDecoder: ResultCodec(MeetingDetailResult.fromWire),
   requestEncoder: OperationInputEncoder<MeetingsGetInput>(),

@@ -86,6 +86,9 @@ String? replacementSnapshot(ContentHistory history, OperationRequest request) {
     ],
     MeetingsEditTaskRequest(:final id) => history.taskEdit(id),
     MeetingsRenameRequest(:final id) => history.meetingTitle(id),
+    MeetingsAttributeRequest(:final id) ||
+    MeetingsResetAttributionRequest(:final id) => history.attribution(id),
+    MeetingsRenameParticipantRequest(:final id) => history.participant(id),
     MeetingsPrepareRequest(:final id) => history.meetingReplacement(
       id,
       'preparation',

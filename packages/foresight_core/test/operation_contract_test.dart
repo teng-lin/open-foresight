@@ -76,6 +76,33 @@ void main() {
       'idempotency_key': false,
       'tools': <Object?>[],
     };
+    baseline['meetings.attribute'] = {
+      'requires_helper': false,
+      'approval': true,
+      'approval_web_search': true,
+      'notifies_changes': true,
+      'workspace_epoch': true,
+      'idempotency_key': false,
+      'tools': <Object?>[],
+    };
+    baseline['meetings.reset_attribution'] = {
+      'requires_helper': false,
+      'approval': true,
+      'approval_web_search': true,
+      'notifies_changes': true,
+      'workspace_epoch': true,
+      'idempotency_key': false,
+      'tools': <Object?>[],
+    };
+    baseline['meetings.rename_participant'] = {
+      'requires_helper': false,
+      'approval': true,
+      'approval_web_search': true,
+      'notifies_changes': true,
+      'workspace_epoch': true,
+      'idempotency_key': false,
+      'tools': <Object?>[],
+    };
     baseline['models.download_asset'] = {
       'requires_helper': false,
       'approval': true,
