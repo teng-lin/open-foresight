@@ -335,7 +335,7 @@ final class RecordingController {
               stopRecording(
                 cause: DiagnosticCaptureStopReason.inactivity,
                 reason:
-                    'Recording stopped after $minutes minutes without audio.',
+                    'Recording stopped after ${minutes == minutes.truncateToDouble() ? minutes.toInt() : minutes} minutes without audio.',
               ).catchError((Object _) {}),
             );
           }
