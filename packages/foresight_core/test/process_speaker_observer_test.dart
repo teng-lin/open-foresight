@@ -834,6 +834,52 @@ void main() {
       expect(h.helpers, hasLength(1));
     });
 
+    test(
+      'stop ends a start waiting on an abandoned launch within a kill grace',
+      () async {
+        // The second start waits for the first, abandoned, launch to settle (up
+        // to a spawn timeout); stopping must not wait that out.
+        h = Harness(config: fastConfig(spawn: const Duration(seconds: 20)));
+        h.hangingLaunch = Completer<Process>();
+        final first = errorOf(h.observer.start('s1'));
+        await eventually(() => h.arguments.length == 1);
+        await h.observer.stop();
+        expect(await first, failureOf(SpeakerObserverFailure.cancelled));
+        final second = errorOf(h.observer.start('s2'));
+        await settle();
+        final elapsed = Stopwatch()..start();
+        await h.observer.stop();
+        expect(elapsed.elapsed, lessThan(const Duration(seconds: 2)));
+        expect(await second, failureOf(SpeakerObserverFailure.cancelled));
+        expect(
+          h.arguments,
+          hasLength(1),
+          reason: 'no launch followed the stop',
+        );
+      },
+    );
+
+    test('a launch that never returns stops taxing later calls', () async {
+      h = Harness(config: fastConfig(spawn: const Duration(milliseconds: 300)));
+      h.hangingLaunch = Completer<Process>();
+      await expectLater(
+        h.observer.inspect(),
+        throwsA(failureOf(SpeakerObserverFailure.launchFailed)),
+      );
+      h.hangingLaunch = null;
+      // The first later call may wait out the hung launch once (a spawn
+      // timeout); after that it is no longer tracked.
+      await h.observer.inspect();
+      final elapsed = Stopwatch()..start();
+      for (var i = 0; i < 3; i++) {
+        await h.observer.inspect();
+      }
+      expect(elapsed.elapsed, lessThan(const Duration(milliseconds: 200)));
+      final idle = Stopwatch()..start();
+      await h.observer.stop();
+      expect(idle.elapsed, lessThan(const Duration(milliseconds: 90)));
+    });
+
     test('idle queries leave nothing registered for cancellation', () async {
       h = Harness();
       for (var i = 0; i < 20; i++) {
@@ -955,10 +1001,12 @@ void main() {
           SpeakerObserverDiagnosticCode.busyRetried,
         ),
       );
+      expect(h.observer.debugActiveTimers, 1, reason: 'the retry wait');
       final elapsed = Stopwatch()..start();
       await h.observer.stop();
       expect(elapsed.elapsed, lessThan(const Duration(seconds: 3)));
       expect(await start, failureOf(SpeakerObserverFailure.cancelled));
+      expect(h.observer.debugActiveTimers, 0);
     });
   });
 
@@ -1238,6 +1286,36 @@ void main() {
         expect(h.helpers, hasLength(1));
       },
     );
+
+    test(
+      'a stopped reply with no session from a started session is unclean',
+      () async {
+        // A null session answers a stop that precedes any start; stop is only
+        // sent after an accepted start, so it cannot be right here.
+        h = Harness();
+        h.behaviors.single.stopReply = 'null_session';
+        await h.observer.start('s1');
+        await h.observer.stop();
+        await settle();
+        expect(h.states.last.status, ObserverStatus.stopped);
+        expect(h.states.last.failure, SpeakerObserverFailure.protocolError);
+        expect(h.allReaped, true);
+      },
+    );
+
+    test('a stop refused as busy is told apart in diagnostics', () async {
+      h = Harness();
+      h.behaviors.single.stopReply = 'busy';
+      await h.observer.start('s1');
+      await h.observer.stop();
+      await settle();
+      expect(
+        h.diagnosticCodes,
+        contains(SpeakerObserverDiagnosticCode.stopRefusedBusy),
+      );
+      expect(h.states.last.failure, SpeakerObserverFailure.helperError);
+      expect(h.allReaped, true);
+    });
 
     test(
       'an error or foreign-session stop reply is reported as unclean',

@@ -16,7 +16,7 @@ class HelperBehavior {
   String capabilityReason = '';
   bool answerStop = true;
 
-  /// `ok`, `error`, `wrong_session` or `null_session`.
+  /// `ok`, `error`, `busy`, `wrong_session` or `null_session`.
   String stopReply = 'ok';
 
   /// Answer this many requests of [busyTypes] with `error` / `busy` (a full
@@ -263,7 +263,9 @@ class FakeHelper implements Process {
         }
       case 'stop':
         if (!behavior.answerStop) return;
-        if (behavior.stopReply == 'error') {
+        if (behavior.stopReply == 'busy') {
+          send('error', {'id': id, 'code': 'busy', 'message': 'queue full'});
+        } else if (behavior.stopReply == 'error') {
           send('error', {'id': id, 'code': 'stop_failed', 'message': 'x'});
         } else if (behavior.stopReply == 'null_session') {
           send('stopped', {'id': id, 'session': null});

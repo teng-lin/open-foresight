@@ -43,6 +43,7 @@ enum SpeakerObserverDiagnosticCode {
   termSent,
   killSent,
   stderrFlood,
+  stopRefusedBusy,
   clockMeasured,
   clockRejected,
   busyRetried,
@@ -240,6 +241,7 @@ Future<_ReapResult> _reapProcess(
 final class _Orphan {
   _Orphan(
     Future<Process> launch,
+    this.launchAge,
     SpeakerObserverConfig config,
     void Function(SpeakerObserverDiagnostic) diagnostic,
   ) {
@@ -267,6 +269,9 @@ final class _Orphan {
   }
   late final Future<bool> launched, reaped;
   Process? process;
+
+  /// Time since the launch was requested.
+  final Stopwatch launchAge;
 }
 
 SpeakerObserverDiagnosticCode _launchDiagnostic(Object error) {
@@ -322,8 +327,9 @@ final class _Connection {
     required Future<void> cancel,
     required void Function(_Connection connection) onCreated,
     required Future<void> Function(_Connection connection) reap,
-    required void Function(Future<Process> launch) orphan,
+    required void Function(Future<Process> launch, Stopwatch age) orphan,
   }) async {
+    final launchAge = Stopwatch()..start();
     final Future<Process> launch;
     try {
       launch = launcher(config.executable, [
@@ -375,7 +381,7 @@ final class _Connection {
       process = await ready.future;
     } on SpeakerObserverException {
       // The child may still appear; it must not outlive its abandonment.
-      orphan(launch);
+      orphan(launch, launchAge);
       rethrow;
     } finally {
       timer.cancel();
@@ -713,6 +719,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
   Timer? _stall, _backoff;
   Completer<void>? _backoffWake;
   final Set<Completer<void>> _cancelables = {};
+  final Set<Timer> _retryTimers = {};
   int _oneShots = 0;
   Future<void>? _startOp, _restartOp, _stopOp, _disposeOp;
   Future<void> _oneShotTail = Future.value();
@@ -732,7 +739,9 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
   /// Active timers, for tests asserting that nothing outlives the observer.
   @visibleForTesting
   int get debugActiveTimers =>
-      (_stall?.isActive == true ? 1 : 0) + (_backoff?.isActive == true ? 1 : 0);
+      (_stall?.isActive == true ? 1 : 0) +
+      (_backoff?.isActive == true ? 1 : 0) +
+      _retryTimers.where((timer) => timer.isActive).length;
 
   @override
   Stream<SpeakerObserverEvent> get events => _events.stream;
@@ -788,8 +797,8 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     return result;
   }
 
-  void _adoptOrphan(Future<Process> launch) {
-    final orphan = _Orphan(launch, config, _report);
+  void _adoptOrphan(Future<Process> launch, Stopwatch age) {
+    final orphan = _Orphan(launch, age, config, _report);
     _orphans.add(orphan);
     unawaited(
       orphan.reaped
@@ -803,10 +812,23 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     );
   }
 
+  /// Stop tracking launches that have outlived two spawn timeouts (the one
+  /// that abandoned them and one more wait) without producing a child. They are still drained and reaped in the background if
+  /// they ever do (their reap keeps running and reports a failure), but they no
+  /// longer make every later call wait for them.
+  void _pruneOrphans() {
+    _orphans.removeWhere(
+      (orphan) =>
+          orphan.process == null &&
+          orphan.launchAge.elapsed > config.spawnTimeout * 2,
+    );
+  }
+
   /// Wait until no abandoned launch has a live child. A launch still pending
   /// after [launchBound] owns nothing yet and is left to the background reaper;
   /// once a child exists its reap is always awaited.
   Future<void> _settleOrphans(Duration launchBound) async {
+    _pruneOrphans();
     if (_orphans.isEmpty) return;
     final orphans = _orphans.toList();
     await Future.wait([
@@ -831,11 +853,15 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     int generation, {
     void Function(_Connection connection)? created,
   }) async {
-    await _settleOrphans(config.spawnTimeout);
-    _requireCurrent(generation);
     final cancel = Completer<void>();
     _cancelables.add(cancel);
     try {
+      // Registered first, so a stop cuts the wait for an abandoned launch short.
+      await Future.any<void>([
+        _settleOrphans(config.spawnTimeout),
+        cancel.future,
+      ]);
+      _requireCurrent(generation);
       return await _Connection.open(
         config,
         _launcher,
@@ -944,10 +970,19 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
         return reply;
       }
       _diagnostic(SpeakerObserverDiagnosticCode.busyRetried, attempt + 1);
-      await Future.any<void>([
-        Future<void>.delayed(config.backoffInitial),
-        connection.ended,
-      ]);
+      final wake = Completer<void>();
+      final timer = Timer(config.backoffInitial, () {
+        if (!wake.isCompleted) wake.complete();
+      });
+      _retryTimers.add(timer);
+      unawaited(
+        connection.ended.then<void>((_) {
+          if (!wake.isCompleted) wake.complete();
+        }),
+      );
+      await wake.future;
+      timer.cancel();
+      _retryTimers.remove(timer);
     }
   }
 
@@ -1420,6 +1455,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
   Future<void> stop() => _stopOp ??= _stop().whenComplete(() => _stopOp = null);
 
   Future<void> _stop() async {
+    _pruneOrphans();
     if (_phase == _Phase.idle &&
         _startOp == null &&
         _shot == null &&
@@ -1471,8 +1507,12 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
             StopRequest(_nextId()),
             config.exitGrace,
           );
-          if (reply is! StoppedFrame ||
-              (reply.session != null && reply.session != session)) {
+          if (reply is ErrorFrame && reply.code == 'busy') {
+            _diagnostic(SpeakerObserverDiagnosticCode.stopRefusedBusy);
+          }
+          // Stop is only sent after an accepted start, so the helper must echo
+          // that session: a null session answers a stop that precedes a start.
+          if (reply is! StoppedFrame || reply.session != session) {
             unclean = reply is ErrorFrame
                 ? SpeakerObserverFailure.helperError
                 : SpeakerObserverFailure.protocolError;

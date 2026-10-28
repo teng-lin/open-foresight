@@ -211,11 +211,17 @@ be derived from a steady clock that does not count system sleep.
   `ordered_tile` (disabled by default), `atspi_state` (Linux, reserved until a
   live signal is established).
 - Names keep their original spelling, including commas and punctuation. The
-  receiver removes control, bidirectional-override and zero-width or word-joiner
-  characters (U+200B, U+2060 to U+2064, U+FEFF; the joiners U+200C and U+200D
-  stay), turns line
-  breaks into spaces and trims; a name that is empty afterwards, or longer than
-  256 characters, is a protocol error.
+  receiver removes control characters and these format characters, the same set
+  persistence strips: U+00AD, U+061C, U+200B, U+200E and U+200F, U+202A to
+  U+202E, U+2060 to U+2064, U+2066 to U+206F, U+FE00 to U+FE0F, U+FEFF, U+E0000
+  to U+E007F and U+E0100 to U+E01EF. Line breaks become spaces and the name is
+  trimmed. The joiners U+200C and U+200D stay inside names but are never visible
+  by themselves. A name with no visible character left, or longer than 256
+  characters, is a protocol error.
+  Known gap, shared with persistence: characters that render blank but are not
+  in that set (U+180E, U+034F, the Hangul fillers U+115F, U+1160, U+3164 and
+  U+FFA0, and U+2800) still count as visible, so a participant named only with
+  them is accepted. Changing that needs a joint change to both.
 - Every `speakers[].ref` must name a distinct entry of the same observation's
   `participants`, and `participants[].ref` values are distinct. Violations are
   protocol errors, so a speaker can never lack a roster entry.
@@ -234,15 +240,20 @@ when stdin closes.
   one is unreaped. `stop` cancels any start, restart or query in flight and
   waits until every child that exists has exited. A launch that was abandoned
   (timeout or cancellation) is waited for at most one kill grace by `stop` and
-  one spawn timeout by the next launch; a child that appears is always drained
-  and reaped before either returns. A launch still pending after that owns no
-  child yet: it is reaped in the background if it ever produces one, and the
-  next launch, `stop` or `dispose` waits for that again. A child that cannot be
+  one spawn timeout by the next launch (a `stop` cuts that wait short); a child
+  that appears is always drained and reaped before either returns. A launch
+  still pending after that owns no child yet: it is reaped in the background if
+  it ever produces one, and the next launch, `stop` or `dispose` waits for it
+  again, until it has been pending for two spawn timeouts, after which it is no
+  longer waited for (it is still reaped in the background). A child that cannot be
   reaped (it survives SIGKILL) puts the service in a refuse-further-use state.
 - **Shutdown.** `stop` asks the helper to stop, waits `exitGrace` (at least the
   read deadline), then sends SIGTERM and SIGKILL, each with a bounded wait. A
   shutdown that needed a signal, exited nonzero, or answered with an error or
-  another session's `stopped` is reported on the `stopped` state event.
+  another session's `stopped` is reported on the `stopped` state event. Stop is
+  only sent after an accepted start, so a `stopped` with a null `session` is
+  also unclean (that answer belongs to a stop that precedes any start). A stop
+  refused with `error` / `busy` is unclean and has its own diagnostic.
 - **Restarts.** A failed or stalled helper is replaced, with exponential
   backoff, at most 5 restarts per budget. The budget refills once a helper had
   run for 5 minutes before failing, so isolated crashes hours apart never
