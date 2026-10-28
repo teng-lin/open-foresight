@@ -12,6 +12,7 @@ import 'persistence/source_store.dart';
 import 'persistence/source_queries.dart';
 import 'persistence/read_schema_guard.dart';
 import 'persistence/meeting_store.dart';
+import 'meeting_attribution.dart';
 export 'document_parser.dart' show Parser;
 export 'persistence/model_store.dart' show requireEmbeddingBundle;
 import 'persistence/model_store.dart';
@@ -539,6 +540,7 @@ class Store implements SqliteSnapshotSource {
     db,
     supportedVersion: schemaVersion,
     writeSource: importText,
+    workspaceEpoch: () => workspaceEpoch,
   );
   int meeting(String title) => meetingStore.meeting(title);
   void saveMeetingNotes(int meetingId, String body, {int? lastManualEdit}) =>
@@ -555,6 +557,39 @@ class Store implements SqliteSnapshotSource {
     int end,
     String source,
   ) => meetingStore.transcript(meeting, text, finalText, start, end, source);
+  TranscriptWrite transcriptWithAttribution(
+    int meeting,
+    String text,
+    bool finalText,
+    int start,
+    int end,
+    String source, {
+    TranscriptAttribution? attribution,
+  }) => meetingStore.transcriptWithAttribution(
+    meeting,
+    text,
+    finalText,
+    start,
+    end,
+    source,
+    attribution: attribution,
+  );
+  List<MeetingParticipant> saveMeetingParticipants(
+    int meeting,
+    List<MeetingParticipant> participants,
+  ) => meetingStore.saveParticipants(meeting, participants);
+  AttributionWriteOutcome saveAutomaticAttribution(
+    int transcriptId,
+    TranscriptAttribution attribution,
+  ) => meetingStore.saveAutomaticAttribution(transcriptId, attribution);
+  void setManualAttribution(
+    int transcriptId,
+    TranscriptAttribution attribution,
+  ) => meetingStore.setManualAttribution(transcriptId, attribution);
+  bool resetAttribution(int transcriptId) =>
+      meetingStore.resetAttribution(transcriptId);
+  int renameMeetingParticipant(int participantId, String displayName) =>
+      meetingStore.renameParticipant(participantId, displayName);
   void artifact(
     int meeting,
     String kind,

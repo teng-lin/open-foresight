@@ -225,7 +225,9 @@ final class MeetingTranscriptProjection {
       if (projectedBytes != 0 && projectedBytes + rowBytes > 1024 * 1024) break;
       projectedBytes += rowBytes;
       final row = store.rows(
-        'SELECT text,start_ms,end_ms,source FROM transcript WHERE id=? AND meeting_id=? AND final=1',
+        'SELECT t.text,t.start_ms,t.end_ms,t.source,a.rendered_name FROM transcript t '
+        'LEFT JOIN transcript_attributions a ON a.transcript_id=t.id '
+        'WHERE t.id=? AND t.meeting_id=? AND t.final=1',
         [id, meeting],
       ).firstOrNull;
       store.workflowTransaction(() {
@@ -241,8 +243,11 @@ final class MeetingTranscriptProjection {
             MeetingSpeaker.remote => 1,
             MeetingSpeaker.unknown => 2,
           };
+          // A supported person name replaces only the displayed label; the
+          // channel key above is unchanged.
+          final named = row['rendered_name'] as String? ?? '';
           final bytes = utf8.encode(
-            '[${speaker.label} ${(row['start_ms'] as num?)?.toInt() ?? 0}–${(row['end_ms'] as num?)?.toInt() ?? 0} ms] $text',
+            '[${named.isEmpty ? speaker.label : named} ${(row['start_ms'] as num?)?.toInt() ?? 0}–${(row['end_ms'] as num?)?.toInt() ?? 0} ms] $text',
           );
           var offset = 0, ordinal = 0;
           while (offset < bytes.length) {

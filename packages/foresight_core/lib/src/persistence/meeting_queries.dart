@@ -1,4 +1,5 @@
 import 'package:sqlite3/sqlite3.dart';
+import '../meeting_attribution.dart';
 import '../read_models.dart';
 import 'read_schema_guard.dart';
 
@@ -74,8 +75,15 @@ class MeetingQueries {
     'SELECT text FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
     [id],
   );
+  // The attribution join is nullable: historical rows have no attribution.
+  static const _attributedTranscript =
+      'SELECT t.*,a.participant_id,a.display_name AS attribution_display_name,'
+      'a.state AS attribution_state,a.method AS attribution_method,'
+      'a.manual AS attribution_manual FROM transcript t '
+      'LEFT JOIN transcript_attributions a ON a.transcript_id=t.id '
+      'WHERE t.meeting_id=?';
   List<Map<String, Object?>> _meetingTranscript(int id) =>
-      _rows('SELECT * FROM transcript WHERE meeting_id=? ORDER BY id', [id]);
+      _rows('$_attributedTranscript ORDER BY t.id', [id]);
   List<Map<String, Object?>> _meetingArtifacts(int id, String kind) => _rows(
     'SELECT * FROM artifacts WHERE meeting_id=? AND kind=? ORDER BY id DESC',
     [id, kind],
@@ -143,11 +151,22 @@ class MeetingQueries {
       _meetingQuestions(id).map(MeetingQuestion.fromRow).toList();
   List<TranscriptSegment> transcript(int id, {bool finalOnly = false}) =>
       finalOnly
-      ? _rows(
-          'SELECT * FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
-          [id],
-        ).map(TranscriptSegment.fromRow).toList()
+      ? _rows('$_attributedTranscript AND t.final=1 ORDER BY t.id', [
+          id,
+        ]).map(TranscriptSegment.fromRow).toList()
       : _meetingTranscript(id).map(TranscriptSegment.fromRow).toList();
+  List<MeetingParticipant> participants(int meeting) => _rows(
+    'SELECT * FROM meeting_participants WHERE meeting_id=? ORDER BY id',
+    [meeting],
+  ).map(MeetingParticipant.fromRow).toList();
+  TranscriptAttribution? attribution(int transcriptId) {
+    final row = _rows(
+      'SELECT * FROM transcript_attributions WHERE transcript_id=?',
+      [transcriptId],
+    ).firstOrNull;
+    return row == null ? null : TranscriptAttribution.fromRow(row);
+  }
+
   List<String> finalTranscriptText(int id) =>
       _finalTranscript(id).map((r) => r['text'] as String).toList();
   List<MeetingArtifact> artifacts(int id, String kind) =>

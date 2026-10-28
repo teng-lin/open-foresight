@@ -8,6 +8,7 @@ import 'package:foresight_core/src/application_services/native_audio_media.dart'
 import 'package:foresight_core/src/native_lifetime.dart';
 import 'package:foresight_core/src/persistence/audio_transform_media.dart';
 import 'package:foresight_core/src/audio_models.dart';
+import 'package:foresight_core/src/meeting_attribution.dart';
 import 'package:foresight_core/src/persistence/audio_profile_backups.dart';
 import 'package:foresight_core/src/persistence/audio_store.dart';
 import 'package:foresight_core/src/persistence/backup_files.dart';
@@ -172,6 +173,60 @@ void main() {
         expect(media.audio.usableRepresentations(chunk.id), hasLength(1));
       } finally {
         owner.close();
+        copy.close();
+      }
+    },
+  );
+  test(
+    'backup and new-profile restore keep participants, attributions and rendered text',
+    () async {
+      final meetingId = session.meetingId;
+      final person = store.saveMeetingParticipants(meetingId, [
+        MeetingParticipant(
+          scope: 'session/window',
+          identityKey: 'ax:1',
+          displayName: 'Ada Lovelace',
+          firstSeenMs: 0,
+          lastSeenMs: 9,
+        ),
+      ]).single;
+      store.transcript(meetingId, 'backed up words', true, 0, 9, 'playback');
+      final transcriptId = store.db.lastInsertRowId;
+      store.setManualAttribution(
+        transcriptId,
+        TranscriptAttribution.manual(
+          participantId: person.id,
+          displayName: 'Ada Lovelace',
+        ),
+      );
+      await create();
+      await backups.restoreToNewProfile(
+        backupDirectory: destination,
+        authorizedAbsentProfile: restored,
+        current: () => true,
+      );
+      final copy = Store('$restored/application.db');
+      try {
+        final segment = copy.meetingQueries.transcript(meetingId).single;
+        expect(segment.text, 'backed up words');
+        expect(segment.participantName, 'Ada Lovelace');
+        expect(segment.attributionManual, isTrue);
+        expect(segment.channel.label, 'Remote');
+        expect(
+          copy.meetingQueries.participants(meetingId).single.identityKey,
+          'ax:1',
+        );
+        expect(
+          copy.saveAutomaticAttribution(
+            transcriptId,
+            TranscriptAttribution(
+              state: AttributionState.attributed,
+              displayName: 'Robot',
+            ),
+          ),
+          AttributionWriteOutcome.protectedByManual,
+        );
+      } finally {
         copy.close();
       }
     },

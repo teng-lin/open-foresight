@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'meeting_speakers.dart';
 import 'output_stats_period.dart';
 import 'summary_generator.dart' show summaryDigest;
 export 'output_stats_period.dart';
@@ -191,6 +192,20 @@ final class TranscriptSegment extends ReadProjection {
   int get startMs => _integer('start_ms');
   int get endMs => _integer('end_ms');
   String get source => _text('source');
+
+  /// The capture route, independent of any person attribution.
+  MeetingSpeaker get channel => MeetingSpeaker.fromSource(source);
+
+  /// Null for historical rows and rows never attributed.
+  int? get participantId => _optionalInteger('participant_id');
+  String? get attributionState => _optionalText('attribution_state');
+  String? get attributionMethod => _optionalText('attribution_method');
+  bool get attributionManual => _flag('attribution_manual');
+
+  /// The observed name snapshot, present only when the row names a person.
+  String? get participantName => attributionState == 'attributed'
+      ? _optionalText('attribution_display_name')
+      : null;
 }
 
 final class MeetingQuestion extends ReadProjection {

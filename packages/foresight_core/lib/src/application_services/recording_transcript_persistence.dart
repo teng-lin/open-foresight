@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 
+import '../meeting_attribution.dart';
 import '../meeting_workflow_store.dart';
 import '../rpc_error.dart';
 import '../store.dart';
@@ -13,14 +14,33 @@ final class RecordingTranscriptSegment {
     this.end,
     this.source, {
     required this.finalText,
+    this.attribution,
   });
   final String text, source;
   final int start, end;
   final bool finalText;
+
+  /// Optional person attribution committed with this row. It is metadata: its
+  /// rejection never prevents the text from being saved.
+  final TranscriptAttribution? attribution;
+
+  /// Set after the commit that saved this segment.
+  int? transcriptId;
+  bool attributionSaved = false;
+  Object? attributionError;
   int attempts = 0;
   final age = Stopwatch()..start();
   late final int bytes = utf8
-      .encode(jsonEncode([text, start, end, source, finalText]))
+      .encode(
+        jsonEncode([
+          text,
+          start,
+          end,
+          source,
+          finalText,
+          attribution?.toJson(),
+        ]),
+      )
       .length;
 }
 
@@ -75,10 +95,10 @@ final class RecordingTranscriptPersistence {
       }
       segment.attempts++;
       try {
-        // transcript() inserts a row and increments the meeting revision in
-        // separate statements. Roll back both before an idempotent retry.
-        store.workflowTransaction(
-          () => store.transcript(
+        // The row, its revision bump and its attribution are separate
+        // statements. Roll all back before an idempotent retry.
+        final written = store.workflowTransaction(
+          () => store.transcriptWithAttribution(
             meeting,
             segment.text,
             segment.finalText,
@@ -87,8 +107,13 @@ final class RecordingTranscriptPersistence {
             segment.finalText
                 ? '${segment.source}; captured-sample timeline (gaps excluded)'
                 : segment.source,
+            attribution: segment.attribution,
           ),
         );
+        segment
+          ..transcriptId = written.transcriptId
+          ..attributionSaved = written.attributionSaved
+          ..attributionError = written.attributionError;
       } catch (error, stack) {
         failure ??= error;
         failureStack ??= stack;
