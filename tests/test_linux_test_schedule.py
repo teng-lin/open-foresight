@@ -236,10 +236,25 @@ def container_entrypoint(runner, tmp_path):
         ROOT / "tools/linux_container_runtime.sh",
         root / "tools/linux_container_runtime.sh",
     )
+    (root / "tools/prepare_flutter_consumer.py").write_text(
+        "from pathlib import Path; import json,os,sys\n"
+        f"root=Path({str(root)!r})\n"
+        "assert (root/'restore.done').exists()\n"
+        "calls=[json.loads(line) for line in (root/'chown.jsonl').read_text().splitlines()]\n"
+        "assert calls==[[os.environ['OUT_UID']+':'+os.environ['OUT_GID'],os.environ['FIXTURE_SOURCE']]]\n"
+        "assert not (root/'user.ready').exists()\n"
+        "assert sys.argv[1:6]==['--workspace',os.environ['FIXTURE_SOURCE'],'--flutter-root','/opt/flutter','--']\n"
+        "assert sys.argv[6:8]==[sys.executable,'tools/run_ci_user.py']\n"
+        "print('SDK tool preparation diagnostics',flush=True)\n"
+        "if os.getenv('FAIL_FLUTTER_PREPARE'):raise SystemExit(int(os.environ['FAIL_FLUTTER_PREPARE']))\n"
+        "(root/'flutter.ready').touch()\n"
+        "os.execvpe(sys.argv[6],sys.argv[6:],os.environ)\n"
+    )
     (root / "tools/run_ci_user.py").write_text(
         "from pathlib import Path; import json,os,sys\n"
         f"root=Path({str(root)!r})\n"
         "assert (root/'restore.done').exists()\n"
+        "assert (root/'flutter.ready').exists()\n"
         "calls=[json.loads(line) for line in (root/'chown.jsonl').read_text().splitlines()]\n"
         "assert calls==[[os.environ['OUT_UID']+':'+os.environ['OUT_GID'],os.environ['FIXTURE_SOURCE']]]\n"
         "assert sys.argv[1:2]==['--workspace']\n"
@@ -314,6 +329,7 @@ def test_container_entrypoint_restores_first_and_honors_schedule_switch(
     )
     assert (root / "tooling.ready").exists()
     assert (root / "restore.done").exists()
+    assert (root / "flutter.ready").exists()
     assert (root / "user.ready").exists()
     ownership = [
         json.loads(line) for line in (root / "chown.jsonl").read_text().splitlines()
@@ -362,6 +378,28 @@ def test_container_entrypoint_refuses_root_target_before_owner_transfer_or_gates
         json.loads(line) for line in (root / "chown.jsonl").read_text().splitlines()
     ]
     assert ownership == [["-R", uid + ":" + gid, str(output)]]
+
+
+def test_flutter_preparation_refusal_preserves_failure_before_identity_drop_or_tests(
+    container_entrypoint,
+):
+    root, scoped, entrypoint, output, _ = container_entrypoint
+    result = subprocess.run(
+        ["bash", str(entrypoint)],
+        env={**scoped, "FAIL_FLUTTER_PREPARE": "31"},
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 31, result.stdout + result.stderr
+    assert "SDK tool preparation diagnostics" in result.stdout
+    assert not (root / "user.ready").exists()
+    assert not list(root.glob("*.started"))
+    assert output.is_dir()  # The failure still executes the evidence trap.
+    ownership = [
+        json.loads(line) for line in (root / "chown.jsonl").read_text().splitlines()
+    ]
+    assert ownership[-1] == ["-R", "1234:2345", str(output)]
 
 
 def test_legacy_test_failure_still_runs_fast_and_host_without_core_overlap(

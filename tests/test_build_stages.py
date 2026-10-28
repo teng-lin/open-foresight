@@ -490,6 +490,30 @@ def test_desktop_failures_do_not_hide_coverage_or_release_compile(dart_gate_tree
     assert "coverage evaluated" in result.stdout
 
 
+@pytest.mark.parametrize("mode", ["all", "build-only", "test-only"])
+def test_desktop_test_only_reuses_dependencies_without_implicit_pub_resolution(
+    dart_gate_tree, mode
+):
+    import json
+
+    result = invoke_dart_gate(dart_gate_tree, "desktop", FORESIGHT_BUILD_MODE=mode)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = [
+        json.loads(line)
+        for line in Path(dart_gate_tree[1]["COMMAND_LOG"]).read_text().splitlines()
+    ]
+    flutter = [call[1:] for call in calls if call[0] == "flutter"]
+    resolutions = [call for call in flutter if call[0] == "pub"]
+    assert resolutions == (
+        [] if mode == "test-only" else [["pub", "get", "--enforce-lockfile"]]
+    )
+    checks = [call for call in flutter if call[0] in ("analyze", "test")]
+    assert len(checks) == (0 if mode == "build-only" else 2)
+    for call in checks:
+        assert ("--no-pub" in call) == (mode == "test-only")
+    assert any(call[0] == "build" for call in flutter) == (mode != "test-only")
+
+
 @pytest.mark.parametrize("failure", ["FAIL_RECEIPT", "FAIL_DEPENDENCIES"])
 def test_gate_prerequisite_failure_blocks_dependent_work(dart_gate_tree, failure):
     result = invoke_dart_gate(dart_gate_tree, "core", **{failure: 19})

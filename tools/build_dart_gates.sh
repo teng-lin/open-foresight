@@ -195,7 +195,12 @@ case "$task_gate" in
       task_require "desktop dependency resolution" flutter pub get --enforce-lockfile
     fi
     if [[ "$task_mode" != build-only ]]; then
-      task_check "desktop analysis" flutter analyze
+      # Test-only consumes the exact verified producer dependency graph. Pub's
+      # timestamp freshness check can otherwise rerun online resolution after
+      # restore even when both the lock and package configuration are valid.
+      task_flutter_pub=()
+      if [[ "$task_mode" == test-only ]]; then task_flutter_pub=(--no-pub); fi
+      task_check "desktop analysis" flutter analyze ${task_flutter_pub[@]+"${task_flutter_pub[@]}"}
       task_check "desktop format" dart format --output=none --set-exit-if-changed .
       task_coverage=()
       if [[ "$task_platform" == linux || "${FORESIGHT_COVERAGE:-0}" == 1 || "${FORESIGHT_DESKTOP_COVERAGE_REPORT:-0}" == 1 ]]; then
@@ -204,7 +209,7 @@ case "$task_gate" in
       if [[ -n ${task_coverage[*]-} && -f coverage/lcov.info ]]; then
         mv -- coverage/lcov.info "$task_checks/previous-lcov.raw"
       fi
-      task_check "desktop tests and coverage" flutter test --dart-define=FORESIGHT_ENABLE_TEST_HOOKS=true ${task_coverage[@]+"${task_coverage[@]}"} --file-reporter="json:$task_reports/desktop.events.jsonl"
+      task_check "desktop tests and coverage" flutter test ${task_flutter_pub[@]+"${task_flutter_pub[@]}"} --dart-define=FORESIGHT_ENABLE_TEST_HOOKS=true ${task_coverage[@]+"${task_coverage[@]}"} --file-reporter="json:$task_reports/desktop.events.jsonl"
       if [[ "$task_platform" == linux ]]; then
         task_check "desktop coverage floor" "$task_python" "$task_root/tools/check_coverage.py" coverage/lcov.info --label Desktop --minimum 90
       fi
