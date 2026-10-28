@@ -103,6 +103,15 @@ void main() {
       expect(types, ['capabilities', 'setup', 'stop', 'clock']);
     });
 
+    test('rejects a request larger than the line limit', () {
+      final encoder = ObserverFrameEncoder(maxLineBytes: 20);
+      expect(
+        () => encoder.encode(const CapabilitiesRequest('a')),
+        throwsArgumentError,
+      );
+      expect(encoder.nextSeq, 0);
+    });
+
     test('rejects identifiers and bounds that the helper must refuse', () {
       final encoder = ObserverFrameEncoder();
       expect(
@@ -441,6 +450,27 @@ void main() {
       expect(clean.close, returnsNormally);
     });
 
+    test('frames before a violation in one chunk are delivered first', () {
+      final decoder = ObserverFrameDecoder();
+      final frames = decoder.add(
+        utf8.encode('${line(hello(0))}garbage\n${line(hello(1))}'),
+      );
+      expect(frames, hasLength(1));
+      expect(decoder.failed, true);
+      expect(
+        () => decoder.add(utf8.encode(line(hello(1)))),
+        throwsA(
+          isA<ObserverProtocolException>().having(
+            (e) => e.code,
+            'code',
+            ObserverProtocolErrorCode.malformed,
+          ),
+        ),
+      );
+      // Later calls repeat a generic failure.
+      expect(decoder.close, throwsA(isA<ObserverProtocolException>()));
+    });
+
     test('a failed decoder stays failed', () {
       final decoder = ObserverFrameDecoder();
       expect(
@@ -585,6 +615,78 @@ void main() {
       expect(
         reject({'read_end_ms': 1 << 60, 'read_start_ms': 1 << 59}).code,
         ObserverProtocolErrorCode.malformed,
+      );
+    });
+
+    test('rejects malformed roster entries', () {
+      expect(
+        reject({
+          'participants': ['p1'],
+          'speakers': [],
+        }).code,
+        ObserverProtocolErrorCode.malformed,
+      );
+      expect(
+        reject({
+          'participants': [
+            {'ref': 'p1', 'name': 'A', 'self': 'no'},
+          ],
+          'speakers': [],
+        }).code,
+        ObserverProtocolErrorCode.malformed,
+      );
+      expect(
+        reject({
+          'speakers': ['p1'],
+        }).code,
+        ObserverProtocolErrorCode.malformed,
+      );
+      expect(
+        reject({
+          'target': {'pid': 1, 'window': 'w', 'locale': ''},
+        }).code,
+        ObserverProtocolErrorCode.malformed,
+      );
+      expect(
+        reject({
+          'target': {'pid': 1, 'window': 'w', 'zoom_version': 'v' * 65},
+        }).code,
+        ObserverProtocolErrorCode.malformed,
+      );
+    });
+
+    test('turns tabs and line breaks in names into spaces', () {
+      final frames = ObserverFrameDecoder().add(
+        utf8.encode(
+          line(
+            observation(
+              0,
+              overrides: {
+                'participants': [
+                  {'ref': 'p1', 'name': 'Ada\tLovelace\nJr', 'self': false},
+                ],
+                'speakers': [],
+              },
+            ),
+          ),
+        ),
+      );
+      expect(
+        (frames.single as ObservationFrame)
+            .observation
+            .participants
+            .single
+            .name,
+        'Ada Lovelace Jr',
+      );
+      expect(
+        reject({
+          'participants': [
+            {'ref': 'p1', 'name': '\u{1F600}' * 600, 'self': false},
+          ],
+          'speakers': [],
+        }).code,
+        ObserverProtocolErrorCode.limit,
       );
     });
 
@@ -756,6 +858,18 @@ void main() {
       expect(events.last, isA<ObserverProtocolException>());
       expect(events, hasLength(2));
       await controller.close();
+    });
+
+    test('decodeObserverFrames yields earlier frames of a bad chunk', () async {
+      final events = <Object>[];
+      final done = Completer<void>();
+      decodeObserverFrames(
+        Stream.value(utf8.encode('${line(hello(0))}garbage\n')),
+      ).listen(events.add, onError: events.add, onDone: done.complete);
+      await done.future;
+      expect(events.first, isA<HelloFrame>());
+      expect(events.last, isA<ObserverProtocolException>());
+      expect(events, hasLength(2));
     });
 
     test('decodeObserverFrames reports truncation at end of stream', () async {

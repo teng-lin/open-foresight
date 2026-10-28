@@ -254,6 +254,7 @@ final class ObserverFrameDecoder {
   final BytesBuilder _line = BytesBuilder(copy: false);
   int _expectedSeq = 0;
   bool _failed = false;
+  ObserverProtocolException? _deferred;
 
   int get expectedSeq => _expectedSeq;
   bool get failed => _failed;
@@ -283,9 +284,12 @@ final class ObserverFrameDecoder {
         frames.add(_decodeLine(_line.takeBytes()));
         start = newline + 1;
       }
-    } on ObserverProtocolException {
+    } on ObserverProtocolException catch (error) {
       _failed = true;
-      rethrow;
+      // Frames decoded ahead of the violation are valid and are delivered
+      // first; the violation surfaces on the next call.
+      if (frames.isEmpty) rethrow;
+      _deferred = error;
     }
     return frames;
   }
@@ -302,7 +306,15 @@ final class ObserverFrameDecoder {
     }
   }
 
+  /// Throws a violation deferred behind already delivered frames, if any.
+  void throwIfFailed() => _requireHealthy();
+
   void _requireHealthy() {
+    final deferred = _deferred;
+    if (deferred != null) {
+      _deferred = null;
+      throw deferred;
+    }
     if (_failed) {
       throw const ObserverProtocolException(
         ObserverProtocolErrorCode.malformed,
@@ -356,6 +368,7 @@ Stream<ObserverFrame> decodeObserverFrames(
     for (final frame in decoder.add(chunk)) {
       yield frame;
     }
+    decoder.throwIfFailed();
   }
   decoder.close();
 }
