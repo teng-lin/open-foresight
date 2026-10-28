@@ -6,6 +6,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-28
+
 ### Fixed
 
 - Keep routine saved-audio processing messages from repeatedly shifting the
@@ -264,7 +266,8 @@ The macOS disk image in this release is ad-hoc signed and is not notarized.
 Physical-device recovery and echo-cancellation quality were not validated across
 hardware. Model weights are downloaded after install and are not inside the packages.
 
-[Unreleased]: https://github.com/teng-lin/open-foresight/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/teng-lin/open-foresight/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.6
 [0.1.5]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.5
 [0.1.4]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.4-signed
 [0.1.3]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.3
