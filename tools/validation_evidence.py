@@ -186,6 +186,7 @@ def observe_tools(
     names: Sequence[str] = tuple(TOOL_PROBES),
     run: Callable[..., Any] = subprocess.run,
     which: Callable[[str], str | None] = shutil.which,
+    timeout: float = 30,
 ) -> dict[str, Any]:
     """The version line of each tool's output, or null when it is absent.
 
@@ -199,7 +200,7 @@ def observe_tools(
             observed[name] = None
             continue
         try:
-            result = run([executable, *TOOL_PROBES[name][1:]], capture_output=True, text=True, timeout=30, check=False)
+            result = run([executable, *TOOL_PROBES[name][1:]], capture_output=True, text=True, timeout=timeout, check=False)
             if result.returncode:
                 observed[name] = f"probe failed: exit {result.returncode}"
             else:
@@ -382,16 +383,34 @@ def tool_pins(observed: Mapping[str, Any] | None, pins: Mapping[str, str]) -> di
     }
 
 
+COUNT = re.compile(r"[0-9]{1,6}")
+
+
+def _count(value: str) -> str:
+    """A parallelism setting is a small integer; anything else is recorded as `invalid`, not as text."""
+    return value if COUNT.fullmatch(value) else "invalid"
+
+
 def concurrency(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
     environ = os.environ if environ is None else environ
     return {
         "cpu_count": os.cpu_count(),
-        "settings": {name: _printable(environ[name]) for name in CONCURRENCY_ENV if name in environ},
+        "settings": {name: _count(environ[name]) for name in CONCURRENCY_ENV if name in environ},
         "checks_run": "sequential",
     }
 
 
-def cache_and_artifacts(checks: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def tilde(path: str, home: str | None) -> str:
+    """The path with the account home written as `~`, so a packet does not carry the user's directory."""
+    base = (home or "").rstrip("/")  # "/" as a home would otherwise swallow every path
+    if base and (path == base or path.startswith(base + "/")):
+        return "~" + path[len(base):]
+    return path
+
+
+def cache_and_artifacts(
+    checks: Sequence[Mapping[str, Any]], home: str | None = None
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Reused outputs and digested artifacts, as the checks observed them.
 
     Nothing here verifies provenance: the producer stays null because only the
@@ -401,10 +420,10 @@ def cache_and_artifacts(checks: Sequence[Mapping[str, Any]]) -> tuple[dict[str, 
     artifacts = []
     for check in checks:
         for item in check.get("reuse", ()):
-            reused.append({"check": check["id"], "id": item["id"], "path": item["path"], "present": item["present"],
+            reused.append({"check": check["id"], "id": item["id"], "path": tilde(item["path"], home), "present": item["present"],
                            "at_execution": (item.get("at_execution") or {}).get("present")})
             for path, digest in sorted((item.get("sha256") or {}).items()):
-                artifacts.append({"check": check["id"], "path": path, "sha256": digest, "producer": None})
+                artifacts.append({"check": check["id"], "path": tilde(path, home), "sha256": digest, "producer": None})
     return {"reused_outputs": reused}, artifacts
 
 
@@ -447,6 +466,9 @@ def derive_gaps(summary: Mapping[str, Any]) -> list[dict[str, str]]:
     for check in summary["checks"]:
         if check["status"] not in ("passed", "subsumed", "planned"):
             add(f"check-not-passed:{check['id']}", f"status {check['status']}" + (f": {check['reason']}" if check.get("reason") else ""))
+    for check in summary["checks"]:
+        if check["status"] == "subsumed":
+            add(f"subsumed-not-verified:{check['id']}", f"covered by {check.get('subsumed_by')}; this check's own entrypoint did not run")
     if summary.get("artifacts"):
         add("artifact-provenance-not-recorded", "digests are recorded; producer provenance is verified only by the entrypoint")
     return gaps
@@ -466,9 +488,10 @@ def build_summary(
     now: datetime | None = None,
     incomplete_reasons: Sequence[str] = (),
     pins: Mapping[str, str] | None = None,
+    temp_root_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     status, reasons = classify(mode, checks, unexecuted_platforms, incomplete_reasons)
-    summary = {
+    summary: dict[str, Any] = {
         "schema": SCHEMA,
         "kind": KIND,
         "created_utc": (now or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -480,7 +503,7 @@ def build_summary(
         "invocation": dict(invocation),
         "host": host_identity(),
         "account": account_identity(environ),
-        "temp_root_policy": temp_policy(environ),
+        "temp_root_policy": dict(temp_root_policy) if temp_root_policy is not None else temp_policy(environ),
         "environment": collect_environment(environ),
         "tools": dict(tools) if tools is not None else None,
         "selection": dict(selection),
@@ -493,10 +516,56 @@ def build_summary(
     summary["tool_pins"] = tool_pins(tools, pins if pins is not None else pinned_tools())
     summary["concurrency"] = concurrency(environ)
     summary["image"] = image_identity(environ)
-    summary["cache"], summary["artifacts"] = cache_and_artifacts(checks)
+    summary["cache"], summary["artifacts"] = cache_and_artifacts(checks, summary["account"]["nss"].get("home"))
     summary["reproduction_gaps"] = derive_gaps(summary)
     validate_summary(summary)
     return summary
+
+
+_SHAPES: dict[str, type] = {
+    "created_utc": str, "mode": str, "status": str, "full_validation": bool, "source": dict, "invocation": dict,
+    "host": dict, "account": dict, "temp_root_policy": dict, "environment": dict, "selection": dict, "checks": list,
+    "counts": dict, "unexecuted_platforms": list, "reproduction": list,
+}
+_SHAPES_2: dict[str, type] = {
+    "tool_pins": dict, "concurrency": dict, "cache": dict, "artifacts": list, "reproduction_gaps": list, "image": dict,
+}
+
+
+def _check_shapes(summary: Mapping[str, Any]) -> None:
+    """Reject values of the wrong type, so a reader never meets one halfway through using a packet."""
+    shapes = {**_SHAPES, **(_SHAPES_2 if summary["schema"] == 2 else {})}
+    for key, kind in shapes.items():
+        if not isinstance(summary[key], kind):
+            raise ValueError(f"Evidence summary field {key} must be a {kind.__name__}")
+    for key in ("unexecuted_platforms", "reproduction"):
+        if not all(isinstance(item, str) for item in summary[key]):
+            raise ValueError(f"Evidence summary field {key} must list text")
+    if not all(isinstance(value, str) for value in (*summary["host"].values(), *summary["environment"].values())):
+        raise ValueError("Evidence host and environment values must be text")
+    for check in summary["checks"]:
+        if not isinstance(check, dict) or not isinstance(check.get("id"), str) or not isinstance(check.get("status"), str):
+            raise ValueError("Every check needs a text id and status")
+        for key in ("reason", "log"):
+            if check.get(key) is not None and not isinstance(check[key], str):
+                raise ValueError(f"Check {check['id']} field {key} must be text")
+        entrypoint = check.get("entrypoint")
+        if entrypoint is not None and not (isinstance(entrypoint, list) and all(isinstance(token, str) for token in entrypoint)):
+            raise ValueError(f"Check {check['id']} entrypoint must list text")
+        phases = check.get("phases")
+        if phases is not None and not isinstance(phases, dict):
+            raise ValueError(f"Check {check['id']} phases must be a mapping")
+    if summary["schema"] == 2:
+        for gap in summary["reproduction_gaps"]:
+            if not isinstance(gap, dict) or not isinstance(gap.get("code"), str) or not isinstance(gap.get("detail"), str):
+                raise ValueError("A reproduction gap needs a code and a detail")
+        if not all(isinstance(record, dict) for record in summary["tool_pins"].values()):
+            raise ValueError("Every tool pin must be a mapping")
+        settings: Any = summary["concurrency"].get("settings", {})
+        if not isinstance(settings, dict) or not all(isinstance(v, str) and (COUNT.fullmatch(v) or v == "invalid") for v in settings.values()):
+            raise ValueError("Concurrency settings must be integers or `invalid`")
+        if not all(isinstance(item, dict) for item in summary["artifacts"]):
+            raise ValueError("Every artifact must be a mapping")
 
 
 def validate_summary(summary: Mapping[str, Any]) -> None:
@@ -515,13 +584,12 @@ def validate_summary(summary: Mapping[str, Any]) -> None:
         absent = [key for key in ("tool_pins", "concurrency", "cache", "artifacts", "reproduction_gaps", "image") if key not in summary]
         if absent:
             raise ValueError("Evidence summary schema 2 lacks: " + ", ".join(absent))
+    _check_shapes(summary)
+    if summary["schema"] == 2:
         for check in summary["checks"]:
             for phase, value in (check.get("phases") or {}).items():
                 if phase not in PHASE_VALUES or value not in PHASE_VALUES[phase]:
                     raise ValueError(f"Invalid {phase} phase {value!r} for check {check.get('id')}")
-        for gap in summary["reproduction_gaps"]:
-            if not isinstance(gap.get("code"), str) or not isinstance(gap.get("detail"), str):
-                raise ValueError("A reproduction gap needs a code and a detail")
     if summary["status"] not in STATUSES:
         raise ValueError("Unknown evidence status")
     unknown = sorted(set(summary["environment"]) - set(ENV_ALLOWLIST))

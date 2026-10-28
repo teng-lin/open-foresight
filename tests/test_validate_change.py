@@ -1637,6 +1637,8 @@ def test_a_sigkill_that_does_not_take_effect_is_a_failed_outcome_not_a_traceback
         assert result["timed_out"] is True and result["returncode"] is None
         assert result["error"] == "the entrypoint did not exit after SIGKILL"
         assert vc._outcome_status(result) == ("failed", "the entrypoint did not exit after SIGKILL")
+        assert result["unkillable"] is True
+        assert vc.check_phases({"status": "failed", **result}, "runnable")["teardown"] == "unknown"
     finally:
         for process in started:
             process.kill()
@@ -1767,7 +1769,9 @@ RAN = {"started": True, "seconds": 1.0, "group_survivors": False}
         ({"status": "failed", "returncode": 0, "leaked_descendants": True, **RAN}, "runnable", ("ok", "passed", "leaked-descendants")),
         ({"status": "passed", "returncode": 0, **{**RAN, "group_survivors": True}}, "runnable", ("ok", "passed", "group-survivors-killed")),
         ({"status": "passed", "returncode": 0, **{**RAN, "group_survivors": None}}, "runnable", ("ok", "passed", "unknown")),
-        ({"status": "failed", "returncode": None, "reason": "the entrypoint did not exit after SIGKILL", **RAN}, "runnable", ("ok", "failed", "unknown")),
+        ({"status": "failed", "returncode": None, "unkillable": True, "reason": "reworded: the process is still there", **RAN}, "runnable", ("ok", "failed", "unknown")),
+        # The reason text is prose; only the structured flag decides.
+        ({"status": "failed", "returncode": None, "reason": "the entrypoint did not exit after SIGKILL", **RAN}, "runnable", ("ok", "failed", "clean")),
         # Never started: no phase after setup ran, and setup did not succeed.
         ({"status": "failed", "returncode": None, "reason": "cannot start the entrypoint: FileNotFoundError", "started": False}, "runnable", ("failed", "not-run", "not-run")),
         ({"status": "failed", "interrupted": True, "interrupted_before_start": True, "seconds": 0.1}, "runnable", ("failed", "not-run", "not-run")),
@@ -1903,3 +1907,72 @@ def test_a_plan_records_setup_and_marks_the_rest_not_run(capsys):
     assert checks["hosted-packaging"]["phases"] == {"setup": "not-applicable", "body": "not-run", "teardown": "not-run"}
     assert all(check["phases"]["body"] == "not-run" and check["phases"]["teardown"] == "not-run" for check in checks.values())
     assert {check["phases"]["setup"] for check in checks.values()} <= {"ok", "unavailable", "not-applicable"}
+
+
+# ------------------------------------------------ review round 2: evidence failures never hide results
+
+
+@pytest.mark.parametrize("breakage", ["pins-missing", "pins-odd", "validation"])
+def test_a_run_whose_evidence_cannot_be_built_still_prints_every_result_and_exits_two(private_output, accepting_junit, monkeypatch, capsys, breakage):
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
+    if breakage == "pins-missing":
+        monkeypatch.setattr(vc.validation_evidence, "pinned_tools", lambda root: (_ for _ in ()).throw(FileNotFoundError("tools/pins.json")))
+    elif breakage == "pins-odd":
+        monkeypatch.setattr(vc.validation_evidence, "pinned_tools", lambda root: (_ for _ in ()).throw(KeyError("flutter")))
+    else:
+        monkeypatch.setattr(vc.validation_evidence, "validate_summary", lambda summary: (_ for _ in ()).throw(ValueError("forged")))
+    code = vc.main(["--files", "docs/testing.md", "--output", str(private_output)], root=ROOT, environ={})
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "shared-guards" in captured.out and "Traceback" not in captured.err
+    assert "the evidence could not be built" in captured.err
+    assert not (private_output / "evidence.json").exists()
+
+
+def test_a_json_run_whose_evidence_cannot_be_built_says_so_in_the_document(private_output, accepting_junit, monkeypatch, capsys):
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
+    monkeypatch.setattr(vc.validation_evidence, "pinned_tools", lambda root: (_ for _ in ()).throw(KeyError("flutter")))
+    code = vc.main(["--files", "docs/testing.md", "--output", str(private_output), "--json"], root=ROOT, environ={})
+    document = json.loads(capsys.readouterr().out)
+    assert code == 2 and document["evidence"] is None and document["plan"]["checks"]
+    # A plan has no run to lose, but a plan whose evidence cannot be built is not silently fine either.
+    assert vc.main(["--files", "docs/testing.md", "--plan"], root=ROOT, environ={}) == 2
+    monkeypatch.undo()
+    assert vc.main(["--files", "docs/testing.md", "--plan"], root=ROOT, environ={}) == 0
+
+
+def test_the_childs_temp_policy_decides_the_recorded_gaps_not_the_parents(private_output, accepting_junit, monkeypatch):
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
+    child = {"roots": {}, "umask": "0o77", "compliant": True, "source": "child"}
+    real = vc.execute
+
+    def execute_with_child_policy(*args, **kwargs):
+        results, _policy = real(*args, **kwargs)
+        return results, child
+
+    monkeypatch.setattr(vc, "execute", execute_with_child_policy)
+    assert vc.main(["--files", "docs/testing.md", "--output", str(private_output), "--allow-partial"], root=ROOT, environ={}) in (0, 1, 2, 3)
+    summary = json.loads((private_output / "evidence.json").read_text())
+    assert summary["temp_root_policy"]["source"] == "child"
+    # The parent's own shell (environ={}) has no private temp root; the gaps follow the child's recorded policy.
+    assert not vc.validation_evidence.temp_policy({})["compliant"]
+    assert "temp-root-noncompliant" not in {gap["code"] for gap in summary["reproduction_gaps"]}
+
+
+def test_an_entrypoint_that_only_dies_to_the_final_cleanup_is_still_unkillable(tmp_path, monkeypatch):
+    real = vc._signal_group
+    sigkills = []
+
+    def deaf(process, number):
+        if number == vc.signal.SIGTERM:
+            return
+        sigkills.append(number)
+        if len(sigkills) > 1:  # the first SIGKILL is lost; the cleanup in `finally` is real
+            real(process, number)
+
+    monkeypatch.setattr(vc, "_signal_group", deaf)
+    monkeypatch.setattr(vc, "KILL_GRACE_SECONDS", 0.2)
+    result = vc.run_streaming([sys.executable, "-c", "import time; time.sleep(60)"], cwd=tmp_path, env=os.environ, log_path=tmp_path / "log", timeout=1, stream=io.StringIO())
+    assert result["error"] == "the entrypoint did not exit after SIGKILL" and result["unkillable"] is True
+    assert result["returncode"] == -9  # reaped by the final cleanup, but not when it was first asked to die
+    assert vc.check_phases({"status": "failed", **result}, "runnable")["teardown"] == "unknown"

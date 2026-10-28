@@ -1,6 +1,8 @@
 """Replay reads a packet, reproduces nothing, and lists every gap it can see."""
 
 import json
+import os
+from pathlib import Path
 import shlex
 
 import pytest
@@ -23,7 +25,7 @@ HERE = {
 def packet(**overrides):
     result = summary_with(
         tools={"python": "3.13.15", "protoc": "libprotoc 35.1", "git": "git version 2"}, pins={"protoc": "35.1"},
-        checks=[check("shared-guards", "passed"), check("native-stage", "failed", reason="exit status 1", log="/var/tmp/x/native.log", entrypoint=["bash", "tools/build.sh", "--stage", "native"], phases={"setup": "ok", "body": "failed", "teardown": "clean"})],
+        checks=[check("shared-guards", "passed"), check("native-stage", "failed", reason="exit status 1", log="/var/tmp/x/native.log", entrypoint=["bash", "tools/build.sh", "--platform", "macos", "--stage", "native"], phases={"setup": "ok", "body": "failed", "teardown": "clean"})],
     )
     result["host"] = dict(HERE["host"])
     result["account"].update(uid=501, nss={"name": "builder", "home": "/h", "shell": "/bin/sh"}, home_env_set=False)
@@ -43,7 +45,7 @@ def test_the_replay_prints_the_exact_invocation_and_each_failed_checks_entrypoin
     assert report["command"] == shlex.join([".venv/bin/python", "-m", "tools.validate_change", "--files", "a b.md"])
     assert "'a b.md'" in report["command"]
     [failed] = report["failing_checks"]
-    assert failed["id"] == "native-stage" and failed["command"] == "bash tools/build.sh --stage native"
+    assert failed["id"] == "native-stage" and failed["command"] == "bash tools/build.sh --platform macos --stage native"
     assert failed["log"] == "/var/tmp/x/native.log" and failed["phases"]["body"] == "failed"
     text = replay.render(report)
     assert "Check native-stage: failed (exit status 1)" in text and "retained log: /var/tmp/x/native.log" in text
@@ -237,9 +239,246 @@ def test_load_packet_names_the_failure_class_not_the_parser_message(tmp_path):
     with pytest.raises(ValueError) as caught:
         replay.load_packet(write(tmp_path, '{"secret": "/home/sentinel-user/x"'))
     assert "sentinel-user" not in str(caught.value) and "JSONDecodeError" in str(caught.value)
-    with pytest.raises(ValueError, match="malformed"):
+    with pytest.raises(ValueError, match="checks must be a list"):
         replay.load_packet(write(tmp_path, {**packet(), "checks": 3}, "bad.json"))
     binary = tmp_path / "binary.json"
     binary.write_bytes(b"\xff\xfe\x00")
     with pytest.raises(ValueError, match="Cannot read packet"):
         replay.load_packet(binary)
+
+
+# ------------------------------------------------ review round 2: a packet is untrusted input
+
+INJECT = "x\x1b]0;pwned\x07\x1b[31m\nRecorded gaps: 0\r‮⁦end"
+
+
+def hostile_packet():
+    result = packet()
+    result["checks"][1].update(reason=INJECT, log=INJECT)
+    result["reproduction_gaps"] = [{"code": INJECT, "detail": INJECT}]
+    result["source"].update(revision=INJECT, base=INJECT, merge_base=INJECT, identity_sha256=INJECT)
+    result["invocation"].update(cwd=INJECT, root=INJECT, argv=["--files", INJECT])
+    result["mode"] = INJECT
+    result["host"] = {key: INJECT for key in result["host"]}
+    result["account"]["nss"]["name"] = INJECT
+    result["tools"] = {"python": "3", "protoc": INJECT, "git": INJECT}
+    result["image"] = {"runner_image": {}, "os_id": INJECT, "os_version_id": INJECT}
+    return result
+
+
+def assert_safe_text(text):
+    assert "\x1b" not in text and "\x07" not in text and "\r" not in text and "‮" not in text and "⁦" not in text
+    assert all(char.isprintable() or char == "\n" for char in text)
+    assert "Recorded gaps: 0" not in text.splitlines()  # injected newlines cannot forge a report line
+
+
+def test_no_packet_field_can_inject_terminal_escapes_or_forge_report_lines(tmp_path, capsys):
+    report = replay.analyze(hostile_packet(), HERE)
+    text = replay.render(report)
+    assert_safe_text(text)
+    assert "\\x1b" in text and "\\x0a" in text  # escaped, not dropped, so the reader sees that something was there
+    assert replay.main([str(write(tmp_path, hostile_packet())), "--check"], observe=lambda: HERE) == 1
+    assert_safe_text(capsys.readouterr().out)
+    assert replay.main([str(write(tmp_path, hostile_packet(), "j.json")), "--json"], observe=lambda: HERE) == 0
+    output = capsys.readouterr().out
+    assert "\x1b" not in output and json.loads(output)["recorded_gaps"]
+    assert all(char.isprintable() or char == "\n" for char in json.dumps(json.loads(output), ensure_ascii=False))
+
+
+def test_every_report_is_labelled_as_recorded_and_unverified():
+    text = replay.render(replay.analyze(packet(), HERE))
+    assert text.splitlines()[0].startswith("Everything below is recorded, unverified")
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    ["pip", "python", "tools.validate_change; rm -rf ~", "tools.Validate_Change", "tools.a.b", "tools.", "tools.does_not_exist", "os.system", ["tools.validate_change"], 7],
+)
+def test_only_an_existing_repository_tools_module_is_offered_as_a_reproduction_command(entrypoint):
+    hostile = packet()
+    hostile["invocation"].update(entrypoint=entrypoint, argv=["install", "evil-pkg"])
+    report = replay.analyze(hostile, HERE)
+    assert report["command"] is None and report["command_status"].startswith("unrecorded")
+    text = replay.render(report)
+    assert "evil-pkg" not in text and "pip install" not in text and "Reproduce: unrecorded" in text
+
+
+def test_the_recorded_tools_module_and_arguments_are_offered_only_when_both_are_well_formed():
+    assert replay.analyze(packet(), HERE)["command"].startswith(".venv/bin/python -m tools.validate_change")
+    bad = packet()
+    bad["invocation"]["argv"] = ["--files", 3]
+    assert replay.analyze(bad, HERE)["command"] is None
+    bad["invocation"]["argv"] = "--files x"
+    assert replay.analyze(bad, HERE)["command_status"].startswith("unrecorded")
+    omitted = packet()
+    omitted["invocation"].pop("entrypoint")
+    assert replay.analyze(omitted, HERE)["command"].startswith(".venv/bin/python -m tools.validate_change")
+
+
+@pytest.mark.parametrize(
+    ("argv", "offered"),
+    [
+        (["bash", "tools/build.sh", "--platform", "macos", "--stage", "native"], True),
+        (["bash", "tools/build.sh", "--platform", "macos", "--stage", "package"], False),
+        (["bash", "tools/build.sh", "--platform", "macos", "--stage", "native", "--extra"], False),
+        (["pip", "install", "evil-pkg", "--stage", "native"], False),
+        (["bash", "tools/build.sh", "--platform", "macos"], False),
+        ("bash tools/build.sh", False),
+        (None, False),
+        ([], False),
+    ],
+)
+def test_a_failed_checks_entrypoint_is_printed_only_when_it_matches_the_inventory_gate(argv, offered):
+    hostile = packet()
+    hostile["checks"][1]["entrypoint"] = argv
+    # A string entrypoint is not valid evidence at all.
+    if isinstance(argv, str):
+        with pytest.raises(ValueError, match="entrypoint must list text"):
+            evidence.validate_summary(hostile)
+        return
+    [failed] = replay.analyze(hostile, HERE)["failing_checks"]
+    assert (failed["command"] is not None) is offered
+    assert failed["command_status"].startswith("matches" if offered else "unrecorded")
+    if not offered:
+        assert "evil-pkg" not in replay.render(replay.analyze(hostile, HERE))
+
+
+def test_a_check_that_is_not_a_repository_gate_never_shows_its_entrypoint():
+    unknown = packet()
+    unknown["checks"][1].update(id="not-a-gate", entrypoint=["bash", "tools/build.sh", "--platform", "macos", "--stage", "native"])
+    [failed] = replay.analyze(unknown, HERE)["failing_checks"]
+    assert failed["command"] is None and "does not match" in failed["command_status"]
+    assert replay.matches_gate(["/opt/py 3/bin/python", "-m", "tools.check_local_validation"], ["{python}", "-m", "tools.check_local_validation"])
+    assert not replay.matches_gate(["/x/python", "-m", "tools.other"], ["{python}", "-m", "tools.check_local_validation"])
+    assert replay.load_gates(Path("/nonexistent-root")) == {}
+    assert "shared-guards" in replay.load_gates()
+
+
+def test_printed_text_is_bounded():
+    big = packet()
+    big["checks"][1]["reason"] = "r" * 100_000
+    big["reproduction_gaps"] = [{"code": f"g{i}", "detail": "d"} for i in range(5_000)]
+    report = replay.analyze(big, HERE)
+    assert len(report["failing_checks"][0]["reason"]) < replay.TEXT_LIMIT + 40
+    assert len(report["recorded_gaps"]) == replay.LIST_LIMIT and report["gap_count"] >= 5_000
+    assert len(replay.render(report).splitlines()) < 2 * replay.LIST_LIMIT + 40
+
+
+def test_neutralize_and_clean_escape_every_nonprintable_range():
+    assert replay.neutralize("a\tb\x00\x7f\u0085​\U000e0001") == "a\\x09b\\x00\\x7f\\x85\\u200b\\U000e0001"
+    assert replay.clean({"k\n": ["v\x1b", 3, None, True, 1.5, ("t\x07",)], 5: object.__name__}) == {
+        "k\\x0a": ["v\\x1b", 3, None, True, 1.5, ["t\\x07"]], "5": "object",
+    }
+    assert replay.clean(b"\x1b")  # an unexpected type is rendered as text, never passed through
+    assert "\x1b" not in replay.clean(b"\x1b")
+
+
+# ------------------------------------------------ review round 2: refusing what cannot be read safely
+
+def test_deeply_nested_json_is_a_refusal_not_a_crash(tmp_path, capsys):
+    path = write(tmp_path, "[" * 200_000)
+    assert replay.main([str(path)], observe=lambda: HERE) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("validation_replay:") and "Traceback" not in err
+
+
+def test_a_fifo_or_oversized_or_growing_packet_is_refused_without_hanging(tmp_path, monkeypatch):
+    import threading
+
+    fifo = tmp_path / "fifo.json"
+    os.mkfifo(fifo)
+    codes = []
+    worker = threading.Thread(target=lambda: codes.append(replay.main([str(fifo)], observe=lambda: HERE)), daemon=True)
+    worker.start()
+    worker.join(timeout=10)
+    assert not worker.is_alive() and codes == [2]
+
+    monkeypatch.setattr(replay, "MAX_PACKET_BYTES", 100)
+    big = write(tmp_path, json.dumps(packet()), "big.json")
+    assert replay.main([str(big)], observe=lambda: HERE) == 2
+    with pytest.raises(ValueError, match="larger than 100 bytes"):
+        replay.read_packet_bytes(big)
+    assert replay.main([str(tmp_path / "dir-not-file")], observe=lambda: HERE) == 2
+    (tmp_path / "adir").mkdir()
+    assert replay.main([str(tmp_path / "adir")], observe=lambda: HERE) == 2
+
+
+def test_an_error_in_reading_names_the_class_and_escapes_the_path(tmp_path, capsys):
+    odd = tmp_path / "bad\x1b[31mname.json"
+    assert replay.main([str(odd)], observe=lambda: HERE) == 2
+    err = capsys.readouterr().err
+    assert "\x1b" not in err and "FileNotFoundError" in err
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        lambda p: p.update(checks=["x"]),
+        lambda p: p.update(reproduction_gaps="abc"),
+        lambda p: p.update(reproduction_gaps=[1]),
+        lambda p: p.update(tool_pins={"a": 1}),
+        lambda p: p["concurrency"].update(settings={"FORESIGHT_BUILD_JOBS": "4\n; rm"}),
+        lambda p: p.update(artifacts=[1]),
+        lambda p: p.update(unexecuted_platforms=[1]),
+        lambda p: p["environment"].update(CI=1),
+        lambda p: p["host"].update(python=3),
+        lambda p: p["checks"][0].update(reason=7),
+        lambda p: p["checks"][0].update(entrypoint=[1]),
+        lambda p: p["checks"][0].update(phases=[]),
+        lambda p: p.update(status=["failed"]),
+        lambda p: p.update(image=[]),
+    ],
+)
+def test_a_packet_with_values_of_the_wrong_type_is_refused_by_validation(tmp_path, damage, capsys):
+    broken = packet()
+    damage(broken)
+    with pytest.raises((ValueError, KeyError, TypeError)):
+        evidence.validate_summary(broken)
+    assert replay.main([str(write(tmp_path, broken))], observe=lambda: HERE) == 2
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_replay_runs_only_short_probes_on_this_host(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(replay.validation_evidence, "observe_tools", lambda **kw: seen.update(kw) or {"python": "3"})
+    replay.observe_host()
+    assert seen == {"timeout": replay.PROBE_TIMEOUT_SECONDS}
+    timeouts = []
+
+    def run(argv, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        return type("R", (), {"stdout": "x", "returncode": 0})()
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as root:
+        (Path(root) / ".git").mkdir()
+        replay.observe_git(Path(root), run=run)
+    assert timeouts == [replay.PROBE_TIMEOUT_SECONDS] * 2
+    assert "runs only" in replay.__doc__ and "never runs a recorded command" in replay.__doc__
+
+
+def test_a_fifo_with_a_writer_is_still_not_a_packet(tmp_path):
+    import threading
+
+    fifo = tmp_path / "live.json"
+    os.mkfifo(fifo)
+    body = json.dumps(packet()).encode()
+
+    def feed():
+        try:
+            with open(fifo, "wb") as stream:  # blocks until the replay opens its end
+                stream.write(body)
+        except OSError:
+            pass  # the replay refused and closed its end first; that is the expected outcome
+
+    threading.Thread(target=feed, daemon=True).start()
+    with pytest.raises(ValueError, match="not a regular file"):
+        replay.read_packet_bytes(fifo)
+
+
+def test_whatever_else_an_untrusted_packet_breaks_is_a_refusal(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(replay, "analyze", lambda *a, **k: 1 / 0)
+    assert replay.main([str(write(tmp_path, packet()))], observe=lambda: HERE) == 2
+    err = capsys.readouterr().err
+    assert "malformed (ZeroDivisionError)" in err and "Traceback" not in err

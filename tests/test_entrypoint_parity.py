@@ -256,3 +256,52 @@ def test_command_segments_split_like_a_shell_and_drop_comments():
     assert parity.command_segments("echo 'never closed") == [["echo", "'never", "closed"]]
     assert parity.calls_in("python -m tools.check_dart_bindings --flag") == [("tools/check_dart_bindings.py", ("--flag",))]
     assert parity.calls_in("echo -m tools.check_dart_bindings") == []
+
+
+# ------------------------------------------------- review round 2: hostile workflow files
+
+BOMB = (
+    "on: push\nx: &a [1,1,1,1,1,1,1,1,1]\ny: &b [*a,*a,*a,*a,*a,*a,*a,*a,*a]\nz: &c [*b,*b,*b,*b,*b,*b,*b,*b,*b]\n"
+    "jobs:\n  build:\n    runs-on: x\n    steps:\n      - run: bash tools/build.sh --stage native\n"
+)
+
+
+def problems_for(tmp_path, text, name="ci.yml"):
+    return parity.check(tree(tmp_path, {name: text}), inventory(**NATIVE))["problems"]
+
+
+def test_anchors_and_aliases_are_refused_instead_of_expanded(tmp_path):
+    problems = problems_for(tmp_path, BOMB)
+    assert any("anchors and aliases are not accepted" in problem for problem in problems)
+    anchored = workflow("echo hi").replace("steps:", "steps: &s", 1)
+    assert any("anchors and aliases" in problem for problem in problems_for(tmp_path / "two", anchored))
+
+
+def test_duplicate_keys_are_refused_instead_of_letting_the_last_win(tmp_path):
+    text = (
+        "on: push\njobs:\n  build:\n    runs-on: x\n    steps:\n      - run: bash tools/build.sh --stage native\n"
+        "    steps:\n      - run: echo nothing\n"
+    )
+    assert any("duplicate keys: steps" in problem for problem in problems_for(tmp_path, text))
+    twice = "on: push\njobs:\n  a:\n    runs-on: x\n    steps: []\n  a:\n    runs-on: y\n    steps: []\n"
+    assert any("duplicate keys: a" in problem for problem in problems_for(tmp_path / "jobs", twice))
+
+
+def test_deeply_nested_yaml_is_a_problem_not_a_crash(tmp_path):
+    problems = problems_for(tmp_path, "on: push\njobs: " + "[" * 100_000)
+    assert problems and all("Traceback" not in problem for problem in problems)
+
+
+def test_only_yml_and_yaml_workflows_and_actions_are_read(tmp_path):
+    call = workflow("bash tools/build.sh --stage native")
+    root = tree(tmp_path, {"ci.yml.bak": call, "ci.ymlx": call, "ci.yxml": call, "ci.yml~": call})
+    report = parity.check(root, inventory(**NATIVE))
+    assert report["gates"]["native-stage"]["called_by"] == []  # nothing real calls it
+    assert any("no workflow files" in problem or "native-stage" in problem for problem in report["problems"])
+    for extension in ("yml", "yaml"):
+        root = tree(tmp_path / extension, {f"ci.{extension}": call})
+        assert parity.check(root, inventory(**NATIVE))["gates"]["native-stage"]["called_by"] == [f".github/workflows/ci.{extension}:build"]
+    action = "runs:\n  using: composite\n  steps:\n    - run: bash tools/build.sh --stage native\n      shell: bash\n"
+    root = tree(tmp_path / "action", {"ci.yml": workflow("echo hi")}, actions={"a": action})
+    (root / ".github/actions/a/action.yml").rename(root / ".github/actions/a/action.yaml")
+    assert parity.check(root, inventory(**NATIVE))["gates"]["native-stage"]["called_by"] == [".github/actions/a/action.yaml:(action)"]

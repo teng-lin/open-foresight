@@ -485,3 +485,91 @@ def test_every_environment_name_a_new_section_reads_is_on_the_allowlist():
     assert "os.environ[" not in source and "os.getenv" not in source  # reads go through the injected mapping
     replay = Path(validation_replay.__file__).read_text()
     assert "os.environ" not in replay and "getenv" not in replay  # the replay reads no environment at all
+
+
+# ------------------------------------------------ review round 2
+
+def test_parallelism_settings_are_integers_or_the_word_invalid():
+    result = evidence.concurrency({"FORESIGHT_BUILD_JOBS": "8", "FORESIGHT_PYTEST_WORKERS": "auto; rm -rf ~\n", "FORESIGHT_PARALLEL_GATES": "9" * 7})
+    assert result["settings"] == {"FORESIGHT_BUILD_JOBS": "8", "FORESIGHT_PARALLEL_GATES": "invalid", "FORESIGHT_PYTEST_WORKERS": "invalid"}
+    forged = json.loads(json.dumps(summary_with()))
+    forged["concurrency"]["settings"] = {"FORESIGHT_BUILD_JOBS": "4; curl evil"}
+    with pytest.raises(ValueError, match="integers or `invalid`"):
+        evidence.validate_summary(forged)
+    forged["concurrency"]["settings"] = ["4"]
+    with pytest.raises(ValueError, match="integers or `invalid`"):
+        evidence.validate_summary(forged)
+
+
+def test_paths_under_the_account_home_are_recorded_with_a_tilde(tmp_path):
+    assert evidence.tilde("/Users/ada/build/x", "/Users/ada") == "~/build/x"
+    assert evidence.tilde("/Users/ada", "/Users/ada/") == "~"
+    assert evidence.tilde("/Users/adam/x", "/Users/ada") == "/Users/adam/x"  # a prefix of the name is not the home
+    assert evidence.tilde("/var/tmp/x", "/") == "/var/tmp/x" and evidence.tilde("/x", None) == "/x" and evidence.tilde("/x", "") == "/x"
+    digest = "0" * 64
+    reuse = [{"id": "lib", "path": "/Users/ada/build/native", "present": True, "sha256": {"/Users/ada/build/native/lib.dylib": digest}, "at_execution": {"present": True}}]
+    cache, artifacts = evidence.cache_and_artifacts([{"id": "native-stage", "reuse": reuse}], home="/Users/ada")
+    assert cache["reused_outputs"][0]["path"] == "~/build/native" and artifacts[0]["path"] == "~/build/native/lib.dylib"
+    home = evidence.account_identity({})["nss"]["home"]
+    built = summary_with(checks=[check("native-stage", "passed", reuse=[{**reuse[0], "path": f"{home}/b", "sha256": {}}])])
+    if home and home.rstrip("/"):
+        assert built["cache"]["reused_outputs"][0]["path"] == "~/b"
+        assert home not in json.dumps(built["cache"])
+
+
+def test_a_subsumed_check_is_a_gap_because_its_own_entrypoint_did_not_run():
+    result = summary_with(checks=[check("python-coverage", "passed"), check("core-tests", "subsumed", subsumed_by="python-coverage")])
+    gaps = {gap["code"]: gap["detail"] for gap in result["reproduction_gaps"]}
+    assert "python-coverage" in gaps["subsumed-not-verified:core-tests"] and "did not run" in gaps["subsumed-not-verified:core-tests"]
+    assert "subsumed-not-verified:python-coverage" not in gaps
+
+
+@pytest.mark.parametrize(
+    ("damage", "message"),
+    [
+        (lambda s: s.update(checks=["x"]), "text id and status"),
+        (lambda s: s.update(checks="abc"), "checks must be a list"),
+        (lambda s: s.update(reproduction_gaps="abc"), "reproduction_gaps must be a list"),
+        (lambda s: s.update(reproduction_gaps=["abc"]), "code and a detail"),
+        (lambda s: s.update(tool_pins={"x": 1}), "tool pin"),
+        (lambda s: s.update(artifacts=[1]), "artifact"),
+        (lambda s: s.update(unexecuted_platforms=[1]), "list text"),
+        (lambda s: s.update(reproduction=[None]), "list text"),
+        (lambda s: s["environment"].update(CI=1), "must be text"),
+        (lambda s: s["host"].update(python=3), "must be text"),
+        (lambda s: s["checks"][0].update(reason=3), "field reason must be text"),
+        (lambda s: s["checks"][0].update(log=[]), "field log must be text"),
+        (lambda s: s["checks"][0].update(entrypoint="bash x"), "entrypoint must list text"),
+        (lambda s: s["checks"][0].update(entrypoint=[1]), "entrypoint must list text"),
+        (lambda s: s["checks"][0].update(phases=["ok"]), "phases must be a mapping"),
+        (lambda s: s.update(full_validation="yes"), "full_validation must be a bool"),
+        (lambda s: s.update(image=[]), "image must be a dict"),
+    ],
+)
+def test_wrongly_typed_fields_are_refused_with_a_value_error(damage, message):
+    broken = json.loads(json.dumps(summary_with()))
+    damage(broken)
+    with pytest.raises(ValueError, match=message):
+        evidence.validate_summary(broken)
+
+
+def test_observe_tools_passes_its_timeout_to_every_probe():
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(kwargs["timeout"])
+        return type("R", (), {"stdout": "git version 2.1\n", "stderr": "", "returncode": 0})()
+
+    evidence.observe_tools(("git",), run=run, which=lambda name: "/bin/git", timeout=7)
+    evidence.observe_tools(("git",), run=run, which=lambda name: "/bin/git")
+    assert seen == [7, 30]
+
+
+def test_the_summary_records_the_policy_it_is_given_not_a_recomputed_one():
+    policy = {"roots": {}, "umask": "0o77", "compliant": False, "source": "child"}
+    result = evidence.build_summary(
+        mode="run", source={"mode": "explicit", "identity_sha256": "0" * 64, "dirty": False}, invocation={"entrypoint": "tools.validate_change", "argv": []},
+        selection={}, checks=[check("shared-guards", "passed")], unexecuted_platforms=[], reproduction=[], environ={}, tools={"python": "3"}, pins={},
+        temp_root_policy=policy,
+    )
+    assert result["temp_root_policy"] == policy and "temp-root-noncompliant" in {gap["code"] for gap in result["reproduction_gaps"]}

@@ -85,8 +85,29 @@ class Parsed:
     problems: list[str] = field(default_factory=list)
 
 
+class _Rejected(yaml.YAMLError):
+    """A construct this guard refuses to interpret."""
+
+
 class _Loader(yaml.SafeLoader):
-    """SafeLoader without the YAML 1.1 booleans, so a job named `on` or `off` stays text."""
+    """SafeLoader without the YAML 1.1 booleans, so a job named `on` or `off` stays text.
+
+    It also refuses anchors and aliases (an alias expansion is a denial-of-service
+    shape in a file a pull request controls) and duplicate mapping keys (the
+    last one would silently win).
+    """
+
+    def compose_node(self, parent: Any, index: Any) -> Any:
+        if getattr(self.peek_event(), "anchor", None) is not None:
+            raise _Rejected("anchors and aliases are not accepted")
+        return super().compose_node(parent, index)
+
+    def construct_mapping(self, node: Any, deep: bool = False) -> Any:
+        keys = [self.construct_object(key, deep=True) for key, _value in node.value]
+        duplicates = sorted({str(key) for key in keys if keys.count(key) > 1})
+        if duplicates:
+            raise _Rejected("duplicate keys: " + ", ".join(duplicates))
+        return super().construct_mapping(node, deep)
 
 
 _Loader.yaml_implicit_resolvers = {
@@ -115,14 +136,25 @@ def _steps(document: Any, where: str, parsed: Parsed, file: str) -> None:
 def workflow_runs(root: Path = ROOT) -> tuple[list[Run], list[str]]:
     """Every runnable `run:` step of every workflow and composite action, and parse problems."""
     parsed = Parsed()
-    files = sorted((root / ".github/workflows").glob("*.y*ml")) + sorted((root / ".github/actions").glob("**/action.y*ml"))
+    files = sorted(
+        path
+        for pattern in ("*.yml", "*.yaml")
+        for path in (root / ".github/workflows").glob(pattern)
+    ) + sorted(
+        path
+        for pattern in ("action.yml", "action.yaml")
+        for path in (root / ".github/actions").glob("**/" + pattern)
+    )
     if not (root / ".github/workflows").is_dir() or not files:
         return [], ["no workflow files were found; the parity check cannot pass vacuously"]
     for path in files:
         name = path.relative_to(root).as_posix()
         try:
             document = yaml.load(path.read_text(), Loader=_Loader)  # noqa: S506 - the loader derives from SafeLoader
-        except yaml.YAMLError as error:
+        except _Rejected as error:
+            parsed.problems.append(f"{name}: {error}")
+            continue
+        except (yaml.YAMLError, RecursionError) as error:
             parsed.problems.append(f"{name}: not valid YAML ({type(error).__name__})")
             continue
         if not isinstance(document, dict):

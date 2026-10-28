@@ -4,47 +4,128 @@
     .venv/bin/python -m tools.validation_replay PACKET [--check] [--json]
 
 The packet is an `evidence.json` written by `tools.validate_change`. The replay
-prints the exact entrypoint, arguments and working directory of the run and of
-each check that did not pass, then lists the conditions this host does not
-match: the packet's own reproduction gaps (unexecuted platforms, pin mismatches,
-unverified labels) plus differences between the recorded host and this one
-(operating system, architecture, Python, tool versions, account, temp roots).
+prints the recorded invocation and each failed check, then lists the conditions
+this host does not match: the packet's own reproduction gaps (unexecuted
+platforms, pin mismatches, unverified labels) plus differences between the
+recorded host and this one (operating system and image, architecture, Python,
+tool versions, account, temp roots, revision and cleanliness of this checkout).
 
-It never runs anything. A replay that lists no gap still does not prove a hosted
-failure reproduces: the recorded conditions are what this tool could observe.
-`--check` exits 1 while any gap remains, 2 for an unreadable packet.
+A packet is untrusted input. Everything printed from it is labelled "recorded,
+unverified" and has control characters escaped. A reproduction command is
+printed only for an entrypoint that is a repository `tools.*` module, and a
+check's entrypoint only when it matches that gate's definition in the boundary
+inventory; anything else is reported as unrecorded.
+
+The replay never runs a recorded command. On this host it runs only `git`
+status queries and the tool version probes, each with a short timeout.
+`--check` exits 1 while any gap remains, 2 for an unreadable or corrupt packet.
 """
 
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 import json
+import os
 from pathlib import Path
+import re
 import shlex
+import stat
 import subprocess
 import sys
-from typing import Any
+from typing import Any, cast
 
 from tools import validation_evidence
 
 Gap = dict[str, str]
 
 
+MAX_PACKET_BYTES = 8 << 20
+PROBE_TIMEOUT_SECONDS = 10
+ENTRYPOINT = re.compile(r"tools\.[a-z_]+")
+TEXT_LIMIT = 400
+LIST_LIMIT = 200
+
+
+def read_packet_bytes(path: Path) -> bytes:
+    """The packet's bytes, refusing anything that is not a regular file of bounded size.
+
+    The file is opened without blocking and inspected through the descriptor, so a
+    FIFO or device cannot hang the replay and a swap after the check changes nothing.
+    """
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("not a regular file")
+        chunks = []
+        remaining = MAX_PACKET_BYTES + 1
+        while remaining > 0 and (block := os.read(descriptor, min(1 << 20, remaining))):
+            chunks.append(block)
+            remaining -= len(block)
+        data = b"".join(chunks)
+        if len(data) > MAX_PACKET_BYTES:
+            raise ValueError(f"larger than {MAX_PACKET_BYTES} bytes")
+        return data
+    finally:
+        os.close(descriptor)
+
+
 def load_packet(path: Path) -> dict[str, Any]:
     """Read and validate a packet (schema 1 or 2); raises ValueError if unusable."""
     try:
-        packet = json.loads(path.read_text())
-    except (OSError, ValueError) as error:  # ValueError covers JSONDecodeError and undecodable bytes
-        raise ValueError(f"Cannot read packet {path}: {type(error).__name__}") from error
+        packet = json.loads(read_packet_bytes(path))
+    except (OSError, ValueError, RecursionError) as error:  # ValueError: bad JSON, bad bytes, size and type refusals
+        raise ValueError(f"Cannot read packet {neutralize(str(path))}: {type(error).__name__}") from error
     if not isinstance(packet, dict):
-        raise ValueError(f"Packet {path} is not a JSON object")
+        raise ValueError(f"Packet {neutralize(str(path))} is not a JSON object")
     try:
         validation_evidence.validate_summary(packet)
-        analyze(packet, NEUTRAL_HOST)  # a packet the replay cannot read is rejected here, not half-printed
-    except (KeyError, TypeError, AttributeError, IndexError) as error:
-        raise ValueError(f"Packet {path} is malformed ({type(error).__name__})") from error
+        analyze(packet, NEUTRAL_HOST, gates={})  # a packet the replay cannot read is rejected here, not half-printed
+    except ValueError:
+        raise
+    except Exception as error:  # untrusted input: whatever it breaks is a refusal, not a traceback
+        raise ValueError(f"Packet {neutralize(str(path))} is malformed ({type(error).__name__})") from error
     return packet
+
+
+def neutralize(text: str) -> str:
+    """Text safe to print: control, format and non-printable characters are escaped, length is bounded."""
+    clean = "".join(
+        char if char.isprintable() else f"\\x{ord(char):02x}" if ord(char) < 256 else f"\\u{ord(char):04x}" if ord(char) < 0x10000 else f"\\U{ord(char):08x}"
+        for char in text
+    )
+    return clean if len(clean) <= TEXT_LIMIT else clean[:TEXT_LIMIT] + "...[truncated]"
+
+
+def clean(value: Any) -> Any:
+    """[value] with every string neutralized, recursively; other scalars are kept."""
+    if isinstance(value, str):
+        return neutralize(value)
+    if isinstance(value, Mapping):
+        return {neutralize(str(key)): clean(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [clean(item) for item in value]
+    return value if value is None or isinstance(value, (bool, int, float)) else neutralize(str(value))
+
+
+def load_gates(root: Path = validation_evidence.ROOT) -> dict[str, list[str]]:
+    """Each command gate's argv template from the boundary inventory of this checkout."""
+    try:
+        gates = json.loads((root / "tools/boundary_inventory.json").read_text())["gates"]
+        return {name: list(gate["argv"]) for name, gate in gates.items() if gate.get("kind") == "command"}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+def matches_gate(argv: Any, template: Sequence[str] | None) -> bool:
+    """Whether a recorded argv is the gate's template with its `{placeholders}` filled in."""
+    if template is None or not isinstance(argv, list) or len(argv) != len(template):
+        return False
+    return all(
+        isinstance(token, str) and re.fullmatch(".*".join(re.escape(part) for part in re.split(r"\{[a-z_]+\}", pattern)), token, re.DOTALL)
+        for token, pattern in zip(argv, template, strict=True)
+    )
 
 
 def observe_git(root: Path, run: Callable[..., Any] = subprocess.run) -> dict[str, Any]:
@@ -54,7 +135,7 @@ def observe_git(root: Path, run: Callable[..., Any] = subprocess.run) -> dict[st
 
     def git(*arguments: str) -> str | None:
         try:
-            result = run(["git", "-C", str(root), *arguments], capture_output=True, text=True, timeout=30, check=False)
+            result = run(["git", "-C", str(root), *arguments], capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS, check=False)
         except (OSError, subprocess.SubprocessError):
             return None
         return result.stdout if result.returncode == 0 else None
@@ -73,7 +154,7 @@ def observe_host() -> dict[str, Any]:
     account = validation_evidence.account_identity()
     return {
         "host": identity,
-        "tools": validation_evidence.observe_tools(),
+        "tools": validation_evidence.observe_tools(timeout=PROBE_TIMEOUT_SECONDS),
         "uid": account["uid"],
         "nss_name": account["nss"]["name"],
         "temp_compliant": validation_evidence.temp_policy()["compliant"],
@@ -88,26 +169,40 @@ NEUTRAL_HOST: dict[str, Any] = {
 }
 
 
-def reproduction_command(packet: Mapping[str, Any]) -> str:
-    """The recorded invocation as one shell-quoted line."""
+def reproduction_command(packet: Mapping[str, Any], root: Path = validation_evidence.ROOT) -> tuple[str | None, str]:
+    """The recorded invocation as one shell-quoted line, or None with the reason it is not offered.
+
+    Only a `tools.*` module that exists in this checkout is offered, so a packet
+    cannot make the replay print `pip install ...` or any other command.
+    """
     invocation = packet["invocation"]
     entrypoint = invocation.get("entrypoint") or "tools.validate_change"
-    return shlex.join([".venv/bin/python", "-m", entrypoint, *invocation.get("argv", [])])
+    arguments = invocation.get("argv", [])
+    if not isinstance(entrypoint, str) or not ENTRYPOINT.fullmatch(entrypoint) or not (root / "tools" / f"{entrypoint[6:]}.py").is_file():
+        return None, "unrecorded: the recorded entrypoint is not a tools module of this checkout"
+    if not isinstance(arguments, list) or not all(isinstance(token, str) for token in arguments):
+        return None, "unrecorded: the recorded arguments are not a list of text"
+    return shlex.join([".venv/bin/python", "-m", entrypoint, *arguments]), "recorded, unverified"
 
 
-def failing_checks(packet: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Checks that did not pass, each with its own entrypoint and retained log."""
+def failing_checks(packet: Mapping[str, Any], gates: Mapping[str, Sequence[str]] | None = None) -> list[dict[str, Any]]:
+    """Checks that did not pass; an entrypoint is shown only if it matches the gate's definition."""
+    gates = load_gates() if gates is None else gates
     result = []
     for check in packet["checks"]:
         if check["status"] in ("passed", "subsumed", "planned"):
             continue
         entrypoint = check.get("entrypoint")
+        offered = bool(entrypoint) and matches_gate(entrypoint, gates.get(check["id"]))
         result.append(
             {
                 "id": check["id"],
                 "status": check["status"],
                 "reason": check.get("reason"),
-                "command": shlex.join(entrypoint) if entrypoint else None,
+                "command": shlex.join(entrypoint) if offered else None,
+                "command_status": "matches the repository's gate definition" if offered else "unrecorded: " + (
+                    "no entrypoint was recorded" if not entrypoint else "it does not match this checkout's gate definition"
+                ),
                 "log": check.get("log"),
                 "phases": check.get("phases"),
             }
@@ -163,45 +258,60 @@ def host_mismatches(packet: Mapping[str, Any], here: Mapping[str, Any]) -> list[
     return gaps
 
 
-def analyze(packet: Mapping[str, Any], here: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Everything a replay reports; [here] is injected by tests."""
+def analyze(
+    packet: Mapping[str, Any],
+    here: Mapping[str, Any] | None = None,
+    gates: Mapping[str, Sequence[str]] | None = None,
+) -> dict[str, Any]:
+    """Everything a replay reports; [here] and [gates] are injected by tests. Strings are neutralized."""
     here = observe_host() if here is None else here
     # A packet cannot hide a gap by omitting it: what its own contents imply is added to what it recorded.
     recorded = list(packet.get("reproduction_gaps") or [])
     known = {gap["code"] for gap in recorded}
     recorded += [gap for gap in validation_evidence.derive_gaps(packet) if gap["code"] not in known]
     mismatches = host_mismatches(packet, here)
-    return {
+    command, command_status = reproduction_command(packet)
+    failing = failing_checks(packet, gates)
+    report = {
+        "provenance": "recorded, unverified: read from the packet, not re-checked",
         "schema": packet["schema"],
         "mode": packet["mode"],
         "status": packet["status"],
         "source": {key: packet["source"].get(key) for key in ("mode", "revision", "base", "merge_base", "identity_sha256", "dirty")},
-        "command": reproduction_command(packet),
+        "command": command,
+        "command_status": command_status,
         "cwd": packet["invocation"].get("cwd"),
         "root": packet["invocation"].get("root"),
-        "failing_checks": failing_checks(packet),
-        "recorded_gaps": recorded,
-        "host_mismatches": mismatches,
+        "failing_checks": failing[:LIST_LIMIT],
+        "failing_check_count": len(failing),
+        "recorded_gaps": recorded[:LIST_LIMIT],
+        "host_mismatches": mismatches[:LIST_LIMIT],
         "gap_count": len(recorded) + len(mismatches),
-        "note": "This replay runs nothing and cannot prove a hosted failure reproduces.",
+        "note": "This replay runs nothing recorded and cannot prove a hosted failure reproduces.",
     }
+    return cast(dict[str, Any], clean(report))
 
 
 def render(report: Mapping[str, Any]) -> str:
     lines = [
+        f"Everything below is {report['provenance']}",
         f"Packet: schema {report['schema']}, {report['mode']}, status {report['status']}",
         f"Source: {report['source']}",
-        f"Reproduce from {report['root']} (recorded cwd {report['cwd']}):",
-        f"  {report['command']}",
     ]
+    if report["command"]:
+        lines += [f"Reproduce from {report['root']} (recorded cwd {report['cwd']}):", f"  {report['command']}"]
+    else:
+        lines.append(f"Reproduce: {report['command_status']}")
     for check in report["failing_checks"]:
         lines.append(f"Check {check['id']}: {check['status']}" + (f" ({check['reason']})" if check["reason"] else ""))
-        if check["command"]:
-            lines.append(f"  entrypoint: {check['command']}")
+        lines.append(f"  entrypoint: {check['command']}" if check["command"] else f"  entrypoint: {check['command_status']}")
         if check["log"]:
             lines.append(f"  retained log: {check['log']}")
         if check["phases"]:
             lines.append(f"  phases: {check['phases']}")
+    hidden = report["failing_check_count"] - len(report["failing_checks"])
+    if hidden:
+        lines.append(f"... {hidden} more failing checks not shown")
     for title, key in (("Recorded gaps", "recorded_gaps"), ("Differences on this host", "host_mismatches")):
         lines.append(f"{title}: {len(report[key])}")
         lines.extend(f"  - {gap['code']}: {gap['detail']}" for gap in report[key])

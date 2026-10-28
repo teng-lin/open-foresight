@@ -136,13 +136,16 @@ environment:
   none remained; `group-survivors-killed` means some did and were killed;
   `leaked-descendants` and `killed-after-timeout` are the tool's own findings;
   `unknown` means it could not tell (an interrupted run, a process that survived
-  SIGKILL, a failed probe). `clean` says nothing about descendants that left the
+  SIGKILL or was never reaped, a failed probe). Only structured flags decide, never
+  the wording of a reason. `clean` says nothing about descendants that left the
   group (a double fork with its own session). A phase the tool did not run is
   `not-run`, never inferred.
 - `concurrency` (CPU count and the allowlisted parallelism settings), `cache`
   (reused outputs and whether each was present at planning and at execution) and
-  `artifacts` (digests of reused products). The producer of an artifact is
-  `null`: only the entrypoint verifies provenance, and the gaps say so.
+  `artifacts` (digests of reused products); paths under the account home are
+  written with `~`, and a parallelism setting that is not a small integer is
+  recorded as `invalid`. The producer of an artifact is `null`: only the
+  entrypoint verifies provenance, and the gaps say so.
 - `image`: the runner image variables (`ImageOS`, `ImageVersion`, when set) and
   the operating-system identity (os-release `ID` and `VERSION_ID`, or the macOS
   version). A field that cannot be observed is `null`.
@@ -150,22 +153,33 @@ environment:
   derived from the packet (a plan that executed nothing, pin mismatches and
   unobserved pins, a non-compliant temp root, `HOME` differing from the NSS home,
   a dirty or unknown dirty state, a declared and unverified revision, unexecuted
-  platforms, checks that did not pass, unrecorded artifact provenance). Gap prose
+  platforms, checks that did not pass, checks subsumed by another rather than run, unrecorded
+  artifact provenance). Gap prose
   names conditions, not locations: absolute paths are replaced, and free text from
   failed commands is not copied. The environment allowlist concerns environment
   variables only; reasons and notes are bounded text written by the tool.
 
 `python -m tools.validation_replay PACKET [--check] [--json]` reads a packet and
-prints the recorded invocation, each failed check's own entrypoint and retained
-log, the packet's gaps and the differences between the recorded host and this one
-(operating system and release, image identity, architecture, Python, tool
-versions, root versus non-root, NSS account name, temp roots, and whether this
-checkout is at the recorded revision and clean). It runs nothing and reads no
-environment. A packet cannot hide a gap by omitting it: the gaps its contents
-imply are added to the ones it recorded. A replay that lists no gap still does
-not prove a hosted failure reproduces; the recorded conditions are the ones this
-tool could observe. `--check` exits 1 while any gap remains and 2 for an
-unreadable or corrupt packet.
+prints the recorded invocation, each failed check, the packet's gaps and the
+differences between the recorded host and this one (operating system and
+release, image identity, architecture, Python, tool versions, root versus
+non-root, NSS account name, temp roots, and whether this checkout is at the
+recorded revision and clean). A packet is untrusted input and the report says so:
+everything printed is labelled "recorded, unverified", and every string from the
+packet has control and non-printable characters escaped and its length bounded,
+so a packet cannot forge report lines or terminal sequences. A reproduction
+command is offered only when the recorded entrypoint is a `tools.*` module that
+exists in this checkout, and a failed check's entrypoint only when it matches
+that gate's definition in the boundary inventory; otherwise the report says
+"unrecorded". The packet must be a regular file under 8 MiB with correctly typed
+fields; a FIFO, an oversized, deeply nested or wrongly typed packet is refused.
+The replay never runs a recorded command and reads no environment; on this host
+it runs only `git` status queries and tool version probes, each with a 10 second
+limit. A packet cannot hide a gap by omitting it: the gaps its contents imply are
+added to the ones it recorded. A replay that lists no gap still does not prove a
+hosted failure reproduces; the recorded conditions are the ones this tool could
+observe. `--check` exits 1 while any gap remains and 2 for an unreadable or
+corrupt packet.
 
 `python -m tools.check_entrypoint_parity` (part of the shared guards) reads the
 workflows without changing them and checks that every command gate's script is
@@ -184,7 +198,10 @@ branch of the called script is credited to each step that calls it. A gate with 
 with no `--stage` or `all` covers every stage); a value read from a variable is
 reported as ambiguous, not as an exact match. It also rejects a workflow that
 calls a repository script that no longer exists and fails on any workflow shape
-it does not understand. It is script-level: it does not check that a workflow
+it does not understand. It reads only `.yml` and `.yaml` files, and refuses YAML
+anchors, aliases and duplicate keys (a pull request controls these files; an alias
+expansion could exhaust the guard, and a repeated `steps:` key would let the last
+one silently win). It is script-level: it does not check that a workflow
 passes the same arguments (other than `--stage` and `--suite`), and inline `dart test`, `flutter test`, `ctest` or
 `pytest` invocations are listed in its `--json` output for information only.
 
@@ -209,7 +226,9 @@ inspects the tree. A source
 export inside another Git checkout is refused; pass `--files`.
 
 Exit status is 0 only for a full pass (or a plan), 1 for a failure, 2 for invalid
-input, an inconsistent inventory or unwritable evidence, 3 for a partial run and
+input, an inconsistent inventory, or evidence that cannot be built or written (a
+completed run still prints every result first and says the evidence failed), 3
+for a partial run and
 128 plus the signal number after an interruption (130 for Ctrl-C, 143 for SIGTERM,
 129 for SIGHUP). SIGTERM and SIGHUP are routed like Ctrl-C: the entrypoint's
 process group is killed, the results so far and the evidence are written, and

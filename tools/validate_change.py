@@ -910,7 +910,7 @@ def run_streaming(
     started = time.monotonic()
     outcome: dict[str, Any] = {
         "returncode": None, "timed_out": False, "leaked_descendants": False, "error": None, "log": str(log_path),
-        "started": False, "group_survivors": None,
+        "started": False, "group_survivors": None, "unkillable": False,
     }
     try:
         log = log_path.open("wb")
@@ -977,6 +977,7 @@ def run_streaming(
             reaped = True
         except _Unkillable:
             outcome["error"] = "the entrypoint did not exit after SIGKILL"
+            outcome["unkillable"] = True
         finally:
             closing.set()
             if not reaped:
@@ -984,7 +985,7 @@ def run_streaming(
                 try:
                     outcome["returncode"] = process.wait(timeout=KILL_GRACE_SECONDS)
                 except subprocess.TimeoutExpired:
-                    pass
+                    outcome["unkillable"] = True  # never reaped: nothing about its group can be vouched for
     if problems and not outcome["error"]:
         outcome["error"] = problems[0]
     outcome["seconds"] = round(time.monotonic() - started, 3)
@@ -1063,7 +1064,7 @@ def check_phases(entry: Mapping[str, Any], availability: str) -> dict[str, str]:
         body = "timed-out"
     else:
         body = "passed" if entry.get("returncode") == 0 else "failed"
-    if "did not exit after SIGKILL" in str(entry.get("reason") or ""):
+    if entry.get("unkillable"):
         teardown = "unknown"
     elif entry.get("timed_out"):
         teardown = "killed-after-timeout"
@@ -1391,7 +1392,7 @@ def _main(argv: Sequence[str] | None, root: Path, environ: Mapping[str, str] | N
         checks = [dict(check, junit=[]) for check in plan["checks"]]
     with deferred_signals() as received:
         unexecuted = [] if mode == "plan" else unexecuted_platforms(plan, checks, context.platform)
-        summary = validation_evidence.build_summary(
+        build: dict[str, Any] = dict(
             mode=mode,
             source={key: change[key] for key in ("mode", "revision", "base", "merge_base", "identity_sha256", "dirty", "dirty_paths", "dirty_unknown", "excluded_classes", "excluded_dirty_paths", "unreadable_paths", "counts")}
             | {"revision_declared": change.get("revision_declared"), "path_count": len(change["paths"])},
@@ -1418,18 +1419,27 @@ def _main(argv: Sequence[str] | None, root: Path, environ: Mapping[str, str] | N
             unexecuted_platforms=unexecuted,
             reproduction=reproduction_lines(plan, raw_arguments),
             environ=environ,
-            tools=validation_evidence.observe_tools() if mode == "run" else None,
             incomplete_reasons=incomplete,
-            pins=validation_evidence.pinned_tools(root),
+            temp_root_policy=temp_policy,
         )
-        summary["temp_root_policy"] = temp_policy
+        summary: dict[str, Any] | None
+        try:
+            summary = validation_evidence.build_summary(
+                **build,
+                tools=validation_evidence.observe_tools() if mode == "run" else None,
+                pins=validation_evidence.pinned_tools(root),
+            )
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            # A completed run's results are printed even when its evidence cannot be built.
+            summary = None
+            print(f"validate_change: the evidence could not be built: {type(error).__name__}: {error}", file=sys.stderr)
         # Results first: a failure to publish evidence must not lose a completed run's output.
         if arguments.json:
             print(json.dumps({"plan": plan, "evidence": summary}, indent=2, sort_keys=True))
         else:
             print(render(plan, results=results or None, summary=summary if mode == "run" else None))
-        written = True
-        if output is not None:
+        written = summary is not None
+        if output is not None and summary is not None:
             try:
                 (output / "plan.json").write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
                 validation_evidence.write_summary(summary, output / "evidence.json")
@@ -1441,6 +1451,8 @@ def _main(argv: Sequence[str] | None, root: Path, environ: Mapping[str, str] | N
     signals = [number for check in checks if (number := check.get("interrupt_signal"))] + received
     if signals:
         return 128 + signals[0]
+    if summary is None:
+        return 2
     if mode == "plan":
         return 0 if written else 2
     if summary["status"] == "failed":
@@ -1453,7 +1465,7 @@ def _main(argv: Sequence[str] | None, root: Path, environ: Mapping[str, str] | N
 
 
 def _evidence_check(check: Mapping[str, Any]) -> dict[str, Any]:
-    keys = ("id", "title", "kind", "scope", "platforms", "status", "reason", "returncode", "timed_out", "leaked_descendants", "interrupted", "seconds", "log", "junit", "subsumed_by", "long", "phases", "started", "group_survivors")
+    keys = ("id", "title", "kind", "scope", "platforms", "status", "reason", "returncode", "timed_out", "leaked_descendants", "interrupted", "seconds", "log", "junit", "subsumed_by", "long", "phases", "started", "group_survivors", "unkillable")
     record = {key: check[key] for key in keys if key in check}
     if "phases" not in record:
         record["phases"] = check_phases(check, check.get("availability", "runnable"))
