@@ -145,7 +145,10 @@ Future<OwnedProcess> launchAtClosedStdin(
     entered?.call();
     return process;
   } catch (_) {
-    await process.terminate();
+    // Reap before the failure propagates. A failed reap is not raised here, so
+    // it cannot mask the barrier failure: the step registered at allocation
+    // repeats the termination at teardown and reports its failure beside it.
+    await process.terminate().then<void>((_) {}, onError: (Object _) {});
     rethrow;
   }
 }
@@ -445,10 +448,13 @@ void main() {
     'broken config pipe preserves retry admission after confirmed exit',
     () async {
       final root = createTestTempDirectorySync('closed-config-');
-      // Created before the resources it owns: teardown runs newest first, so
-      // the owner closes, then the children end, then the directory is removed.
-      final cleanups = OwnedCleanups.forTest();
-      final owned = OwnedProcesses(cleanups);
+      // Teardown runs newest first. Registration order below makes it: close
+      // the owner, then end the workers, then close the store, then remove the
+      // directory. A hung owner close is reported while its worker is alive.
+      final store = Store('${root.path}/app.db');
+      addTearDown(store.close);
+      final owned = OwnedProcesses.forTest();
+      final ownerCleanups = OwnedCleanups.forTest();
       final worker = await closedStdinWorker(root);
       runtimeConfiguration.environment['FORESIGHT_SERVICE'] = worker.path;
       final trace = PhaseTrace();
@@ -463,8 +469,6 @@ void main() {
         entered: () => entered.complete(),
       );
 
-      final store = Store('${root.path}/app.db');
-      addTearDown(store.close);
       final model = controlModel();
       store.setPreference('modelTerms.fixture/model.revision', 'accepted');
       final owner = ModelAssetAcquisitionCoordinator(
@@ -476,7 +480,7 @@ void main() {
         modelRoot: Directory('${root.path}/models'),
         prepareGemma: (_) async {},
       );
-      cleanups.add(
+      ownerCleanups.add(
         'close model acquisition owner',
         () => owner.close().timeout(const Duration(seconds: 2)),
       );
@@ -547,7 +551,8 @@ void main() {
           isNot(0),
         );
       }
-      await cleanups.run();
+      await ownerCleanups.run();
+      await owned.close();
       owned.expectNoneRunning(reason: 'Closed-stdin workers left running');
     },
   );
