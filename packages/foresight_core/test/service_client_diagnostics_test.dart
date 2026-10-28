@@ -150,16 +150,24 @@ void main() {
 
   void replyAfterFirstRefused(Socket socket, Map<String, dynamic> request) {
     // These owner/correlation assertions require admitted completion records.
-    // A sink receipt can precede its returned normal credits. Observe both
-    // fences before the fixture replies; never change production retry timing.
+    // A grant flag can still describe a spent or revoking lease. Drain the
+    // writer, then match its available bytes to the producer's received epoch
+    // before replying. The two-attempt assertion is about correlation, rather
+    // than best-effort admission under deliberate logging pressure.
     heldRetryReply = () => fixture.reply(socket, request, canary);
     heldRetryAdmission =
         () async {
           await firstRefusedRecorded.future.timeout(const Duration(seconds: 2));
-          await eventually(
-            () => session.producer.receivedGrantsForTesting.$2,
-            timeout: const Duration(seconds: 2),
-          );
+          await eventually(() async {
+            final budget = await session.inspectBudgetForTesting();
+            final grants = session.producer.receivedGrantsForTesting;
+            return budget.queuedRecords == 0 &&
+                budget.producers.length == 1 &&
+                budget.producers.single.normalEpoch == grants.$1 &&
+                grants.$2 &&
+                budget.producers.single.normalBytes >= 2048 &&
+                budget.producers.single.normalRecords > 0;
+          }, timeout: const Duration(seconds: 2));
           final reply = heldRetryReply;
           heldRetryReply = null;
           reply?.call();
