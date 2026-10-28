@@ -8,6 +8,31 @@ void require(bool value, const char *message) {
     throw std::runtime_error(message);
 }
 using Json = nlohmann::json;
+constexpr uint64_t fixture_blocks = 640, credit_blocks = 16,
+                   fixture_block_frames = 1920;
+struct Credits {
+  std::string path;
+  int descriptor = -1;
+  explicit Credits(const std::string &target) : path(target + ".credits") {
+    require(mkfifo(path.c_str(), 0600) == 0, "cannot create capture credits");
+    descriptor =
+        open(path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
+    require(descriptor >= 0, "cannot open capture credits");
+  }
+  ~Credits() {
+    if (descriptor >= 0)
+      close(descriptor);
+    unlink(path.c_str());
+  }
+  void grant() {
+    const char credit = 1;
+    ssize_t count;
+    do {
+      count = write(descriptor, &credit, 1);
+    } while (count < 0 && errno == EINTR);
+    require(count == 1, "capture credit was not delivered");
+  }
+};
 struct Fixture {
   std::string root;
   Fixture() {
@@ -133,6 +158,7 @@ void estimatedFirstBlock(const std::string &directory, int64_t origin,
 void captureAndBackpressure(const std::string &directory) {
   auto config = options(directory);
   auto marker = directory + "/device-started";
+  Credits credits(marker);
   auto owner = fs_owned_recording_capture_start(marker.c_str(), 0, 0,
                                                 config.dump().c_str());
   require(owner, "durable capture did not start");
@@ -140,9 +166,18 @@ void captureAndBackpressure(const std::string &directory) {
   Json chunks = Json::array();
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
   bool reserved = false;
+  uint64_t granted_batches = 0;
   while (std::chrono::steady_clock::now() < deadline) {
     auto state = poll(owner);
-    require(state.at("error").is_null(), "capture storage failed");
+    if (!state.at("error").is_null()) {
+      std::cerr << "capture state=" << state.at("state")
+                << " error=" << state.at("error")
+                << " source_sample=" << state.at("source_sample")
+                << " queued_frames=" << state.at("queued_frames")
+                << " reserved_chunks=" << state.at("reserved_chunks")
+                << " clock_quality=" << state.at("clock_quality") << '\n';
+      throw std::runtime_error("capture storage failed");
+    }
     require(state.at("uncertainty_us").is_null(),
             "raw FIFO falsely claimed clock accuracy");
     frames = state.at("source_sample").get<uint64_t>();
@@ -158,7 +193,18 @@ void captureAndBackpressure(const std::string &directory) {
               "reservation acknowledgement failed");
       reserved = true;
     }
-    if (frames == 640 * 1920)
+    // Saturate the legacy event queue, not the independent durable writer.
+    // A credit admits at most sixteen blocks; the next batch waits for every
+    // prior sample to be accounted for and for the actual writer queue to
+    // drain.
+    if (state.at("ready") == true &&
+        frames == granted_batches * credit_blocks * fixture_block_frames &&
+        state.at("queued_frames") == 0 &&
+        granted_batches < fixture_blocks / credit_blocks) {
+      credits.grant();
+      ++granted_batches;
+    }
+    if (frames == fixture_blocks * fixture_block_frames)
       break;
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
@@ -175,7 +221,9 @@ void captureAndBackpressure(const std::string &directory) {
           "raw FIFO drain was mislabeled acquisition progress");
   require(state.at("clock_quality") == "pipe_drain_estimate",
           "fake FIFO timestamp mislabeled hardware acquisition");
-  require(frames == 640 * 1920 && reserved, "synthetic input did not finish");
+  require(frames == fixture_blocks * fixture_block_frames && reserved &&
+              granted_batches == fixture_blocks / credit_blocks,
+          "synthetic input did not finish");
   uint64_t saved = 0;
   for (auto &chunk : chunks) {
     saved += chunk.at("frames").get<uint64_t>();
@@ -458,15 +506,32 @@ int main(int argc, char **argv) {
     }
   }
   if (argc > 1 && std::string(argv[1]) == "--format") {
+    std::string target;
     for (int i = 1; i + 1 < argc; ++i)
       if (std::string(argv[i]) == "--target") {
+        target = argv[i + 1];
         int fd = open(argv[i + 1], O_WRONLY | O_CREAT | O_EXCL, 0600);
         if (fd < 0)
           return 3;
         close(fd);
       }
+    const int credits =
+        open((target + ".credits").c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    struct stat metadata{};
+    if (target.empty() || credits < 0 || fstat(credits, &metadata) ||
+        !S_ISFIFO(metadata.st_mode))
+      return 5;
     std::array<unsigned char, 3840> pcm{};
-    for (unsigned i = 0; i < 640; ++i) {
+    for (unsigned i = 0; i < fixture_blocks; ++i) {
+      if (i % credit_blocks == 0) {
+        char credit;
+        ssize_t count;
+        do {
+          count = read(credits, &credit, 1);
+        } while (count < 0 && errno == EINTR);
+        if (count != 1 || credit != 1)
+          return 6;
+      }
       size_t offset = 0;
       while (offset < pcm.size()) {
         auto n = write(STDOUT_FILENO, pcm.data() + offset, pcm.size() - offset);
@@ -474,8 +539,8 @@ int main(int argc, char **argv) {
           return 4;
         offset += static_cast<size_t>(n);
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
+    close(credits);
     for (;;)
       pause();
   }
