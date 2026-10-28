@@ -556,9 +556,12 @@ void main() {
       expect(app.recording, isNull);
       expect(platform.routes.every((r) => r.retired), isTrue);
       expect(app.recordingState, contains('Capture stopped'));
+      expect(app.captureState['error'], app.recordingState);
       store.db.execute('DROP TRIGGER fault_initial');
       await app.startRecording(meeting);
+      expect(app.captureState['error'], isNull);
       await app.stopRecording();
+      expect(app.captureState['error'], isNull);
     },
   );
 
@@ -624,6 +627,7 @@ void main() {
         'marker_411',
       );
       expect(app.recordingState, contains('metadata needs recovery'));
+      expect(app.captureState['error'], app.recordingState);
     },
   );
 

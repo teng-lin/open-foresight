@@ -20,11 +20,38 @@ void main() {
         await tester.pump();
       }
 
-      await publish({'active': false, 'state': message});
+      await publish({'active': false, 'state': message, 'error': message});
       expect(find.text(message), findsOneWidget);
+      final notice = find.byType(RecordingStatusNotice);
+      final colors = Theme.of(tester.element(notice)).colorScheme;
+      Material noticeMaterial() => tester.widget<Material>(
+        find.descendant(of: notice, matching: find.byType(Material)),
+      );
+      expect(noticeMaterial().color, colors.error);
+      expect(
+        tester
+            .widget<SelectableText>(
+              find.descendant(
+                of: notice,
+                matching: find.byType(SelectableText),
+              ),
+            )
+            .style
+            ?.color,
+        colors.onError,
+      );
+      expect(find.byIcon(Icons.error_outline), findsOneWidget);
+      expect(
+        tester.getRect(notice).bottom,
+        tester.binding.renderViews.single.size.height,
+      );
       f.shell.update(() => f.shell.navigate(WorkspaceTab.settings));
       await tester.pump();
       expect(find.text(message), findsOneWidget);
+      expect(
+        tester.getRect(notice).bottom,
+        tester.binding.renderViews.single.size.height,
+      );
       await publish({'active': true, 'state': 'Recording'});
       expect(find.text(message), findsNothing);
       expect(
@@ -42,6 +69,8 @@ void main() {
         find.text('Recording stopped after 15 minutes without audio.'),
         findsOneWidget,
       );
+      expect(noticeMaterial().color, colors.surfaceContainerHigh);
+      expect(find.byIcon(Icons.error_outline), findsNothing);
       await publish({});
       expect(find.text('idle'), findsNothing);
     }),
