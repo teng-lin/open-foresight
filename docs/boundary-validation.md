@@ -331,13 +331,18 @@ boundary. It reuses `ci_stats.failure_rate` and `ci_stats.percentile`.
 What it refuses to do is the point:
 
 - **Packets are untrusted.** Only regular files (never symlinks) up to 8 MiB are
-  read, to a depth of 3 directories, with caps of 5000 files, 500 directories and
-  256 MiB in total. Each packet must pass the evidence validation. Rejections are
-  counted by class (not a regular file, too large, unreadable, not JSON, not an
-  evidence summary, invalid, bad timestamp, duplicate, cap) and never shown. A
-  cap that is hit makes the report incomplete: it is printed with that marked, the
-  exit status is 3, and no baseline is written from it.
-- **Nothing a packet wrote is printed.** Groups use check ids and boundary ids from
+  read, to a depth of 6 directories (a `gh run download` layout nests an artifact
+  four deep), with caps of 5000 files, 500 directories and 256 MiB in total. Each
+  packet must pass the evidence validation. Rejections are counted by class (not a
+  regular file, too large, unreadable, not JSON, not an evidence summary, invalid,
+  bad timestamp, duplicate, depth cap, file cap, byte budget) and never shown. Data
+  that exists but was not read makes the report incomplete: a directory deeper than
+  the cap, an unlistable directory, an unreadable or oversized file, a hit file,
+  directory or byte cap. An incomplete report is printed with that marked, the exit
+  status is 3, and no baseline is written from it. Content that is invalid, a
+  duplicate, a symlink or a pipe loses nothing and leaves it complete.
+- **Nothing a packet wrote is printed.** Groups use gate ids (of any kind, so manual
+  and CI-only gates are attributed and excluded from rates) and boundary ids from
   this checkout's inventory and closed vocabularies; an unknown check id is
   counted as `unknown-check`. No path, user name, host, revision or reason can
   appear.
@@ -348,12 +353,18 @@ What it refuses to do is the point:
   Cancelled checks, checks that never started (setup failed), checks failed
   because their subsuming check failed, and unavailable, not-run, manual, CI-only,
   subsumed and planned checks are excluded and counted.
-- **A rerun is not a sample.** Only the first run of a change identity (per check,
-  platform and origin) is an independent sample; later runs are reported
-  separately as qualification repeats, so a green rerun never offsets a failed
-  first run. A packet with no change identity is labelled `unidentified`.
+- **A rerun is not a sample.** Only the first *executed* run (passed or failed) of
+  a change identity (per check, platform and origin) is an independent sample;
+  later executed runs are reported separately as qualification repeats, so a green
+  rerun never offsets a failed first run. An attempt that never executed (not run,
+  unavailable, cancelled, never started, planned, manual, subsumed) is its own
+  `excluded` row and consumes no slot, so a failure after a skipped attempt is
+  still the first run. A packet with no change identity is labelled `unidentified`.
+  Packets created in the same second are ordered by their recorded start time
+  (`invocation.started_epoch`) when present, else by content digest.
 - **Descriptive, with a fresh baseline.** Plan-only packets execute nothing and are
-  not counted. Local and hosted runs are never mixed. The report states its own
+  not counted. Local and hosted runs are never mixed: the overall totals are
+  keyed by origin and platform. The report states its own
   window, is a fresh baseline and is never compared with an earlier or frozen
   window; it makes no improvement, regression or flakiness claim. A check counts
   toward every boundary it serves, so boundary rows overlap, and boundary names

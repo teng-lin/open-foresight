@@ -56,6 +56,11 @@ def build(tmp_path, packets, minimum=2, inventory=INVENTORY):
     return report_module.build_report(tmp_path, inventory, minimum)
 
 
+def totals(result, origin="local", platform="macos"):
+    [entry] = [entry for entry in result["overall"] if entry["key"] == {"origin": origin, "platform": platform}]
+    return entry
+
+
 def one(rows, **key):
     [row] = [row for row in rows if all(row["key"].get(name) == value for name, value in key.items())]
     return row
@@ -79,7 +84,7 @@ def test_below_the_minimum_sample_no_rate_is_shown_only_counts_and_a_label(tmp_p
     row = one(result["by_check"], check="alpha-stage")
     assert row["rate"] is None and row["label"] == "insufficient sample (3 eligible, 4 needed)"
     assert row["eligible"] == 3 and row["failed"] == 1 and row["seconds"] is None
-    assert result["overall"]["all_observations"]["rate"] is None
+    assert totals(result)["all_observations"]["rate"] is None
     text = report_module.render(result)
     assert "insufficient sample (3 eligible, 4 needed)" in text and "0.333" not in text
 
@@ -101,7 +106,7 @@ def test_a_duration_that_is_not_a_plain_finite_number_is_ignored(tmp_path, bad):
 
 def test_the_duration_of_an_excluded_check_never_enters_the_percentiles(tmp_path):
     items = [packet(0, seconds=1.0), packet(1, seconds=3.0), packet(2, "failed", interrupted=True, seconds=900.0), packet(3, "unavailable", seconds=800.0)]
-    row = one(build(tmp_path, items, minimum=2)["by_check"], check="alpha-stage")
+    row = one(build(tmp_path, items, minimum=2)["by_check"], check="alpha-stage", attempt="first")
     assert row["seconds"] == {"n": 2, "p50": 2.0, "p90": ci_stats.percentile([1.0, 3.0], 0.9)}
 
 
@@ -114,13 +119,16 @@ def test_nothing_is_dropped_from_the_denominator_and_excluded_outcomes_are_count
         packet(5, "unavailable"), packet(6, "not-run"), packet(7, "manual"), packet(8, "ci-only"), packet(9, "subsumed"), packet(10, "planned"),
     ]
     result = build(tmp_path, items, minimum=2)
-    row = one(result["by_check"], check="alpha-stage")
-    assert row["observations"] == 11 and row["eligible"] == 2 and row["failed"] == 1 and row["excluded"] == 9
-    assert row["outcomes"] == {
-        "cancelled": 1, "failure": 1, "not-applicable": 2, "not-run": 1, "planned": 1, "setup-failure": 1,
-        "subsumed": 1, "subsumed-failed": 1, "success": 1, "unavailable": 1,
-    }
+    row = one(result["by_check"], check="alpha-stage", attempt="first")
+    skipped = one(result["by_check"], check="alpha-stage", attempt="excluded")
+    assert row["observations"] == 2 and row["eligible"] == 2 and row["failed"] == 1 and row["excluded"] == 0
     assert row["rate"] == 0.5  # 1 of the 2 eligible runs; the nine excluded ones neither help nor hurt
+    assert skipped["observations"] == 9 and skipped["eligible"] == 0 and skipped["excluded"] == 9 and skipped["rate"] is None
+    assert skipped["outcomes"] == {
+        "cancelled": 1, "not-applicable": 2, "not-run": 1, "planned": 1, "setup-failure": 1, "subsumed": 1, "subsumed-failed": 1, "unavailable": 1,
+    }
+    everything = totals(result)["all_observations"]
+    assert (everything["observations"], everything["eligible"], everything["failed"], everything["excluded"]) == (11, 2, 1, 9)
 
 
 def test_local_and_hosted_runs_are_never_mixed_and_neither_are_platforms_selection_or_cache(tmp_path):
@@ -150,7 +158,7 @@ def test_cache_state_is_read_defensively(reuse, expected):
 def test_plan_only_packets_execute_nothing_and_are_not_counted(tmp_path):
     result = build(tmp_path, [packet(0), packet(1, mode="plan-only"), packet(2, mode="plan-only")])
     assert result["inputs"]["plan_only_packets_not_counted"] == 2 and result["inputs"]["run_packets_used"] == 1
-    assert result["overall"]["all_observations"]["observations"] == 1
+    assert totals(result)["all_observations"]["observations"] == 1
 
 
 # ------------------------------------------------------------------ first runs, repeats, recurring failures
@@ -163,7 +171,7 @@ def test_a_rerun_of_the_same_change_is_a_qualification_repeat_and_never_offsets_
     repeat = one(result["by_check"], attempt="repeat")
     assert (first["observations"], first["failed"]) == (3, 1) and first["rate"] == pytest.approx(1 / 3)
     assert (repeat["observations"], repeat["failed"]) == (3, 1) and repeat["rate"] == pytest.approx(1 / 3) and repeat["label"] is None
-    overall = result["overall"]
+    overall = totals(result)
     assert overall["first_runs_only"]["failed"] == 1 and overall["first_runs_only"]["observations"] == 3
     assert overall["qualification_repeats_only"]["observations"] == 3 and overall["all_observations"]["failed"] == 2
     assert overall["all_observations"]["observations"] == 6
@@ -213,13 +221,14 @@ def test_a_check_no_boundary_serves_is_unmapped_and_an_unknown_check_id_is_never
     items = [packet(0, check_id="manual-probe"), packet(1, check_id=secret)]
     result = build(tmp_path, items, minimum=1)
     assert one(result["by_boundary"], boundary="unmapped")["observations"] == 2
-    assert {row["key"]["check"] for row in result["by_check"]} == {"unknown-check"}
+    # A gate of any kind is attributed (a manual one is excluded from rates elsewhere); a name the inventory does not know is not shown.
+    assert {row["key"]["check"] for row in result["by_check"]} == {"unknown-check", "manual-probe"}
     assert secret not in json.dumps(result) and secret not in report_module.render(result)
 
 
 def test_known_ids_come_from_command_gates_and_the_inventory_boundaries():
     services, boundaries = report_module.known_ids(INVENTORY)
-    assert services == {"alpha-stage": ("boundary-one",), "beta-stage": ("boundary-one", "boundary-two")}
+    assert services == {"alpha-stage": ("boundary-one",), "beta-stage": ("boundary-one", "boundary-two"), "manual-probe": ()}
     assert boundaries == {"boundary-one", "boundary-two"}
     real_services, real_boundaries = report_module.known_ids(__import__("tools.boundary_inventory", fromlist=["load"]).load(ROOT))
     assert "native-stage" in real_services and real_boundaries
@@ -411,7 +420,7 @@ def test_a_packet_that_breaks_extraction_is_rejected_whatever_it_breaks(tmp_path
     write(tmp_path, "a.json", packet(0))
     monkeypatch.setattr(report_module, "observations", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
     result = report_module.build_report(tmp_path, INVENTORY, 1)
-    assert count(result, "invalid-evidence") == 1 and result["overall"]["all_observations"]["observations"] == 0
+    assert count(result, "invalid-evidence") == 1 and result["overall"] == []
 
 
 # ------------------------------------------------------------------ window, baseline, rendering, CLI
@@ -422,7 +431,7 @@ def test_the_window_is_the_packets_own_and_an_empty_directory_has_none(tmp_path)
     empty = tmp_path / "empty"
     empty.mkdir()
     nothing = report_module.build_report(empty, INVENTORY, 5)
-    assert nothing["window"] == {"first": None, "last": None} and nothing["by_check"] == [] and nothing["overall"]["all_observations"]["rate"] is None
+    assert nothing["window"] == {"first": None, "last": None} and nothing["by_check"] == [] and nothing["overall"] == []
     assert "Window: none to none" in report_module.render(nothing)
 
 
@@ -528,3 +537,160 @@ def test_evidence_summaries_written_by_the_real_builder_are_accepted(tmp_path):
     result = report_module.build_report(tmp_path, INVENTORY, 1)
     row = one(result["by_check"], check="alpha-stage")
     assert (row["key"]["origin"], row["key"]["selection"]) == ("hosted", "conservative") and row["eligible"] == 1
+
+
+# ------------------------------------------------------------------ review round: first executions, silent skips, mixed totals
+
+@pytest.mark.parametrize("before", ["not-run", "unavailable", "planned", "manual", "subsumed"])
+def test_an_attempt_that_never_executed_does_not_consume_the_first_run_slot(tmp_path, before):
+    same = "a" * 64
+    items = [packet(0, before, identity=same), packet(1, "failed", identity=same), packet(2, identity=same)]
+    result = build(tmp_path, items, minimum=1)
+    assert one(result["by_check"], attempt="first")["failed"] == 1
+    assert one(result["by_check"], attempt="repeat")["failed"] == 0 and one(result["by_check"], attempt="excluded")["observations"] == 1
+    scoped = totals(result)
+    assert scoped["first_runs_only"]["eligible"] == 1 and scoped["first_runs_only"]["failed"] == 1
+    assert scoped["qualification_repeats_only"]["eligible"] == 1
+
+
+def test_a_cancelled_or_never_started_first_attempt_is_excluded_and_the_next_executed_one_is_first(tmp_path):
+    same = "b" * 64
+    items = [packet(0, "failed", identity=same, interrupted=True), packet(1, "failed", identity=same, phases={"setup": "failed", "body": "not-run", "teardown": "not-run"}),
+             packet(2, "failed", identity=same)]
+    result = build(tmp_path, items, minimum=1)
+    assert one(result["by_check"], attempt="first")["failed"] == 1 and one(result["by_check"], attempt="excluded")["observations"] == 2
+
+
+def test_a_recurring_failure_is_found_when_each_first_execution_followed_a_skipped_attempt(tmp_path):
+    items = []
+    for number, identity in enumerate(("a" * 64, "b" * 64)):
+        items += [packet(number * 2, "not-run", identity=identity), packet(number * 2 + 1, "failed", identity=identity)]
+    recurring = build(tmp_path, items, minimum=1)["recurring_first_run_failures"]
+    assert [(item["check"], item["failed_first_runs"], item["distinct_changes"]) for item in recurring] == [("alpha-stage", 2, 2)]
+
+
+def test_a_failure_then_a_pass_still_counts_the_failure_as_the_first_run(tmp_path):
+    same = "c" * 64
+    result = build(tmp_path, [packet(0, "failed", identity=same), packet(1, identity=same)], minimum=1)
+    assert one(result["by_check"], attempt="first")["failed"] == 1 and one(result["by_check"], attempt="repeat")["failed"] == 0
+
+
+def gh_layout(root, failing=True):
+    """What `gh run download` produces: a run directory, an artifact, a job directory, then the evidence directory."""
+    write(root, "top.json", packet(0))
+    nested = root / "run1" / "artifact" / "job" / "validation"
+    nested.mkdir(parents=True)
+    write(nested, "evidence.json", packet(1, "failed" if failing else "passed"))
+    return nested
+
+
+def test_a_gh_run_download_layout_is_read_to_its_depth(tmp_path):
+    gh_layout(tmp_path)
+    result = report_module.build_report(tmp_path, INVENTORY, 1)
+    assert result["complete"] is True and result["inputs"]["run_packets_used"] == 2 and totals(result)["all_observations"]["failed"] == 1
+
+
+def test_directories_beyond_the_depth_cap_make_the_report_incomplete_and_are_counted(tmp_path, monkeypatch, capsys):
+    gh_layout(tmp_path)
+    monkeypatch.setattr(report_module, "MAX_DEPTH", 3)
+    result = report_module.build_report(tmp_path, INVENTORY, 1)
+    assert result["complete"] is False and count(result, "depth-cap") == 1 and result["inputs"]["run_packets_used"] == 1
+    assert totals(result)["all_observations"]["failed"] == 0  # the failed packet is exactly what was not read
+    baseline = tmp_path.parent / "baseline.json"
+    assert report_module.main([str(tmp_path), "--write-baseline", str(baseline)], inventory=INVENTORY) == 3
+    assert not baseline.exists() and "no baseline is written" in capsys.readouterr().err
+    assert "depth-cap 1" in report_module.render(result) and "NO, a cap cut the read short" in report_module.render(result)
+
+
+def test_the_default_depth_cap_is_enforced_too(tmp_path):
+    deep = tmp_path
+    for level in range(report_module.MAX_DEPTH + 1):
+        deep = deep / f"d{level}"
+        deep.mkdir()
+    write(deep, "p.json", packet(0))
+    result = report_module.build_report(tmp_path, INVENTORY, 1)
+    assert result["complete"] is False and count(result, "depth-cap") == 1 and result["inputs"]["run_packets_used"] == 0
+
+
+@pytest.mark.parametrize("fault", ["directory", "file", "oversize"])
+def test_data_that_exists_but_was_not_read_makes_the_report_incomplete(tmp_path, monkeypatch, fault):
+    if os.geteuid() == 0 and fault != "oversize":
+        return  # root reads a mode-0 file; there is nothing unread to report
+    write(tmp_path, "ok.json", packet(0))
+    if fault == "directory":
+        folder = tmp_path / "locked"
+        folder.mkdir()
+        write(folder, "p.json", packet(1, "failed"))
+        folder.chmod(0)
+        target = folder
+    elif fault == "file":
+        target = write(tmp_path, "locked.json", packet(1, "failed"))
+        target.chmod(0)
+    else:
+        target = None
+        monkeypatch.setattr(report_module.validation_replay, "MAX_PACKET_BYTES", (tmp_path / "ok.json").stat().st_size + 200)
+        write(tmp_path, "large.json", {**packet(1, "failed"), "padding": "x" * 5000})
+    try:
+        result = report_module.build_report(tmp_path, INVENTORY, 1)
+    finally:
+        if target is not None:
+            target.chmod(0o755 if target.is_dir() else 0o644)
+    assert result["complete"] is False and totals(result)["all_observations"]["failed"] == 0
+
+
+def test_rejections_that_lose_no_data_leave_the_report_complete(tmp_path):
+    write(tmp_path, "ok.json", packet(0))
+    write(tmp_path, "dup.json", packet(0))
+    write(tmp_path, "junk.json", "{not json")
+    write(tmp_path, "foreign.json", {"kind": "other"})
+    (tmp_path / "link.json").symlink_to(tmp_path / "ok.json")
+    os.mkfifo(tmp_path / "pipe.json")
+    result = report_module.build_report(tmp_path, INVENTORY, 1)
+    assert result["complete"] is True and count(result, "duplicate") == 1 and count(result, "not-a-regular-file") == 2
+
+
+def test_local_and_hosted_totals_are_never_mixed_into_one_rate(tmp_path):
+    items = [packet(0, "failed"), packet(1, hosted=True), packet(2, platform="linux")]
+    result = build(tmp_path, items, minimum=1)
+    keys = [entry["key"] for entry in result["overall"]]
+    assert keys == [{"origin": "hosted", "platform": "macos"}, {"origin": "local", "platform": "linux"}, {"origin": "local", "platform": "macos"}]
+    assert totals(result)["all_observations"]["rate"] == 1.0
+    assert totals(result, "hosted")["all_observations"]["rate"] == 0.0 and totals(result, "local", "linux")["all_observations"]["failed"] == 0
+    assert not any(entry["key"]["origin"] == "mixed" for entry in result["overall"])
+    text = report_module.render(result)
+    assert "| local | macos | all observations |" in text and "| hosted | macos | first runs only |" in text
+
+
+def test_every_gate_kind_in_the_inventory_is_attributed_and_still_excluded_from_rates(tmp_path):
+    from tools import boundary_inventory
+
+    inventory = boundary_inventory.load(ROOT)
+    services, _boundaries = report_module.known_ids(inventory)
+    assert {name for name, gate in inventory["gates"].items() if gate["kind"] != "command"} <= set(services)
+    kinds = {gate["kind"] for gate in inventory["gates"].values()}
+    assert kinds - {"command"}
+    manual = next(name for name, gate in inventory["gates"].items() if gate["kind"] != "command")
+    result = report_module.build_report(build_dir(tmp_path, [packet(0, "manual", check_id=manual)]), inventory, 1)
+    row = one(result["by_check"], check=manual)
+    assert row["key"]["attempt"] == "excluded" and row["eligible"] == 0 and row["rate"] is None
+
+
+def test_packets_created_in_the_same_second_are_ordered_by_their_recorded_start_time(tmp_path):
+    import hashlib
+
+    same = "d" * 64
+    early, late = packet(0, "failed", identity=same), packet(0, identity=same)
+    early["invocation"]["started_epoch"] = 1000.250
+    late["invocation"]["started_epoch"] = 1000.750
+    # Pad the early packet until its content digest sorts after the late one's: the digest order is then the wrong order.
+    for pad in range(1000):
+        early["pad"] = pad
+        if hashlib.sha256(json.dumps(early).encode()).hexdigest() > hashlib.sha256(json.dumps(late).encode()).hexdigest():
+            break
+    for name, item in (("a.json", late), ("b.json", early)):  # file order is wrong too
+        write(tmp_path, name, item)
+    result = report_module.build_report(tmp_path, INVENTORY, 1)
+    assert one(result["by_check"], attempt="first")["failed"] == 1 and one(result["by_check"], attempt="repeat")["failed"] == 0
+    assert report_module.sequence({"invocation": {"started_epoch": True}}) == 0.0 and report_module.sequence({"invocation": {"started_epoch": float("nan")}}) == 0.0
+    assert report_module.sequence({"invocation": None}) == 0.0 and report_module.sequence({"invocation": {"started_epoch": "9"}}) == 0.0
+    assert report_module.sequence({"invocation": {"started_epoch": 12}}) == 12.0

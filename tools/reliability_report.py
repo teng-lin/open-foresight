@@ -57,7 +57,7 @@ SCHEMA = 1
 DEFAULT_MINIMUM_SAMPLE = 20
 MAX_FILES = 5000
 MAX_DIRECTORIES = 500
-MAX_DEPTH = 3
+MAX_DEPTH = 6  # `gh run download` nests an artifact four directories below the run
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
 TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
 PLATFORMS = ("linux", "macos")
@@ -69,8 +69,11 @@ EXCLUDED = {
 }
 REJECTIONS = (
     "not-a-regular-file", "too-large", "unreadable", "not-json", "not-an-evidence-summary", "invalid-evidence",
-    "bad-timestamp", "duplicate", "file-cap", "byte-budget",
+    "bad-timestamp", "duplicate", "file-cap", "byte-budget", "depth-cap",
 )
+# Data that exists but was not read: the report cannot claim to be complete. (Content that is invalid, a duplicate or
+# deliberately ignored, such as a symlink, is a rejection that loses nothing.)
+INCOMPLETE = ("unreadable", "too-large", "file-cap", "byte-budget", "depth-cap")
 
 
 def collect_files(directory: Path) -> tuple[list[Path], Counter[str], bool]:
@@ -89,13 +92,15 @@ def collect_files(directory: Path) -> tuple[list[Path], Counter[str], bool]:
         try:
             entries = sorted(os.scandir(current), key=lambda entry: entry.name)
         except OSError:
-            rejected["unreadable"] += 1
+            rejected["unreadable"] += 1  # a directory we could not list may hold packets: INCOMPLETE says so
             continue
         for entry in entries:
             try:
                 if entry.is_dir(follow_symlinks=False):
                     if depth < MAX_DEPTH:
                         pending.append((Path(entry.path), depth + 1))
+                    else:
+                        rejected["depth-cap"] += 1  # not read, and INCOMPLETE says so
                 elif entry.name.endswith(".json"):
                     if entry.is_file(follow_symlinks=False):
                         files.append(Path(entry.path))
@@ -127,8 +132,8 @@ def parse_timestamp(value: Any) -> datetime | None:
 
 
 def known_ids(inventory: Mapping[str, Any]) -> tuple[dict[str, tuple[str, ...]], set[str]]:
-    """check id -> the boundaries it serves, and the known boundary ids, from this checkout's inventory."""
-    served: dict[str, list[str]] = {name: [] for name, gate in inventory["gates"].items() if gate.get("kind") == "command"}
+    """gate id -> the boundaries it serves, and the known boundary ids, from this checkout's inventory."""
+    served: dict[str, list[str]] = {name: [] for name in inventory["gates"]}  # every gate, so ci-only and manual ones are attributed
     boundaries = set()
     for boundary in inventory["boundaries"]:
         boundaries.add(boundary["id"])
@@ -195,10 +200,16 @@ def observations(packet: Mapping[str, Any], created: datetime, services: Mapping
     return result
 
 
+def sequence(packet: Mapping[str, Any]) -> float:
+    """The recorded start time with sub-second precision, to order packets created in the same second; 0 if absent."""
+    value = (packet.get("invocation") or {}).get("started_epoch")
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else 0.0
+
+
 def ingest(directory: Path, services: Mapping[str, tuple[str, ...]]) -> dict[str, Any]:
     files, rejected, complete = collect_files(directory)
     seen: set[str] = set()
-    packets: list[tuple[datetime, str, Mapping[str, Any]]] = []
+    packets: list[tuple[datetime, float, str, Mapping[str, Any]]] = []
     budget = MAX_TOTAL_BYTES
     plans = 0
     for path in files:
@@ -233,12 +244,12 @@ def ingest(directory: Path, services: Mapping[str, tuple[str, ...]]) -> dict[str
             if packet["mode"] != "run":
                 plans += 1
                 continue
-            packets.append((created, digest, packet))
+            packets.append((created, sequence(packet), digest, packet))
         except Exception:  # noqa: BLE001 - untrusted input: whatever it breaks is a rejection, not a traceback
             rejected["invalid-evidence"] += 1
-    packets.sort(key=lambda item: (item[0], item[1]))
+    packets.sort(key=lambda item: (item[0], item[1], item[2]))
     rows: list[dict[str, Any]] = []
-    for created, _digest, packet in packets:
+    for created, _sequence, _digest, packet in packets:
         try:
             rows.extend(observations(packet, created, services))
         except Exception:  # noqa: BLE001
@@ -248,6 +259,8 @@ def ingest(directory: Path, services: Mapping[str, tuple[str, ...]]) -> dict[str
         key = (row["identity"], row["check"], row["platform"], row["origin"])
         if row["identity"] is None:
             row["attempt"] = "unidentified"
+        elif row["outcome"] not in ("success", "failure"):
+            row["attempt"] = "excluded"  # an attempt that never executed, was cancelled or was unavailable consumes no slot
         elif key in first_seen:
             row["attempt"] = "repeat"
         else:
@@ -306,17 +319,33 @@ def recurring_failures(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]
     return result
 
 
+def overall(rows: Sequence[Mapping[str, Any]], minimum: int) -> list[dict[str, Any]]:
+    """Totals per origin and platform: a rate over mixed local and hosted runs would describe neither."""
+    result = []
+    for origin, platform in sorted({(row["origin"], row["platform"]) for row in rows}):
+        subset = [row for row in rows if (row["origin"], row["platform"]) == (origin, platform)]
+        result.append(
+            {
+                "key": {"origin": origin, "platform": platform},
+                "all_observations": summarize(subset, minimum),
+                "first_runs_only": summarize([row for row in subset if row["attempt"] != "repeat"], minimum),
+                "qualification_repeats_only": summarize([row for row in subset if row["attempt"] == "repeat"], minimum),
+            }
+        )
+    return result
+
+
 def build_report(directory: Path, inventory: Mapping[str, Any], minimum: int = DEFAULT_MINIMUM_SAMPLE) -> dict[str, Any]:
     services, _boundaries = known_ids(inventory)
     ingested = ingest(directory, services)
     rows = ingested["rows"]
     rejected = {reason: ingested["rejected"].get(reason, 0) for reason in REJECTIONS}
+    complete = ingested["complete"] and not any(rejected[reason] for reason in INCOMPLETE)
     stamps = [row["created"] for row in rows]
-    first_runs = [row for row in rows if row["attempt"] != "repeat"]
     return {
         "kind": KIND,
         "schema": SCHEMA,
-        "complete": ingested["complete"],
+        "complete": complete,
         "minimum_sample": minimum,
         "window": {
             "first": min(stamps).strftime(TIMESTAMP) if stamps else None,
@@ -328,11 +357,7 @@ def build_report(directory: Path, inventory: Mapping[str, Any], minimum: int = D
             "plan_only_packets_not_counted": ingested["plans"], "rejected": rejected,
             "limits": {"files": MAX_FILES, "directories": MAX_DIRECTORIES, "bytes": MAX_TOTAL_BYTES},
         },
-        "overall": {
-            "all_observations": summarize(rows, minimum),
-            "first_runs_only": summarize(first_runs, minimum),
-            "qualification_repeats_only": summarize([row for row in rows if row["attempt"] == "repeat"], minimum),
-        },
+        "overall": overall(rows, minimum),
         "by_check": group(rows, ("check", "platform", "origin", "selection", "cache", "attempt"), minimum),
         "by_boundary": group(rows, ("platform", "origin", "attempt"), minimum, split=("boundaries", "boundary")),
         "recurring_first_run_failures": recurring_failures(rows),
@@ -340,7 +365,8 @@ def build_report(directory: Path, inventory: Mapping[str, Any], minimum: int = D
             "Rates describe this window only. No improvement, regression or flakiness claim is made from them.",
             "A rate is shown only at or above the minimum sample of eligible runs; below it the counts stand alone.",
             "Cancelled, never-started, unavailable, manual, CI-only, subsumed and planned checks are excluded from the rate and counted.",
-            "Only the first run of a change identity is an independent sample; later runs are qualification repeats and never offset a failed first run.",
+            "Only the first executed run (passed or failed) of a change identity is an independent sample; later executed runs are qualification repeats and never offset a failed first run. An attempt that never executed (not run, unavailable, cancelled) is shown as excluded and consumes no slot.",
+            "Packets created in the same second are ordered by their recorded start time when present, else by content digest.",
             "A check counts toward every boundary it serves, so boundary rows overlap. Local and hosted runs are never mixed.",
             "Boundary names come from this checkout's inventory; packets from another revision may map differently.",
             "The execution mode (source or compiled) is not recorded in a packet, so it is not a dimension here.",
@@ -376,11 +402,16 @@ def render(report: Mapping[str, Any]) -> str:
         _rejected_line(report["inputs"]["rejected"]),
         "",
         "## Overall",
-        "| Scope | Observations | Eligible | Failed | Excluded | Rate | Note |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| Origin | Platform | Scope | Observations | Eligible | Failed | Excluded | Rate | Note |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
-    for name, scope in report["overall"].items():
-        lines.append(f"| {name.replace('_', ' ')} | {scope['observations']} | {scope['eligible']} | {scope['failed']} | {scope['excluded']} | {_cell(scope['rate'])} | {scope['label'] or ''} |")
+    for entry in report["overall"]:
+        for name in ("all_observations", "first_runs_only", "qualification_repeats_only"):
+            scope = entry[name]
+            lines.append(
+                f"| {entry['key']['origin']} | {entry['key']['platform']} | {name.replace('_', ' ')} | {scope['observations']} | {scope['eligible']} | "
+                f"{scope['failed']} | {scope['excluded']} | {_cell(scope['rate'])} | {scope['label'] or ''} |"
+            )
     for title, key, columns in (
         ("By check", "by_check", ("check", "platform", "origin", "selection", "cache", "attempt")),
         ("By boundary", "by_boundary", ("boundary", "platform", "origin", "attempt")),
