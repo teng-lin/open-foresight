@@ -1,5 +1,7 @@
 #include "zoom_observer_core.h"
 
+#include "zoom_ref_table.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -11,6 +13,7 @@
 #include <deque>
 #include <map>
 #include <mutex>
+#include <poll.h>
 #include <thread>
 #include <unistd.h>
 #include <utility>
@@ -25,8 +28,10 @@ using Clock = std::chrono::steady_clock;
 constexpr size_t kMaxIdBytes = 128;
 constexpr size_t kMaxSessionBytes = 128;
 constexpr int kMaxRequestNesting = 16;
-constexpr size_t kMaxRefEntries = 4096;
+constexpr size_t kMaxQueuedRequests = 64;
 constexpr int kMaxDiagnostics = 32;
+constexpr int kExitProtocol = 2;
+constexpr int kExitOutput = 3;
 
 // Bounded stderr diagnostics: stable tokens only, never names or text.
 class Diagnostics {
@@ -50,32 +55,69 @@ private:
 };
 
 // Serializes frames from the reader and polling threads and owns `seq`.
+//
+// A frame is written while the lock is held, so a write blocked on a full pipe
+// holds the lock. The shutdown guard therefore only try-locks (see
+// emit_if_idle): when stdout is wedged the closing frame could not be delivered
+// anyway, and the guard exits instead of waiting behind it.
 class Writer {
 public:
+  enum class Result { Written, TooLarge, Failed };
+
   explicit Writer(int fd) : fd_(fd) {}
 
-  // Returns false when the frame was not written (closed or oversized).
-  bool emit(const char *type, json frame, bool terminal = false) {
-    frame["v"] = kProtocolVersion;
-    frame["type"] = type;
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (closed_)
-      return false;
-    frame["seq"] = seq_;
-    std::string line =
-        frame.dump(-1, ' ', false, json::error_handler_t::replace);
-    if (line.size() >= kMaxLineBytes)
-      return false;
-    line += '\n';
-    bool written = write_all(line);
-    if (written)
-      ++seq_;
-    if (!written || terminal)
-      closed_ = true;
-    return written;
+  // Called once, outside the lock, when stdout first fails to accept a frame.
+  void on_failure(std::function<void()> callback) {
+    failure_ = std::move(callback);
+  }
+
+  Result emit(const char *type, json frame, bool terminal = false) {
+    return write_frame(type, std::move(frame), terminal, true);
+  }
+
+  // Like a terminal emit, but gives up instead of waiting for the lock.
+  Result emit_if_idle(const char *type, json frame) {
+    return write_frame(type, std::move(frame), true, false);
   }
 
 private:
+  Result write_frame(const char *type, json frame, bool terminal, bool wait) {
+    frame["v"] = kProtocolVersion;
+    frame["type"] = type;
+    Result result;
+    bool first_failure = false;
+    {
+      std::unique_lock<std::mutex> lock(mutex_, std::defer_lock);
+      if (wait)
+        lock.lock();
+      else if (!lock.try_lock())
+        return Result::Failed;
+      if (closed_)
+        return Result::Failed;
+      frame["seq"] = seq_;
+      std::string line =
+          frame.dump(-1, ' ', false, json::error_handler_t::replace);
+      if (line.size() > kMaxLineBytes) {
+        result = Result::TooLarge;
+      } else {
+        line += '\n';
+        if (write_all(line)) {
+          ++seq_;
+          result = Result::Written;
+        } else {
+          closed_ = true;
+          first_failure = true;
+          result = Result::Failed;
+        }
+      }
+      if (terminal)
+        closed_ = true;
+    }
+    if (first_failure && failure_)
+      failure_();
+    return result;
+  }
+
   bool write_all(const std::string &data) {
     size_t offset = 0;
     while (offset < data.size()) {
@@ -95,10 +137,20 @@ private:
   int fd_;
   uint64_t seq_ = 0;
   bool closed_ = false;
+  std::function<void()> failure_;
 };
 
 struct Request {
-  enum class Kind { Capabilities, Setup, Start, Stop, Reject, Eof, Fatal };
+  enum class Kind {
+    Capabilities,
+    Setup,
+    Start,
+    Stop,
+    Reject,
+    Eof,
+    Fatal,
+    OutputClosed
+  };
   Kind kind = Kind::Eof;
   json id; // null when absent
   std::string session;
@@ -108,13 +160,23 @@ struct Request {
 
 struct Shared {
   std::mutex mutex;
-  std::condition_variable wake;     // new request or terminal event
+  std::condition_variable requests; // new request or terminal event
+  std::condition_variable space;    // queue has room again
   std::condition_variable finished; // main loop is done
   std::deque<Request> queue;
   bool done = false;
   std::atomic<bool> cancel{false};
+  // Set by the reader when it forwards the one accepted start request.
   std::atomic<int> deadline_ms{kDefaultDeadlineMs};
-  std::string session; // last valid start request
+  std::string session;
+  int wake_fd = -1; // write end of the reader's wake pipe
+
+  // Terminal wake-up used when the main loop exits or output breaks.
+  void wake_reader() {
+    char byte = 0;
+    if (wake_fd >= 0)
+      (void)!::write(wake_fd, &byte, 1);
+  }
 };
 
 bool nesting_exceeds(const std::string &line, int limit) {
@@ -165,19 +227,38 @@ bool optional_int(const json &request, const char *name, int low, int high,
 class Reader {
 public:
   Reader(Shared &shared, Writer &writer, Source &source, Diagnostics &diag,
-         int fd)
-      : shared_(shared), writer_(writer), source_(source), diag_(diag),
-        fd_(fd) {}
+         int fd, int wake_fd)
+      : shared_(shared), writer_(writer), source_(source), diag_(diag), fd_(fd),
+        wake_fd_(wake_fd) {}
 
   void run() {
     std::string line;
     char chunk[65536];
     for (;;) {
-      ssize_t count = ::read(fd_, chunk, sizeof chunk);
-      if (count < 0 && errno == EINTR)
+      pollfd fds[2] = {{fd_, POLLIN, 0}, {wake_fd_, POLLIN, 0}};
+      if (::poll(fds, 2, -1) < 0) {
+        if (errno == EINTR)
+          continue;
+        fatal("input_error");
+        return;
+      }
+      if (fds[1].revents)
+        return; // the main loop is finishing
+      if (!fds[0].revents)
         continue;
-      if (count <= 0) {
-        terminate(Request::Kind::Eof, {}, kDefaultDeadlineMs);
+      ssize_t count = ::read(fd_, chunk, sizeof chunk);
+      if (count < 0) {
+        if (errno == EINTR || errno == EAGAIN)
+          continue;
+        fatal("input_error"); // a read failure is not a clean end of input
+        return;
+      }
+      if (count == 0) {
+        if (!line.empty()) {
+          fatal("truncated_line"); // the last request lacked its newline
+          return;
+        }
+        terminate(Request::Kind::Eof, {}, session_deadline());
         return;
       }
       for (ssize_t i = 0; i < count; ++i) {
@@ -198,12 +279,25 @@ public:
   }
 
 private:
-  void push(Request request) {
-    {
-      std::lock_guard<std::mutex> lock(shared_.mutex);
-      shared_.queue.push_back(std::move(request));
-    }
-    shared_.wake.notify_all();
+  int session_deadline() const {
+    return shared_.deadline_ms.load();
+  }
+
+  // Returns false when the session is ending and nothing more should be read.
+  bool push(Request request) {
+    std::unique_lock<std::mutex> lock(shared_.mutex);
+    // Backpressure instead of an unbounded queue: stop reading stdin until the
+    // main loop catches up. Cancellation and shutdown release the wait.
+    shared_.space.wait(lock, [&] {
+      return shared_.queue.size() < kMaxQueuedRequests || shared_.done ||
+             shared_.cancel.load();
+    });
+    if (shared_.done)
+      return false;
+    shared_.queue.push_back(std::move(request));
+    lock.unlock();
+    shared_.requests.notify_all();
+    return true;
   }
 
   // Delivers a terminal event, then guards it: if the polling thread does not
@@ -212,39 +306,42 @@ private:
   void terminate(Request::Kind kind, Request request, int deadline_ms) {
     request.kind = kind;
     shared_.cancel = true;
-    push(request);
+    {
+      std::lock_guard<std::mutex> lock(shared_.mutex);
+      shared_.queue.push_back(request); // terminal events bypass the bound
+    }
+    shared_.requests.notify_all();
+    shared_.space.notify_all();
     std::unique_lock<std::mutex> lock(shared_.mutex);
     if (shared_.finished.wait_for(lock, std::chrono::milliseconds(deadline_ms),
                                   [&] { return shared_.done; }))
       return;
+    std::string session = shared_.session;
     lock.unlock();
     diag_.note("shutdown_deadline");
     if (kind == Request::Kind::Stop)
-      writer_.emit(
+      writer_.emit_if_idle(
           "stopped",
           {{"id", request.id},
-           {"session",
-            shared_.session.empty() ? json(nullptr) : json(shared_.session)}},
-          true);
+           {"session", session.empty() ? json(nullptr) : json(session)}});
     else if (kind == Request::Kind::Fatal)
-      writer_.emit("error",
-                   {{"code", request.code}, {"message", "protocol error"}},
-                   true);
-    ::_exit(kind == Request::Kind::Fatal ? 2 : 0);
+      writer_.emit_if_idle(
+          "error", {{"code", request.code}, {"message", "protocol error"}});
+    ::_exit(kind == Request::Kind::Fatal ? kExitProtocol : 0);
   }
 
   void fatal(const char *code) {
     Request request;
     request.code = code;
-    terminate(Request::Kind::Fatal, request, kDefaultDeadlineMs);
+    terminate(Request::Kind::Fatal, request, session_deadline());
   }
 
-  void reject(const json &id, const char *code) {
+  bool reject(const json &id, const char *code) {
     Request request;
     request.kind = Request::Kind::Reject;
     request.id = valid_id(id) ? id : json(nullptr);
     request.code = code;
-    push(std::move(request));
+    return push(std::move(request));
   }
 
   bool handle_line(const std::string &raw) {
@@ -285,10 +382,8 @@ private:
       fatal("protocol_type");
       return false;
     }
-    if (!valid_id(id)) {
-      reject(id, "invalid_request");
-      return true;
-    }
+    if (!valid_id(id))
+      return reject(id, "invalid_request");
     if (type == "clock") {
       writer_.emit("clock", {{"id", id},
                              {"monotonic_ms", source_.monotonic_ms()},
@@ -311,10 +406,11 @@ private:
           !optional_int(request, "poll_ms", kMinPollMs, kMaxPollMs,
                         out.poll_ms) ||
           !optional_int(request, "deadline_ms", kMinDeadlineMs, kMaxDeadlineMs,
-                        deadline)) {
-        reject(id, "invalid_request");
-        return true;
-      }
+                        deadline))
+        return reject(id, "invalid_request");
+      if (started_)
+        return reject(id, "already_started"); // never touches the live session
+      started_ = true;
       out.session = session->get<std::string>();
       shared_.deadline_ms = deadline;
       {
@@ -322,11 +418,10 @@ private:
         shared_.session = out.session;
       }
     } else {
-      terminate(Request::Kind::Stop, out, shared_.deadline_ms.load());
+      terminate(Request::Kind::Stop, out, session_deadline());
       return false;
     }
-    push(std::move(out));
-    return true;
+    return push(std::move(out));
   }
 
   Shared &shared_;
@@ -334,8 +429,12 @@ private:
   Source &source_;
   Diagnostics &diag_;
   int fd_;
+  int wake_fd_;
   uint64_t expected_seq_ = 0;
+  bool started_ = false;
 };
+
+using ParseFn = std::function<ParseResult(const AxSnapshot &)>;
 
 struct Verdict {
   bool available = false;
@@ -344,14 +443,14 @@ struct Verdict {
   ParseResult parsed;
 };
 
-Verdict classify(const SnapshotOutcome &outcome) {
+Verdict classify(const SnapshotOutcome &outcome, const ParseFn &parse) {
   Verdict verdict;
   if (!outcome.ok) {
     verdict.state = outcome.state.empty() ? "unavailable" : outcome.state;
     verdict.reason = outcome.reason.empty() ? verdict.state : outcome.reason;
     return verdict;
   }
-  verdict.parsed = parse_snapshot(outcome.snapshot);
+  verdict.parsed = parse(outcome.snapshot);
   if (verdict.parsed.available) {
     verdict.available = true;
     verdict.state = "available";
@@ -364,6 +463,8 @@ Verdict classify(const SnapshotOutcome &outcome) {
     verdict.state = "unavailable";
     verdict.reason = "unsupported_locale";
   } else {
+    // Only a complete read may say there is no meeting; an incomplete read with
+    // no evidence is a failed read (`incomplete_read`).
     verdict.state = empty ? "no_meeting" : "unavailable";
     verdict.reason = why;
   }
@@ -374,55 +475,12 @@ json nullable(const std::string &text) {
   return text.empty() ? json(nullptr) : json(text);
 }
 
-// Meeting-local participant references: stable while the same accessibility
-// element (or, lacking one, the same name and ordinal) persists in a window.
-class RefTable {
-public:
-  void assign(const std::string &window, std::vector<std::string> &refs,
-              const std::vector<Participant> &participants) {
-    if (window != window_ || entries() > kMaxRefEntries) {
-      window_ = window;
-      by_object_.clear();
-      by_key_.clear();
-    }
-    std::map<std::string, int> ordinals;
-    refs.clear();
-    for (const auto &participant : participants) {
-      std::string ref;
-      if (participant.object_id != 0) {
-        auto [it, inserted] = by_object_.try_emplace(participant.object_id);
-        if (inserted)
-          it->second = next();
-        ref = it->second;
-      } else {
-        int ordinal = ordinals[participant.key]++;
-        auto [it, inserted] = by_key_.try_emplace({participant.key, ordinal});
-        if (inserted)
-          it->second = next();
-        ref = it->second;
-      }
-      refs.push_back(ref);
-    }
-  }
-
-private:
-  size_t entries() const {
-    return by_object_.size() + by_key_.size();
-  }
-  std::string next() {
-    return "p" + std::to_string(++counter_);
-  }
-
-  std::string window_;
-  uint64_t counter_ = 0;
-  std::map<uint64_t, std::string> by_object_;
-  std::map<std::pair<std::string, int>, std::string> by_key_;
-};
-
 class Session {
 public:
-  Session(Source &source, Writer &writer, Shared &shared, Diagnostics &diag)
-      : source_(source), writer_(writer), shared_(shared), diag_(diag) {}
+  Session(Source &source, Writer &writer, Shared &shared, Diagnostics &diag,
+          const ObserverConfig &config)
+      : source_(source), writer_(writer), shared_(shared), diag_(diag),
+        config_(config) {}
 
   bool started() const {
     return started_;
@@ -430,13 +488,19 @@ public:
   Clock::time_point next_poll() const {
     return next_;
   }
+  std::string session() const {
+    return session_;
+  }
 
-  void start(const Request &request) {
+  // Returns false (and does not start) if shutdown began during the first read.
+  bool start(const Request &request) {
+    auto begin = Clock::now();
+    SnapshotOutcome outcome = source_.snapshot(cancelled());
+    if (shared_.cancel)
+      return false;
     session_ = request.session;
     poll_ms_ = request.poll_ms;
     started_ = true;
-    auto begin = Clock::now();
-    SnapshotOutcome outcome = source_.snapshot(cancelled());
     json target = {{"pid", outcome.pid > 0 ? json(outcome.pid) : json(nullptr)},
                    {"zoom_version", nullable(outcome.zoom_version)}};
     writer_.emit(
@@ -444,6 +508,7 @@ public:
         {{"id", request.id}, {"session", session_}, {"target", target}});
     publish(outcome);
     schedule(begin);
+    return true;
   }
 
   void poll() {
@@ -455,10 +520,6 @@ public:
     }
     publish(outcome);
     schedule(begin);
-  }
-
-  std::string session() const {
-    return session_;
   }
 
 private:
@@ -475,7 +536,7 @@ private:
     uint64_t start_ms =
         outcome.read_start_ms ? outcome.read_start_ms : source_.monotonic_ms();
     uint64_t end_ms = outcome.read_end_ms ? outcome.read_end_ms : start_ms;
-    Verdict verdict = classify(outcome);
+    Verdict verdict = classify(outcome, config_.parse);
     if (!verdict.available) {
       unavailable(verdict.reason, start_ms);
       return;
@@ -488,20 +549,22 @@ private:
     auto [window_it, fresh] = windows_.try_emplace(
         window_key, "w" + std::to_string(windows_.size() + 1));
     (void)fresh;
-    std::vector<std::string> refs;
-    refs_.assign(window_it->second, refs, parsed.participants);
+    RefTable::Result refs =
+        refs_.assign(window_it->second, parsed.participants);
 
     json participants = json::array();
     for (size_t i = 0; i < parsed.participants.size(); ++i)
-      participants.push_back({{"ref", refs[i]},
+      participants.push_back({{"ref", refs.refs[i]},
                               {"name", parsed.participants[i].name},
                               {"self", parsed.participants[i].self}});
     json speakers = json::array();
     for (const auto &speaker : parsed.speakers)
-      speakers.push_back({{"ref", refs[speaker.participant]},
+      speakers.push_back({{"ref", refs.refs[speaker.participant]},
                           {"method", speaker.method == Method::ParticipantStatus
                                          ? "participant_status"
                                          : "compact_talking_label"}});
+    bool complete =
+        parsed.complete && !outcome.identity_incomplete && !refs.uncertain;
     json frame = {
         {"session", session_},
         {"read_start_ms", start_ms},
@@ -511,34 +574,44 @@ private:
           {"window", window_it->second},
           {"zoom_version", nullable(outcome.zoom_version)},
           {"locale", nullable(parsed.locale)}}},
-        {"complete", parsed.complete},
-        {"parser_version", kParserVersion},
+        {"complete", complete},
+        {"parser_version", config_.parser_version},
         {"participants", participants},
         {"speakers", speakers}};
-    if (!writer_.emit("observation", frame)) {
-      diag_.note("observation_not_written");
+    switch (writer_.emit("observation", frame)) {
+    case Writer::Result::Written:
+      in_unavailable_ = false;
+      break;
+    case Writer::Result::TooLarge:
+      diag_.note("frame_too_large");
       unavailable("frame_too_large", start_ms);
-      return;
+      break;
+    case Writer::Result::Failed:
+      break; // stdout is gone; the failure handler ends the session
     }
-    in_unavailable_ = false;
   }
 
   void unavailable(const std::string &reason, uint64_t at_ms) {
     if (in_unavailable_ && reason == reason_)
       return;
-    if (!in_unavailable_)
-      since_ms_ = at_ms;
-    in_unavailable_ = true;
-    reason_ = reason;
-    writer_.emit(
-        "unavailable",
-        {{"session", session_}, {"reason", reason}, {"since_ms", since_ms_}});
+    uint64_t since = in_unavailable_ ? since_ms_ : at_ms;
+    // Remember the interval only once the frame is actually out, so a failed
+    // write is retried instead of silently becoming "already reported".
+    if (writer_.emit(
+            "unavailable",
+            {{"session", session_}, {"reason", reason}, {"since_ms", since}}) ==
+        Writer::Result::Written) {
+      in_unavailable_ = true;
+      since_ms_ = since;
+      reason_ = reason;
+    }
   }
 
   Source &source_;
   Writer &writer_;
   Shared &shared_;
   Diagnostics &diag_;
+  const ObserverConfig &config_;
   RefTable refs_;
   std::map<uint64_t, std::string> windows_;
   std::string session_;
@@ -560,8 +633,9 @@ json capabilities_frame(const Request &request, const Capabilities &caps) {
 
 } // namespace
 
-Capabilities describe_capabilities(const SnapshotOutcome &outcome) {
-  Verdict verdict = classify(outcome);
+Capabilities describe_capabilities(const SnapshotOutcome &outcome,
+                                   const ParseFn &parse) {
+  Verdict verdict = classify(outcome, parse);
   return {verdict.state, verdict.reason, outcome.zoom_version,
           verdict.available ? verdict.parsed.locale : std::string()};
 }
@@ -570,45 +644,89 @@ int run_observer(Source &source, const ObserverConfig &config) {
   Writer writer(config.out_fd);
   Diagnostics diag(config.err_fd);
   Shared shared;
+  int wake[2];
+  if (::pipe(wake) != 0) {
+    diag.note("pipe_failed");
+    return kExitProtocol;
+  }
+  shared.wake_fd = wake[1];
+  writer.on_failure([&] {
+    // Nobody can read our frames any more: stop polling and exit.
+    diag.note("stdout_closed");
+    shared.cancel = true;
+    {
+      std::lock_guard<std::mutex> lock(shared.mutex);
+      Request request;
+      request.kind = Request::Kind::OutputClosed;
+      shared.queue.push_back(request);
+    }
+    shared.requests.notify_all();
+    shared.space.notify_all();
+    shared.wake_reader();
+  });
   writer.emit("hello", {{"helper", config.helper},
                         {"helper_version", config.helper_version},
-                        {"parser_version", kParserVersion},
+                        {"parser_version", config.parser_version},
                         {"platform", config.platform}});
-  Reader reader(shared, writer, source, diag, config.in_fd);
+  Reader reader(shared, writer, source, diag, config.in_fd, wake[0]);
   std::thread reader_thread([&] { reader.run(); });
 
-  Session session(source, writer, shared, diag);
+  Session session(source, writer, shared, diag, config);
   int exit_code = 0;
   bool running = true;
+  auto refuse_if_cancelled = [&](const Request &request) {
+    if (!shared.cancel)
+      return false;
+    // Shutdown (or a broken stdout) is already under way: answer honestly
+    // rather than reporting a state the cancelled read could not establish.
+    writer.emit("error", {{"id", request.id},
+                          {"code", "cancelled"},
+                          {"message", "request cancelled by shutdown"}});
+    return true;
+  };
   while (running) {
-    std::deque<Request> batch;
+    Request request;
+    bool have = false;
     {
       std::unique_lock<std::mutex> lock(shared.mutex);
       auto ready = [&] { return !shared.queue.empty(); };
       if (session.started())
-        shared.wake.wait_until(lock, session.next_poll(), ready);
+        shared.requests.wait_until(lock, session.next_poll(), ready);
       else
-        shared.wake.wait(lock, ready);
-      batch.swap(shared.queue);
+        shared.requests.wait(lock, ready);
+      if (!shared.queue.empty()) {
+        request = std::move(shared.queue.front());
+        shared.queue.pop_front();
+        have = true;
+      }
     }
-    for (const Request &request : batch) {
+    shared.space.notify_all();
+    if (have) {
+      // One request per iteration, so a burst cannot starve polling.
       switch (request.kind) {
       case Request::Kind::Capabilities:
       case Request::Kind::Setup: {
+        if (refuse_if_cancelled(request))
+          break;
         if (request.kind == Request::Kind::Setup)
           source.request_access();
-        Capabilities caps = describe_capabilities(
-            source.snapshot([&] { return shared.cancel.load(); }));
+        SnapshotOutcome outcome =
+            source.snapshot([&] { return shared.cancel.load(); });
+        if (refuse_if_cancelled(request))
+          break;
+        Capabilities caps = describe_capabilities(outcome, config.parse);
         writer.emit("capabilities", capabilities_frame(request, caps));
         break;
       }
       case Request::Kind::Start:
+        if (refuse_if_cancelled(request))
+          break;
         if (session.started())
           writer.emit("error", {{"id", request.id},
                                 {"code", "already_started"},
                                 {"message", "a session is already running"}});
-        else
-          session.start(request);
+        else if (!session.start(request))
+          refuse_if_cancelled(request);
         break;
       case Request::Kind::Reject:
         writer.emit("error", {{"id", request.id},
@@ -616,11 +734,12 @@ int run_observer(Source &source, const ObserverConfig &config) {
                               {"message", "invalid request"}});
         break;
       case Request::Kind::Stop:
-        writer.emit("stopped",
-                    {{"id", request.id},
-                     {"session", session.started() ? json(session.session())
-                                                   : json(nullptr)}},
-                    true);
+        if (writer.emit("stopped",
+                        {{"id", request.id},
+                         {"session", session.started() ? json(session.session())
+                                                       : json(nullptr)}},
+                        true) == Writer::Result::Failed)
+          exit_code = kExitOutput;
         running = false;
         break;
       case Request::Kind::Eof:
@@ -630,14 +749,17 @@ int run_observer(Source &source, const ObserverConfig &config) {
         writer.emit("error",
                     {{"code", request.code}, {"message", "protocol error"}},
                     true);
-        exit_code = 2;
+        exit_code = kExitProtocol;
+        running = false;
+        break;
+      case Request::Kind::OutputClosed:
+        exit_code = kExitOutput;
         running = false;
         break;
       }
-      if (!running)
-        break;
     }
-    if (running && session.started() && Clock::now() >= session.next_poll())
+    if (running && !shared.cancel && session.started() &&
+        Clock::now() >= session.next_poll())
       session.poll();
   }
   {
@@ -645,7 +767,11 @@ int run_observer(Source &source, const ObserverConfig &config) {
     shared.done = true;
   }
   shared.finished.notify_all();
+  shared.space.notify_all();
+  shared.wake_reader();
   reader_thread.join();
+  ::close(wake[0]);
+  ::close(wake[1]);
   return exit_code;
 }
 

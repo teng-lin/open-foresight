@@ -82,6 +82,48 @@ class Helper:
         self.in_seq += 1
         return frame
 
+    def drain(self, timeout: float = 5.0) -> bytes:
+        """Everything left on stdout until the helper closes it."""
+        assert self.process.stdout is not None
+        deadline = time.monotonic() + timeout
+        data = self.buffer
+        self.buffer = b""
+        while not self.eof:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not self.selector.select(remaining):
+                raise AssertionError("stdout did not reach end of stream")
+            chunk = self.process.stdout.raw.read(65536)  # type: ignore[attr-defined]
+            if not chunk:
+                self.eof = True
+            data += chunk
+        return data
+
+    def settle(self, milliseconds: int) -> list[dict]:
+        """Let the helper run for `milliseconds` of its own clock.
+
+        Waits on the helper's clock rather than sleeping, and returns every
+        frame seen other than the clock replies.
+        """
+        self.send(type="clock", id="settle-start")
+        origin = self.expect_until("clock")["monotonic_ms"]
+        seen: list[dict] = []
+        while True:
+            self.send(type="clock", id="settle")
+            frame = self.expect_until("clock", seen)
+            if frame["monotonic_ms"] - origin >= milliseconds:
+                return seen
+            time.sleep(0.02)
+
+    def expect_until(self, frame_type: str, seen: list[dict] | None = None) -> dict:
+        for _ in range(200):
+            frame = self.read()
+            assert frame is not None, f"no {frame_type} frame"
+            if frame["type"] == frame_type:
+                return frame
+            if seen is not None:
+                seen.append(frame)
+        raise AssertionError(f"no {frame_type} frame")
+
     def expect(self, frame_type: str, timeout: float = READ_TIMEOUT) -> dict:
         frame = self.read(timeout)
         assert frame is not None, f"no {frame_type} frame"
@@ -189,8 +231,12 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(unavailable["session"], "session-1")
         self.assertEqual(unavailable["reason"], "zoom_not_running")
         self.assertIsInstance(unavailable["since_ms"], int)
-        # Several 100 ms polls pass; the unchanged reason is not repeated.
-        self.assertIsNone(helper.read(0.8))
+        # Several 100 ms polls pass on the helper's own clock; the unchanged
+        # reason is not repeated.
+        quiet = helper.settle(600)
+        self.assertEqual(
+            [frame for frame in quiet if frame["type"] != "clock"], [], quiet
+        )
         helper.send(type="stop", id="x")
         stopped = helper.expect("stopped")
         self.assertEqual(stopped["id"], "x")
@@ -213,8 +259,10 @@ class ProtocolTest(unittest.TestCase):
         helper.expect("hello")
         helper.send(type="start", id="s", session="s", poll_ms=100, deadline_ms=1000)
         helper.expect("started")
+        helper.expect("unavailable")
         helper.close_stdin()
         started = time.monotonic()
+        self.assertEqual(helper.drain(), b"", "no frame follows end of input")
         code, _ = helper.finish(5.0)
         self.assertEqual(code, 0)
         self.assertLess(time.monotonic() - started, 3.0)
@@ -255,7 +303,7 @@ class ProtocolTest(unittest.TestCase):
                 frame = helper.expect("error")
                 self.assertEqual(frame["code"], code)
                 self.assertNotIn("id", frame)
-                self.assertIsNone(helper.read(0.5))
+                self.assertEqual(helper.drain(), b"", "nothing follows an error")
                 status, stderr = helper.finish()
                 self.assertEqual(status, 2)
                 self.assertLessEqual(len(stderr), 4096)
@@ -297,10 +345,10 @@ class ProtocolTest(unittest.TestCase):
         helper.expect("hello")
         helper.send_raw(b"garbage\n")
         helper.expect("error")
+        # Every remaining byte is read: stray output would show up here.
+        self.assertEqual(helper.drain(), b"")
         code, _ = helper.finish()
         self.assertEqual(code, 2)
-        self.assertEqual(helper.buffer.strip(), b"", "no unframed output")
-        assert helper.process.stdout is not None
 
     def test_usage_errors(self) -> None:
         for arguments in [("--protocol", "2"), ("--protocol",), ("--help",), ()]:
@@ -326,9 +374,9 @@ class ProtocolTest(unittest.TestCase):
             timeout=30,
             check=True,
         ).stdout.split()
-        self.assertEqual(archs, ["arm64"])
+        self.assertIn("arm64", archs)
         load = subprocess.run(
-            ["/usr/bin/otool", "-l", str(HELPER)],
+            ["/usr/bin/otool", "-arch", "arm64", "-l", str(HELPER)],
             capture_output=True,
             text=True,
             timeout=30,
@@ -350,18 +398,32 @@ class ProtocolTest(unittest.TestCase):
             "CGEventPost",
             "NSAppleScript",
         ]
+        sources = {}
         for name in (
             "zoom_observer_macos.mm",
             "zoom_observer_core.cpp",
             "zoom_ax_parser.mm",
+            "zoom_collector.cpp",
+            "zoom_mac_source.cpp",
         ):
-            text = (SOURCE / name).read_text(encoding="utf-8")
+            # Whitespace-collapsed, so reformatting cannot hide a call.
+            sources[name] = " ".join(
+                (SOURCE / name).read_text(encoding="utf-8").split()
+            )
             for token in forbidden:
-                self.assertNotIn(token, text, f"{name} must stay passive")
-        main = (SOURCE / "zoom_observer_macos.mm").read_text(encoding="utf-8")
-        # The only prompting call is the explicit setup path.
-        self.assertEqual(main.count("kAXTrustedCheckOptionPrompt : @YES"), 1)
-        self.assertEqual(main.count("kAXTrustedCheckOptionPrompt : @NO"), 1)
+                self.assertNotIn(token, sources[name], f"{name} must stay passive")
+        # The only prompting request is the explicit setup path.
+        self.assertEqual(
+            sources["zoom_mac_source.cpp"].count("accessibility_trusted(true)"), 1
+        )
+        self.assertEqual(
+            sources["zoom_mac_source.cpp"].count("accessibility_trusted(false)"), 1
+        )
+        for name in ("zoom_observer_core.cpp", "zoom_collector.cpp"):
+            self.assertNotIn("accessibility_trusted", sources[name])
+        self.assertEqual(
+            sources["zoom_observer_macos.mm"].count("kAXTrustedCheckOptionPrompt"), 1
+        )
 
 
 if __name__ == "__main__":

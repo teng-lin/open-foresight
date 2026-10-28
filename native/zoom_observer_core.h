@@ -43,6 +43,10 @@ struct SnapshotOutcome {
   // The installed Zoom's preferred localization has no pattern set; used only
   // to explain a snapshot that yields no evidence.
   bool locale_unsupported = false;
+  // Element identity could not be established for every element that needs it
+  // (for example the identity table is full): references and the read are not
+  // trustworthy for continuity.
+  bool identity_incomplete = false;
   AxSnapshot snapshot;
 };
 
@@ -64,16 +68,23 @@ struct ObserverConfig {
   std::string helper = "zoom_observer_macos";
   std::string helper_version = "1";
   std::string platform = "macos";
+  // The platform's parser: turns a snapshot into participants and speakers.
+  // The core links no parser; a Linux helper supplies its own.
+  std::function<ParseResult(const AxSnapshot &)> parse;
+  std::string parser_version;
   int in_fd = 0;
   int out_fd = 1;
   int err_fd = 2;
 };
 
 // Map one snapshot outcome onto the wire capability description.
-Capabilities describe_capabilities(const SnapshotOutcome &outcome);
+Capabilities describe_capabilities(
+    const SnapshotOutcome &outcome,
+    const std::function<ParseResult(const AxSnapshot &)> &parse);
 
-// Runs the protocol until stop, stdin close or a protocol error. Returns the
-// process exit code: 0 for stop or end of input, 2 for a protocol error.
+// Runs the protocol until stop, stdin close, a protocol error or a broken
+// stdout. Returns the process exit code: 0 for stop or clean end of input, 2
+// for a protocol or input error, 3 when stdout can no longer be written.
 int run_observer(Source &source, const ObserverConfig &config);
 
 } // namespace foresight::zoom
