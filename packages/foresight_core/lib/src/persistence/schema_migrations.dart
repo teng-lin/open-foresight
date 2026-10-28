@@ -261,11 +261,11 @@ CREATE TABLE transcript_attributions(
  method TEXT NOT NULL DEFAULT '' CHECK(length(method)<=64),
  parser_version TEXT NOT NULL DEFAULT '' CHECK(length(parser_version)<=64),
  policy_version TEXT NOT NULL DEFAULT '' CHECK(length(policy_version)<=64),
- evidence TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(evidence) AND length(CAST(evidence AS BLOB))<=2048),
+ evidence TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(evidence) AND length(CAST(evidence AS BLOB))<=4096),
  manual INTEGER NOT NULL DEFAULT 0 CHECK(manual IN (0,1)),
  revision INTEGER NOT NULL DEFAULT 1,
  updated_ms INTEGER NOT NULL,
- CHECK(state!='attributed' OR rendered_name!=''));
+ CHECK((state='attributed')=(rendered_name!='')));
 CREATE INDEX transcript_attributions_participant ON transcript_attributions(participant_id) WHERE participant_id IS NOT NULL;
 CREATE TRIGGER transcript_attribution_participant_insert BEFORE INSERT ON transcript_attributions
  WHEN NEW.participant_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM meeting_participants p JOIN transcript t ON t.meeting_id=p.meeting_id WHERE p.id=NEW.participant_id AND t.id=NEW.transcript_id) BEGIN
@@ -276,38 +276,32 @@ CREATE TRIGGER transcript_attribution_participant_update BEFORE UPDATE OF transc
 CREATE TRIGGER transcript_attribution_manual_guard BEFORE UPDATE ON transcript_attributions
  WHEN OLD.manual=1 AND NEW.manual=0 BEGIN
  SELECT RAISE(ABORT,'Manual transcript attribution is protected'); END;
-CREATE TRIGGER transcript_attribution_insert_revision AFTER INSERT ON transcript_attributions
- WHEN EXISTS(SELECT 1 FROM transcript WHERE id=NEW.transcript_id AND final=1) AND (NEW.manual=1 OR NEW.state!='unknown') BEGIN
- ${_attributionRevisionBump('NEW.transcript_id')} END;
-CREATE TRIGGER transcript_attribution_insert_text AFTER INSERT ON transcript_attributions
+CREATE TRIGGER transcript_attribution_manual_replace_guard BEFORE INSERT ON transcript_attributions
+ WHEN NEW.manual=0 AND EXISTS(SELECT 1 FROM transcript_attributions WHERE transcript_id=NEW.transcript_id AND manual=1) BEGIN
+ SELECT RAISE(ABORT,'Manual transcript attribution is protected'); END;
+CREATE TRIGGER transcript_attribution_insert AFTER INSERT ON transcript_attributions
  WHEN NEW.rendered_name!='' AND EXISTS(SELECT 1 FROM transcript WHERE id=NEW.transcript_id AND final=1) BEGIN
- ${_attributionReproject('NEW.transcript_id')} END;
-CREATE TRIGGER transcript_attribution_update_revision AFTER UPDATE ON transcript_attributions
- WHEN EXISTS(SELECT 1 FROM transcript WHERE id=NEW.transcript_id AND final=1) AND (
- OLD.participant_id IS NOT NEW.participant_id OR OLD.display_name IS NOT NEW.display_name OR
- OLD.rendered_name IS NOT NEW.rendered_name OR OLD.state IS NOT NEW.state OR
- OLD.method IS NOT NEW.method OR OLD.manual IS NOT NEW.manual) BEGIN
- ${_attributionRevisionBump('NEW.transcript_id')} END;
-CREATE TRIGGER transcript_attribution_update_text AFTER UPDATE ON transcript_attributions
+ ${_attributionInvalidation('NEW.transcript_id')} END;
+CREATE TRIGGER transcript_attribution_update AFTER UPDATE ON transcript_attributions
  WHEN OLD.rendered_name IS NOT NEW.rendered_name AND EXISTS(SELECT 1 FROM transcript WHERE id=NEW.transcript_id AND final=1) BEGIN
- ${_attributionReproject('NEW.transcript_id')} END;
-CREATE TRIGGER transcript_attribution_delete_revision AFTER DELETE ON transcript_attributions
- WHEN EXISTS(SELECT 1 FROM transcript WHERE id=OLD.transcript_id AND final=1) AND (OLD.manual=1 OR OLD.state!='unknown') BEGIN
- ${_attributionRevisionBump('OLD.transcript_id')} END;
-CREATE TRIGGER transcript_attribution_delete_text AFTER DELETE ON transcript_attributions
+ ${_attributionInvalidation('NEW.transcript_id')} END;
+CREATE TRIGGER transcript_attribution_delete AFTER DELETE ON transcript_attributions
  WHEN OLD.rendered_name!='' AND EXISTS(SELECT 1 FROM transcript WHERE id=OLD.transcript_id AND final=1) BEGIN
- ${_attributionReproject('OLD.transcript_id')} END;
+ ${_attributionInvalidation('OLD.transcript_id')} END;
 CREATE TRIGGER transcript_attribution_erase_replaced AFTER UPDATE OF display_name ON transcript_attributions
- WHEN OLD.display_name!='' AND OLD.display_name IS NOT NEW.display_name BEGIN
- INSERT OR IGNORE INTO preferences(key,value) VALUES('internal.backupErasurePending','1'); END;
+ WHEN OLD.display_name!='' AND OLD.display_name IS NOT NEW.display_name AND (OLD.manual=1 OR NEW.manual=1) BEGIN
+ ${_attributionMarker()} END;
+CREATE TRIGGER transcript_attribution_erase_replace BEFORE INSERT ON transcript_attributions
+ WHEN EXISTS(SELECT 1 FROM transcript_attributions WHERE transcript_id=NEW.transcript_id AND display_name!='' AND (manual=1 OR NEW.manual=1)) BEGIN
+ ${_attributionMarker()} END;
 CREATE TRIGGER transcript_attribution_erase AFTER DELETE ON transcript_attributions
  WHEN OLD.display_name!='' BEGIN
- INSERT OR IGNORE INTO preferences(key,value) VALUES('internal.backupErasurePending','1'); END;
-CREATE TRIGGER meeting_participant_erase_replaced AFTER UPDATE OF previous_display_name ON meeting_participants
- WHEN OLD.previous_display_name IS NOT NULL AND OLD.previous_display_name IS NOT NEW.previous_display_name BEGIN
- INSERT OR IGNORE INTO preferences(key,value) VALUES('internal.backupErasurePending','1'); END;
+ ${_attributionMarker()} END;
+CREATE TRIGGER meeting_participant_erase_renamed AFTER UPDATE OF display_name ON meeting_participants
+ WHEN NEW.name_manual=1 AND OLD.display_name IS NOT NEW.display_name BEGIN
+ ${_attributionMarker()} END;
 CREATE TRIGGER meeting_participant_erase AFTER DELETE ON meeting_participants BEGIN
- INSERT OR IGNORE INTO preferences(key,value) VALUES('internal.backupErasurePending','1'); END;
+ ${_attributionMarker()} END;
 DROP VIEW source_contents;
 CREATE VIEW source_contents AS SELECT s.id,CASE WHEN s.generated=1 AND m.meeting_id IS NOT NULL
  THEN COALESCE((SELECT group_concat(body,char(10)) FROM (
@@ -321,21 +315,31 @@ CREATE VIEW source_contents AS SELECT s.id,CASE WHEN s.generated=1 AND m.meeting
 ''');
   }
 
-  // Attribution changes use the same invalidation as an edited transcript row.
-  // Erasure markers are separate triggers: creating a name erases nothing.
-  String _attributionRevisionBump(String transcript) =>
-      'UPDATE meetings SET revision=revision+1 WHERE id=(SELECT meeting_id FROM transcript WHERE id=$transcript);';
+  // An erasure marker is inserted with ON CONFLICT DO NOTHING: an OR IGNORE
+  // here would be overridden by the conflict policy of the statement that
+  // fired the trigger (for example an upsert) and fail on an existing marker.
+  String _attributionMarker() =>
+      "INSERT INTO preferences(key,value) VALUES('internal.backupErasurePending','1') ON CONFLICT(key) DO NOTHING;";
 
-  String _attributionReproject(String transcript) {
+  // A changed rendered name is an edit of the row's indexed text: one revision
+  // bump, plus reprojection of only this row when its meeting is mapped and no
+  // projection of the row is already pending (that projection reads the new
+  // name itself). The journal insert comes last because it creates that pending
+  // state.
+  String _attributionInvalidation(String transcript) {
     final meeting = '(SELECT meeting_id FROM transcript WHERE id=$transcript)';
+    final reproject =
+        'EXISTS(SELECT 1 FROM meeting_transcript_sources WHERE meeting_id=$meeting) '
+        'AND NOT EXISTS(SELECT 1 FROM meeting_transcript_changes WHERE transcript_id=$transcript AND projected=0)';
     return '''
- DELETE FROM meeting_index_segments WHERE transcript_id=$transcript;
- INSERT INTO meeting_transcript_changes(meeting_id,transcript_id,changed) VALUES($meeting,$transcript,unixepoch()*1000)
-  ON CONFLICT(meeting_id,transcript_id) DO UPDATE SET version=version+1,projected=0,changed=excluded.changed;
- UPDATE sources SET revision=revision+1,state='pending',error='' WHERE generated=1 AND deleted=0 AND
+ UPDATE meetings SET revision=revision+1 WHERE id=$meeting;
+ DELETE FROM meeting_index_segments WHERE transcript_id=$transcript AND $reproject;
+ UPDATE sources SET revision=revision+1,state='pending',error='' WHERE generated=1 AND deleted=0 AND $reproject AND
   id IN(SELECT source_id FROM meeting_transcript_sources WHERE meeting_id=$meeting);
- UPDATE source_details SET changed=CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) WHERE source_id IN
+ UPDATE source_details SET changed=CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) WHERE $reproject AND source_id IN
   (SELECT m.source_id FROM meeting_transcript_sources m JOIN sources s ON s.id=m.source_id WHERE m.meeting_id=$meeting AND s.generated=1 AND s.deleted=0);
+ INSERT INTO meeting_transcript_changes(meeting_id,transcript_id,changed) SELECT $meeting,$transcript,unixepoch()*1000 WHERE $reproject
+  ON CONFLICT(meeting_id,transcript_id) DO UPDATE SET version=version+1,projected=0,changed=excluded.changed;
 ''';
   }
 

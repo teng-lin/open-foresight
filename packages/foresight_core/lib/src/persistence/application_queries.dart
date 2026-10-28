@@ -3,7 +3,6 @@ import '../store.dart';
 /// Content owned by the workspace. Model registrations, account configuration
 /// and pending helper deletions survive the local privacy transaction.
 const workspaceContentTables = [
-  'transcript_attributions',
   'transcript_audio_links',
   'audio_media_references',
   'audio_transform_inputs',
@@ -45,6 +44,8 @@ const workspaceContentTables = [
   'document_summary_cache',
   'artifacts',
   'transcript',
+  // Cascaded away with their rows; listed so the clear is explicit and total.
+  'transcript_attributions',
   'meeting_participants',
   'meeting_details',
   'meetings',

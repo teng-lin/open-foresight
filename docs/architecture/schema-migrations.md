@@ -94,22 +94,59 @@ prefix. `tool/migration_guard.dart` uses already locked analyzer 12.1.0 and cryp
 
 Step 25 stores Zoom speaker attribution beside, never inside, transcript rows.
 `transcript.source` and the public `speaker_id` keep meaning the audio channel.
-An attribution is optional (historical rows have none) and is written with its
-transcript row in the existing retry transaction; a rejected attribution rolls
-back only itself. Automatic observation can neither replace nor, through a
-database trigger, downgrade a manual row; only a manual write or an explicit
-reset changes it. A changed attribution bumps the meeting revision, and a
-changed rendered name also marks the source pending, retires the row's derived
-pieces and journals only that row for reprojection, using the same invalidation
-as a transcript edit. Roster refreshes touch only `meeting_participants` and
-reindex nothing; an observed rename updates the participant and its rename
-tracking but leaves each row's name snapshot unchanged. Names are untrusted:
-`rendered_name` is a one-line derived label (brackets replaced, whitespace
-collapsed, 120 characters) shared by the view and the projection, while
-`display_name` stays verbatim. Deleting a transcript row cascades its
-attribution, deleting a participant clears only the reference, and workspace
-clear and backup erasure treat both tables as workspace content. The
-pre-upgrade snapshot of a version-24 profile contains neither table.
+An attribution is optional (historical rows have none). It is written with its
+transcript row in the existing retry transaction by
+`MeetingStore.transcriptWithAttribution`, which `RecordingTranscriptPersistence`
+uses. An unknown participant or one from another meeting is reported as a
+SQLite result code (never the exception, which would carry names) and the text
+is kept; any other failure, including one in a downstream invalidation trigger,
+rolls the whole row back for the bounded retry. Rows committed by other writers,
+such as the durable-audio ASR commit, are not atomic with an attribution and
+are attributed afterwards with `saveAutomaticAttribution`.
+
+Automatic observation can neither replace nor, through database triggers
+(`UPDATE` and `INSERT OR REPLACE`), downgrade a manual row; only a manual write
+or an explicit reset changes it. A user-assigned participant name outranks the
+spelling of a late observation. Renaming a participant relabels its automatic
+rows and any manual row that still carries the participant's previous name;
+a manual row corrected to a different custom name is left alone.
+
+Only a change of the row's rendered name is an edit of indexed text: it bumps the
+meeting revision once and, when the meeting is mapped and no projection of the
+row is already pending, deletes the row's derived pieces, marks the source
+pending and journals only that row. A method, state or evidence change, or a
+participant link cleared by deleting the participant, invalidates nothing. A new
+row saved with its attribution bumps the revision once. Roster refreshes touch
+only `meeting_participants` and reindex nothing; a name change applies only when
+it is at least as recent as the participant's latest observation, so delayed
+batches cannot regress it, and an observed rename never rewrites the name
+snapshot on existing rows. A participant from a restarted helper has a new
+observer reference and is a separate row; `renameParticipant` renames one row,
+and no automatic merge by display name exists because that could join different
+people.
+
+Names are untrusted. `rendered_name` is a one-line derived label (brackets
+replaced, whitespace collapsed, format and bidirectional controls removed, 120
+code points) shared by the `source_contents` view and the projection, while
+`display_name` stays verbatim. A row is `attributed` exactly when its rendered
+name is non-empty. All text limits count code points (names 500, keys 512,
+method and versions 64); timing evidence is a canonical JSON object of at most
+4096 bytes, which covers core's largest evidence. `TranscriptAttribution.clamped`
+and `MeetingParticipant.tryCreate` are the non-throwing entry points for
+observed data.
+
+Deleting a transcript row cascades its attribution, deleting a participant
+clears only the reference, and workspace clear removes both tables with the
+transcript rows. The `internal.backupErasurePending` marker, which makes
+privacy maintenance erase every managed migration snapshot, is set when a person's
+name is deleted or replaced by the user (reset, correction, participant rename
+or deletion) and not when automatic observation revises a name, because a
+machine revision removes no user content and the pre-upgrade snapshot of a
+version-24 profile holds no attribution. The marker is always inserted with
+`ON CONFLICT DO NOTHING`, since `OR IGNORE` in a trigger is overridden by the
+conflict policy of the statement that fires it. Version 24 comes from the
+recording-audio store of PR #189; rebase this step onto whatever the final
+ordering is.
 
 Step 17 keeps legacy JSON names in first-occurrence order, intentionally removes
 duplicates, and appends structured-only names in label-name order. Matching rows

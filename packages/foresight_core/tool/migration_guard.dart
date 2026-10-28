@@ -65,8 +65,8 @@ const migrationClosures = <int, List<String>>{
   24: ['_createRecordingAudio'],
   25: [
     '_createMeetingAttribution',
-    '_attributionRevisionBump',
-    '_attributionReproject',
+    '_attributionMarker',
+    '_attributionInvalidation',
   ],
   23: [
     '_migratePreferenceEntities',

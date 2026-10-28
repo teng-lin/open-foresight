@@ -162,10 +162,10 @@
       ]
     },
     "25": {
-      "sha256": "5abfe536f797f1fd9e5c90d811161d399e587f5556869ecd9126f07f6371b17e",
+      "sha256": "c3fbd630646dba0592491e203574d5fbbc6762db9b21cf90b7da67965031d0a0",
       "symbols": [
-        "_attributionReproject",
-        "_attributionRevisionBump",
+        "_attributionInvalidation",
+        "_attributionMarker",
         "_createMeetingAttribution"
       ]
     }
