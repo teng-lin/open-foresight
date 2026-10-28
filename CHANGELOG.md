@@ -16,6 +16,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
   inactivity or desktop-visibility stops.
 - Skip the full registered-model content scan during service startup. Model
   downloads and registration continue to verify their checksums.
+- Keep the speech setup display stable while recording data refreshes, avoiding
+  a transient setup warning that repeatedly shifts the meeting notes.
 
 ## [0.1.5] - 2026-10-28
 

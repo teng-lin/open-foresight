@@ -1,6 +1,7 @@
 import 'desktop_fixture_owner.dart';
 import 'pump_until.dart';
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -141,6 +142,36 @@ class _SpeechReader implements StoreReader {
   );
 }
 
+class _RefreshingSpeechConnection extends ControllerConnection {
+  _RefreshingSpeechConnection(super.application);
+  _RefreshingSpeechReader? _reader;
+  @override
+  _RefreshingSpeechReader get store =>
+      _reader ??= _RefreshingSpeechReader(super.store);
+}
+
+class _RefreshingSpeechReader implements StoreReader {
+  _RefreshingSpeechReader(this.delegate);
+  final StoreReader delegate;
+  final replies = StreamController<ReadResult<ModelRegistration?>>.broadcast(
+    sync: true,
+  );
+  @override
+  String get workspaceEpoch => delegate.workspaceEpoch;
+  @override
+  String get dataRevision => delegate.dataRevision;
+  @override
+  Future<ReadResult<T>> read<T>(ReadQuery<T> query) => delegate.read(query);
+  @override
+  Stream<ReadResult<T>> watch<T>(ReadQuery<T> query) =>
+      query.projection == 'model' && query.arguments['kind'] == 'speech'
+      ? replies.stream.map((result) => result.asType<T>())
+      : delegate.watch(query);
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName}');
+}
+
 class _BuildGuardConnection extends ControllerConnection {
   _BuildGuardConnection(super.application);
   _BuildGuardReader? _reader;
@@ -191,6 +222,108 @@ class _BuildGuardReader implements StoreReader {
 }
 
 void main() {
+  testWidgets(
+    'speech refresh previews do not insert a warning or shift the recording workspace',
+    (tester) async => withDesktopFixtures(tester, () async {
+      final root = createTestTempDirectorySync('meeting-refresh-');
+      final store = Store('${root.path}/app.db');
+      final id = store.meeting('Recording refresh');
+      final modelFile = File('${root.path}/speech.model')
+        ..writeAsStringSync('fixture');
+      final registration = ModelRegistration.fromRow({
+        'kind': 'speech',
+        'path': modelFile.path,
+        'runtime': '/usr/bin/true',
+      });
+      final connection = _RefreshingSpeechConnection(
+        Application(
+          Domain(
+            store,
+            OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+          ),
+        ),
+      );
+      final host = _Host(connection),
+          integration = _Integration(),
+          chat = _Chat();
+      final controller = MeetingsController(
+        host: host,
+        navigation: host,
+        operations: host,
+        dialogs: host,
+        integrations: integration,
+        integrationCommands: integration,
+        settings: _Settings(),
+        chat: chat,
+        chatCommands: chat,
+      );
+      controller.meetingId = id;
+      connection.captureState = {'active': true, 'meeting_id': id};
+      controller.syncCapture();
+      controller.start();
+      expect(controller.recording, isNotNull);
+      expect(controller.recordingMeeting, id);
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() async {
+        await pumpUntilCompleted(tester, controller.dispose());
+        await connection.store.replies.close();
+        connection.close();
+        await pumpUntilCompleted(tester, connection.closed);
+        await tester.binding.setSurfaceSize(null);
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, rebuild) {
+              host.context = context;
+              host.rebuild = rebuild;
+              return Scaffold(body: MeetingsView(controller));
+            },
+          ),
+        ),
+      );
+      Future<void> publish(
+        ModelRegistration? value,
+        ReadFreshness freshness,
+      ) async {
+        connection.store.replies.add(
+          ReadResult(
+            freshness: freshness,
+            value: value,
+            requestTag: 'recording-refresh',
+            sequence: 1,
+          ),
+        );
+        await tester.pump();
+        await tester.pump();
+      }
+
+      await publish(registration, ReadFreshness.current);
+      await pumpUntil(tester, () => controller.loadedMeetingNotes == id);
+      final editor = find.byKey(const ValueKey('meeting-notes-editor'));
+      final rect = tester.getRect(editor);
+      final element = tester.element(editor);
+      expect(find.text('Show recording'), findsOneWidget);
+      expect(find.text('Set up speech'), findsNothing);
+      for (var i = 0; i < 3; i++) {
+        // A commit racing the read returns a same-owner preview, followed by
+        // its current reply. Inspect the intermediate frame, not just settle.
+        await publish(registration, ReadFreshness.preview);
+        expect(find.text('Set up speech'), findsNothing);
+        expect(tester.getRect(editor), rect);
+        expect(tester.element(editor), same(element));
+        await publish(registration, ReadFreshness.current);
+        expect(find.text('Set up speech'), findsNothing);
+        expect(tester.getRect(editor), rect);
+      }
+      // A real removal must still show the setup problem.
+      await publish(null, ReadFreshness.current);
+      expect(find.text('Set up speech'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    }),
+  );
+
   testWidgets(
     'prepared meeting panels render without persistence and retired actions refuse',
     (tester) async => withDesktopFixtures(tester, () async {
