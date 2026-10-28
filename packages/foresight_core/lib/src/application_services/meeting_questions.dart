@@ -8,6 +8,7 @@ import '../persistence/workflow_queries.dart';
 import '../rpc_error.dart';
 import '../store.dart';
 import 'generation_coordinator.dart';
+import '../attributed_transcript.dart';
 
 /// Preserves the internal transcript-window/plain Questions artifact path.
 /// It deliberately uses neither Summary checkpoints nor workflow manifests.
@@ -41,7 +42,11 @@ final class MeetingQuestions {
     final previous = jsonEncode(
       store.contentHistory.meetingArtifacts(id, kind),
     );
-    final text = meetings.finalTranscriptText(id).join('\n');
+    final text = AttributedTranscript.modelInputText(
+      meetings.transcript(id, finalOnly: true),
+      separator: '\n',
+      verbatim: true,
+    );
     if (text.isEmpty) throw StateError('No final transcript');
     final contextTokens =
         domain.generator?.effectiveState['context_length'] as int? ?? 4096;

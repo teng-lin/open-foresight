@@ -25,6 +25,7 @@ import '../rpc_error.dart';
 import '../store.dart';
 import 'capture_activity.dart';
 import 'generation_coordinator.dart';
+import '../attributed_transcript.dart';
 
 /// Owns Notes edits, live/final grounding, timers, drafts and native children.
 /// No capture process or parent Application is retained here.
@@ -209,18 +210,23 @@ final class NoteEnhancementCoordinator {
     return response.embedding.toList();
   }
 
-  String _noteTranscriptText(int id) => meetings
-      .finalTranscriptText(id)
-      .map((text) => extractSavedTranscriptText(text).trim())
-      .where((text) => text.isNotEmpty)
-      .join('\n\n');
+  // Named speakers lead their line; unattributed rows stay bare text.
+  String _noteTranscriptText(int id) => AttributedTranscript.modelInputText(
+    meetings.transcript(id, finalOnly: true),
+    extract: extractSavedTranscriptText,
+    notice: false,
+  );
 
   Iterable<({String speaker, String text})> _liveNoteTranscriptSegments(
     int id,
   ) => meetings.transcript(id, finalOnly: true).map((row) {
     final speaker = MeetingSpeaker.fromSource(row.source);
     return (
-      speaker: speaker == MeetingSpeaker.unknown ? '' : speaker.label,
+      // A supported participant name replaces the channel label; the raw text
+      // is untouched.
+      speaker:
+          AttributedTranscript.personName(row) ??
+          (speaker == MeetingSpeaker.unknown ? '' : speaker.label),
       text: row.text,
     );
   });

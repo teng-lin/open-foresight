@@ -11,6 +11,7 @@ import '../store.dart';
 import '../summary_generator.dart';
 import '../summary_output.dart';
 import 'generation_coordinator.dart';
+import '../attributed_transcript.dart';
 
 class _SummaryRun {
   _SummaryRun(this.requestId, this.runtime);
@@ -127,11 +128,10 @@ final class SummaryCoordinator {
       }),
     );
     final transcript = cleanSummaryTranscript(
-      meetings
-          .finalTranscriptText(id)
-          .map((text) => extractSavedTranscriptText(text).trim())
-          .where((text) => text.isNotEmpty)
-          .join('\n\n'),
+      AttributedTranscript.modelInputText(
+        meetings.transcript(id, finalOnly: true),
+        extract: extractSavedTranscriptText,
+      ),
     );
     if (transcript.isEmpty) throw StateError('No final transcript');
     final checkpointRow = store.summaryCheckpoint(id);
