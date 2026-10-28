@@ -243,6 +243,15 @@ bool _isControl(int unit) =>
     unit == 0x200f ||
     unit == 0x061c;
 
+/// Zero-width and word-joiner format characters that make different names
+/// look identical. The joiner and non-joiner (U+200C, U+200D) stay: scripts
+/// and emoji sequences need them.
+bool _isInvisible(int unit) =>
+    unit == 0x200b ||
+    (unit >= 0x2060 && unit <= 0x2064) ||
+    unit == 0xfeff ||
+    unit == 0x180e;
+
 final _token = RegExp(r'^[A-Za-z0-9_.:\-]{1,64}$');
 
 // Decoding.
@@ -411,7 +420,7 @@ final class _FrameReader {
     'unavailable' => UnavailableFrame(
       seq,
       session: _opaqueField(json, 'session'),
-      reason: _reasonField(json, 'reason'),
+      reason: json['reason'] == null ? '' : _reasonField(json, 'reason'),
       sinceUs: _msField(json, 'since_ms') * 1000,
     ),
     'clock' => ClockFrame(
@@ -554,7 +563,7 @@ String? _optionalText(Map<String, dynamic> json, String key) {
 
 int _msField(Map<String, dynamic> json, String key) {
   final value = json[key];
-  if (value is! int || value < 0 || value > _maxMs) {
+  if (value is! int || value < 0 || value >= _maxMs) {
     throw _malformed('Observer time field invalid');
   }
   return value;
@@ -591,7 +600,7 @@ String _sanitize(String value) {
       out.write(' ');
     } else if (rune == 0x2028 || rune == 0x2029) {
       out.write(' ');
-    } else if (rune <= 0xffff && _isControl(rune)) {
+    } else if (rune <= 0xffff && (_isControl(rune) || _isInvisible(rune))) {
       continue;
     } else {
       out.writeCharCode(rune);

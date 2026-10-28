@@ -618,6 +618,82 @@ void main() {
       );
     });
 
+    test('times must be strictly below 2^50 ms', () {
+      final top = (1 << 50) - 1;
+      final accepted = ObserverFrameDecoder().add(
+        utf8.encode(
+          line(
+            observation(
+              0,
+              overrides: {'read_start_ms': top, 'read_end_ms': top},
+            ),
+          ),
+        ),
+      );
+      expect(accepted, hasLength(1));
+      expect(
+        reject({'read_start_ms': 1 << 50, 'read_end_ms': 1 << 50}).code,
+        ObserverProtocolErrorCode.malformed,
+      );
+      expect(
+        decodeFailure(
+          line(frame('clock', 0, {'id': 'a', 'monotonic_ms': 1 << 50})),
+        ).code,
+        ObserverProtocolErrorCode.malformed,
+      );
+    });
+
+    test('an unavailable frame may omit its reason', () {
+      final frames = ObserverFrameDecoder().add(
+        utf8.encode(
+          line(frame('unavailable', 0, {'session': 's', 'since_ms': 5})),
+        ),
+      );
+      expect((frames.single as UnavailableFrame).reason, '');
+      expect(
+        decodeFailure(
+          line(
+            frame('unavailable', 0, {
+              'session': 's',
+              'since_ms': 5,
+              'reason': 'A name',
+            }),
+          ),
+        ).code,
+        ObserverProtocolErrorCode.malformed,
+      );
+    });
+
+    test('zero-width and word-joiner characters cannot disguise names', () {
+      final frames = ObserverFrameDecoder().add(
+        utf8.encode(
+          line(
+            observation(
+              0,
+              overrides: {
+                'participants': [
+                  {
+                    'ref': 'p1',
+                    'name': 'A\u200Bd\u2060a\uFEFF \u200D\u{1F600}',
+                    'self': false,
+                  },
+                ],
+                'speakers': [],
+              },
+            ),
+          ),
+        ),
+      );
+      expect(
+        (frames.single as ObservationFrame)
+            .observation
+            .participants
+            .single
+            .name,
+        'Ada \u200D\u{1F600}',
+      );
+    });
+
     test('rejects malformed roster entries', () {
       expect(
         reject({

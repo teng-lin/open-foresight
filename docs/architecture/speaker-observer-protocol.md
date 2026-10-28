@@ -51,7 +51,7 @@ platform helpers (`zoom_observer_macos`, `zoom_observer_linux`). Design context:
   `parser_version`, `platform`, `code` and `reason` are tokens of at most 64
   characters from `A-Za-z0-9_.:-` (`reason` may be empty or absent).
   `zoom_version` and `locale` are optional text of at most 64 characters.
-  Millisecond fields are non-negative integers below 2^50. The receiver treats
+  Millisecond fields are non-negative integers strictly below 2^50. The receiver treats
   any violation as a protocol error and reports only a fixed description.
 
 ## Requests (service to helper)
@@ -208,7 +208,9 @@ be derived from a steady clock that does not count system sleep.
   `ordered_tile` (disabled by default), `atspi_state` (Linux, reserved until a
   live signal is established).
 - Names keep their original spelling, including commas and punctuation. The
-  receiver removes control and bidirectional-override characters, turns line
+  receiver removes control, bidirectional-override and zero-width or word-joiner
+  characters (U+200B, U+2060 to U+2064, U+FEFF; the joiners U+200C and U+200D
+  stay), turns line
   breaks into spaces and trims; a name that is empty afterwards, or longer than
   256 characters, is a protocol error.
 - Every `speakers[].ref` must name a distinct entry of the same observation's
