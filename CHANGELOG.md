@@ -6,11 +6,12 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
-### Changed
+## [0.1.4] - 2026-10-28
 
-- Replace legacy service transport text with typed diagnostics, honor the canonical log level, and retain a bounded startup event without delaying application ownership. MCP startup and settled RPC handlers also emit closed metadata; public service status exposes bounded diagnostic health.
-- Fresh local model setup defaults to Gemma 4 E2B on all supported memory sizes, while preserving registered models and reusing compatible downloaded models.
-- Settings model choices remain selectable while saved files are discovered. Opening the Gemma chooser checks file metadata without hashing every model; local files are checksum-verified when activated.
+Published as `v0.1.4-signed`, with the original Linux installers and an ad-hoc
+signed Mac DMG. The Mac app and DMG are not notarized. Release verification was
+explicitly waived by the repository owner; no new test suites or installed-release
+acceptance runs were performed for publication.
 
 ### Added
 
@@ -38,6 +39,10 @@ Notable changes to Open Foresight are recorded here. Versions follow
   for seven days. Each snapshot can require space comparable to the database.
 
 ### Changed
+
+- Replace legacy service transport text with typed diagnostics, honor the canonical log level, and retain a bounded startup event without delaying application ownership. MCP startup and settled RPC handlers also emit closed metadata; public service status exposes bounded diagnostic health.
+- Fresh local model setup defaults to Gemma 4 E2B on all supported memory sizes, while preserving registered models and reusing compatible downloaded models.
+- Settings model choices remain selectable while saved files are discovered. Opening the Gemma chooser checks file metadata without hashing every model; local files are checksum-verified when activated.
 
 - Keep background SQLite execution deadlines active during VM teardown through
   a small, separately initialized native support image.
@@ -237,7 +242,8 @@ The macOS disk image in this release is ad-hoc signed and is not notarized.
 Physical-device recovery and echo-cancellation quality were not validated across
 hardware. Model weights are downloaded after install and are not inside the packages.
 
-[Unreleased]: https://github.com/teng-lin/open-foresight/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/teng-lin/open-foresight/compare/v0.1.4-signed...HEAD
+[0.1.4]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.4-signed
 [0.1.3]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.3
 [0.1.2]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.2
 [0.1.1]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.1
