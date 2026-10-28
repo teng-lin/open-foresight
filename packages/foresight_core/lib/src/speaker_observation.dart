@@ -122,6 +122,18 @@ final class SpeakerObservation {
     if (readEndUs < readStartUs) {
       throw ArgumentError('Observation read ends before it starts');
     }
+    final refs = <String>{};
+    for (final participant in this.participants) {
+      if (!refs.add(participant.ref)) {
+        throw ArgumentError('Duplicate participant reference');
+      }
+    }
+    final speakerRefs = <String>{};
+    for (final speaker in this.speakers) {
+      if (!refs.contains(speaker.ref) || !speakerRefs.add(speaker.ref)) {
+        throw ArgumentError('Speaker is not a unique roster entry');
+      }
+    }
   }
   final String session, parserVersion;
   final int readStartUs, readEndUs;

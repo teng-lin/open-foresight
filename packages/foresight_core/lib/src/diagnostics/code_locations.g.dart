@@ -341,6 +341,7 @@ const diagnosticCodeLocations = <String>[
   'src/service_socket.dart',
   'src/service_startup.dart',
   'src/source_type.dart',
+  'src/speaker_attributor.dart',
   'src/speaker_observation.dart',
   'src/speaker_observer_protocol.dart',
   'src/speech_model_catalog.dart',
