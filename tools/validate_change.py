@@ -23,10 +23,11 @@ select every boundary and gate. Execution calls the checked-in entrypoints named
 by `tools/boundary_inventory.json`; it copies none of their commands.
 
 Exit status: 0 for a plan or a run in which every selected check passed on every
-needed platform, 1 when a check failed, 2 for invalid input or an inconsistent
-inventory, 3 for an incomplete run (unavailable, not-run, manual, CI-only or
-unexecuted-platform requirements). --allow-partial turns 3 into 0 but never
-changes the recorded status.
+needed platform, 1 when a check failed, 2 for invalid input, an inconsistent
+inventory or unwritable evidence, 3 for an incomplete run (unavailable, not-run,
+manual, CI-only, unexecuted-platform or empty-change-set requirements) and 130
+after an interruption. --allow-partial turns 3 into 0 and --baseline-only accepts
+an empty change set; neither changes the recorded evidence of what was exercised.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
+import fnmatch
 import hashlib
 import io
 import json
@@ -41,6 +43,7 @@ import os
 from pathlib import Path, PurePosixPath
 import posixpath
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -59,6 +62,7 @@ GIT_TIMEOUT = 300
 DIGEST_LIMIT = 512 * 1024 * 1024
 LIST_LIMIT = 25
 KILL_GRACE_SECONDS = 10
+READER_GRACE_SECONDS = 2
 REUSE_POLICY = (
     "Reused SDKs, build trees, bundles and model fixtures are reported as reused existing outputs. "
     "validate_change neither rebuilds nor verifies their provenance; the named entrypoint does. "
@@ -67,7 +71,6 @@ REUSE_POLICY = (
 # CI-selection rules that name a precise, harmless local class; everything else
 # from ci_selection is treated as a conservative unknown for local planning.
 _QUIET_RULES = {
-    "editorial": ("shared-guards",),
     "maintenance": ("shared-guards", "python-coverage"),
     "portable-quality": ("shared-guards", "python-coverage"),
     "host-contract": ("shared-guards", "python-coverage", "platform-contracts"),
@@ -82,7 +85,9 @@ _SUPPORT_SCAN = (
     "apps/desktop/integration_test/",
     "tests/service/",
 )
-_IMPORT = re.compile(r"""^\s*(?:import|export)\s+['"]([^'"]+)['"]""", re.M)
+# import, export, part and part of; conditional imports carry several quoted URIs.
+_DIRECTIVE = re.compile(r"^\s*(import|export|part\s+of|part)\s+([^;]*);", re.M)
+_QUOTED = re.compile(r"""['"]([^'"]+)['"]""")
 
 
 class PlanError(ValueError):
@@ -110,6 +115,20 @@ def _digest_file(path: Path) -> str | None:
         return None
 
 
+def _content(path: Path) -> tuple[str | None, str]:
+    """Content digest and state: ok, absent (deleted or never present) or unreadable."""
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            while block := stream.read(1 << 20):
+                digest.update(block)
+        return digest.hexdigest(), "ok"
+    except (FileNotFoundError, NotADirectoryError):
+        return None, "absent"
+    except OSError:
+        return None, "unreadable"
+
+
 def _git(root: Path, *arguments: str) -> bytes:
     try:
         return subprocess.run(
@@ -134,24 +153,25 @@ def build_change_set(
     revision: str | None,
     base: str | None,
     merge_base: str | None,
-    blobs: Mapping[str, str | None] | None = None,
+    dirty: bool | None = None,
+    dirty_paths: Sequence[str] = (),
+    excluded_classes: Sequence[str] = (),
+    dirty_unknown: str | None = None,
 ) -> dict[str, Any]:
-    """Assemble the change set and its content-bound identity from classified paths."""
+    """Assemble the change set and its content-bound identity from classified paths.
+
+    `dirty` is None when the working tree was not inspected (explicit file lists),
+    with `dirty_unknown` saying why; it is never guessed as False.
+    """
     classes: dict[str, list[str]] = defaultdict(list)
     for name, paths in paths_by_class.items():
         for path in paths:
             classes[path].append(name)
     entries = []
     for path in sorted(classes):
-        content = None if (normalized := normalize_path(path)) is None else _digest_file(root / normalized)
-        entries.append(
-            {
-                "path": path,
-                "classes": sorted(classes[path]),
-                "sha256": content,
-                **({"blob": blobs[path]} if blobs and path in blobs else {}),
-            }
-        )
+        normalized = normalize_path(path)
+        content, state = (None, "invalid-path") if normalized is None else _content(root / normalized)
+        entries.append({"path": path, "classes": sorted(classes[path]), "sha256": content, "content": state})
     identity = hashlib.sha256(
         json.dumps(
             {"mode": mode, "revision": revision, "merge_base": merge_base, "entries": entries},
@@ -159,7 +179,6 @@ def build_change_set(
             separators=(",", ":"),
         ).encode()
     ).hexdigest()
-    dirty = sorted(path for path, found in classes.items() if set(found) & {"staged", "unstaged", "untracked"})
     return {
         "mode": mode,
         "revision": revision,
@@ -168,27 +187,58 @@ def build_change_set(
         "identity_sha256": identity,
         "paths": [entry["path"] for entry in entries],
         "entries": entries,
-        "dirty": bool(dirty),
-        "dirty_paths": dirty,
+        "dirty": dirty,
+        "dirty_paths": sorted(dirty_paths),
+        "dirty_unknown": dirty_unknown,
+        "excluded_classes": sorted(excluded_classes),
+        "unreadable_paths": [entry["path"] for entry in entries if entry["content"] == "unreadable"],
         "counts": {name: len(paths_by_class.get(name, ())) for name in CLASSES},
     }
 
 
+def _checkout_top(root: Path) -> Path:
+    """The top-level directory of the Git checkout containing `root`."""
+    return Path(_git(root, "rev-parse", "--show-toplevel").decode().strip()).resolve()
+
+
 def collect_git(root: Path, base: str | None, include: Sequence[str] = CLASSES) -> dict[str, Any]:
-    """Classify committed, staged, unstaged and untracked changes."""
+    """Classify committed, staged, unstaged and untracked changes.
+
+    Dirtiness is always computed from the staged, unstaged and untracked classes,
+    so `include` can narrow the selected paths but never hide a dirty tree.
+    """
+    top = _checkout_top(root)
+    if top != root.resolve():
+        raise PlanError(
+            f"{root} is not the top of a Git checkout (it is inside the repository at {top}); "
+            "a source export must be planned with --files, not with that repository's state"
+        )
     head = _git(root, "rev-parse", "HEAD").decode().strip()
     merge_base = None
     paths: dict[str, list[str]] = {name: [] for name in CLASSES}
     if base is not None and "committed" in include:
         merge_base = _git(root, "merge-base", base, "HEAD").decode().strip()
         paths["committed"] = _names(_git(root, "diff", "--name-only", "--no-renames", "-z", merge_base, "HEAD", "--"))
-    if "staged" in include:
-        paths["staged"] = _names(_git(root, "diff", "--cached", "--name-only", "--no-renames", "-z", "--"))
-    if "unstaged" in include:
-        paths["unstaged"] = _names(_git(root, "diff", "--name-only", "--no-renames", "-z", "--"))
-    if "untracked" in include:
-        paths["untracked"] = _names(_git(root, "ls-files", "--others", "--exclude-standard", "-z"))
-    return build_change_set(root, mode="git", paths_by_class=paths, revision=head, base=base, merge_base=merge_base)
+    everything = {
+        "staged": _names(_git(root, "diff", "--cached", "--name-only", "--no-renames", "-z", "--")),
+        "unstaged": _names(_git(root, "diff", "--name-only", "--no-renames", "-z", "--")),
+        "untracked": _names(_git(root, "ls-files", "--others", "--exclude-standard", "-z")),
+    }
+    for name, found in everything.items():
+        if name in include:
+            paths[name] = found
+    dirty_paths = sorted({path for found in everything.values() for path in found})
+    return build_change_set(
+        root,
+        mode="git",
+        paths_by_class=paths,
+        revision=head,
+        base=base,
+        merge_base=merge_base,
+        dirty=bool(dirty_paths),
+        dirty_paths=dirty_paths,
+        excluded_classes=[name for name in CLASSES if name not in include],
+    )
 
 
 def explicit_change_set(
@@ -206,37 +256,62 @@ def explicit_change_set(
         revision=revision,
         base=base_revision,
         merge_base=None,
+        dirty=None,
+        dirty_unknown="explicit file list: the working tree was not inspected",
     ) | {"revision_declared": revision is not None}
 
 
-def empty_change_set(reason: str) -> dict[str, Any]:
-    return build_change_set(ROOT, mode=reason, paths_by_class={}, revision=None, base=None, merge_base=None)
+def empty_change_set(reason: str, note: str = "no change set was collected") -> dict[str, Any]:
+    return build_change_set(
+        ROOT, mode=reason, paths_by_class={}, revision=None, base=None, merge_base=None, dirty=None, dirty_unknown=note
+    )
 
 
-def support_consumers(root: Path, changed: Sequence[str], files: Sequence[str]) -> list[str]:
-    """Files that import (transitively) or mention a changed shared-support file."""
-    scanned = [name for name in files if name.startswith(_SUPPORT_SCAN) and name.endswith((".dart", ".py"))]
-    support = [path for path in changed if path.startswith(("packages/foresight_test_support/", "tests/service/gated_helper"))]
-    if any(not path.endswith(".dart") and PurePosixPath(path).suffix != ".py" for path in support):
-        return sorted(scanned)  # pubspec, analysis options: every consumer
-    importers: dict[str, set[str]] = defaultdict(set)
-    texts: dict[str, str] = {}
-    for name in scanned:
-        try:
-            text = (root / name).read_text(errors="replace")
-        except OSError:
-            continue
-        texts[name] = text
-        if not name.endswith(".dart"):
-            continue
-        for target in _IMPORT.findall(text):
+def _directive_targets(name: str, text: str) -> list[tuple[str, str]]:
+    """(kind, repository path) for each import/export/part directive in a Dart file."""
+    targets = []
+    for kind, body in _DIRECTIVE.findall(text):
+        for target in _QUOTED.findall(body):  # includes every URI of a conditional import
             if target.startswith("package:foresight_test_support/"):
                 resolved = "packages/foresight_test_support/lib/" + target.split("/", 1)[1]
             elif target.startswith(("package:", "dart:")):
                 continue
             else:
                 resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+            targets.append((kind.split()[0] if kind.startswith("part") else kind, resolved))
+    return targets
+
+
+def support_consumers(
+    root: Path, changed: Sequence[str], files: Sequence[str], errors: list[str] | None = None
+) -> list[str]:
+    """Files that import (transitively) or mention a changed shared-support file.
+
+    A file that cannot be read is returned as a consumer and described in `errors`
+    rather than dropped. `part` and `part of` link a file and its library both ways.
+    """
+    scanned = [name for name in files if name.startswith(_SUPPORT_SCAN) and name.endswith((".dart", ".py"))]
+    support = [path for path in changed if path.startswith(("packages/foresight_test_support/", "tests/service/gated_helper"))]
+    if any(not path.endswith(".dart") and PurePosixPath(path).suffix != ".py" for path in support):
+        return sorted(scanned)  # pubspec, analysis options: every consumer
+    importers: dict[str, set[str]] = defaultdict(set)
+    texts: dict[str, str] = {}
+    unreadable: set[str] = set()
+    for name in scanned:
+        try:
+            text = (root / name).read_text(errors="replace")
+        except OSError as error:
+            unreadable.add(name)
+            if errors is not None:
+                errors.append(f"closure scan could not read {name} ({type(error).__name__}); it is treated as a consumer")
+            continue
+        texts[name] = text
+        if not name.endswith(".dart"):
+            continue
+        for kind, resolved in _directive_targets(name, text):
             importers[resolved].add(name)
+            if kind == "part":
+                importers[name].add(resolved)  # a part also depends on its library
     seen = set(support)
     queue = list(support)
     while queue:
@@ -251,7 +326,19 @@ def support_consumers(root: Path, changed: Sequence[str], files: Sequence[str]) 
                 if name not in seen and base in text:
                     seen.add(name)
                     queue.append(name)
-    return sorted(seen - set(support))
+    return sorted((seen | unreadable) - set(support))
+
+
+def editorial(path: str, patterns: Sequence[str]) -> bool:
+    """Documentation that no test reads as a fixture.
+
+    A pattern with a slash is a glob; one without matches only files in the
+    repository root, so `*.md` never covers a Markdown fixture under a test tree.
+    """
+    return any(
+        boundary_inventory.glob_match(path, pattern) if "/" in pattern else ("/" not in path and fnmatch.fnmatchcase(path, pattern))
+        for pattern in patterns
+    )
 
 
 def classify_paths(
@@ -264,7 +351,7 @@ def classify_paths(
     """Per-path rule matches and the downstream-consumer closures they imply."""
     boundaries = {entry["id"]: entry for entry in inventory["boundaries"]}
     ci_rule = ci_rule or (lambda path: ci_selection.path_rule(path, root=root)[0])
-    editorial = inventory.get("benign_globs", {}).get("editorial", [])
+    editorial_patterns = inventory.get("benign_globs", {}).get("editorial", [])
     results = []
     closures: list[dict[str, Any]] = []
     support_paths: dict[str, list[str]] = defaultdict(list)
@@ -294,7 +381,7 @@ def classify_paths(
                         "reason": f"{normalized} is a {'producer/consumer source' if direct else 'cited test'} of the {boundary['id']} boundary.",
                     }
                 )
-        if any(boundary_inventory.glob_match(normalized, glob) for glob in editorial) and not matches:
+        if editorial(normalized, editorial_patterns) and not matches:
             matches.append({"rule": "editorial", "kind": "editorial", "boundaries": [], "gates": ["shared-guards"], "reason": "Documentation only; document links and inventories are guarded by the shared checks."})
         unknown = False
         if not matches:
@@ -306,9 +393,10 @@ def classify_paths(
                 matches.append({"rule": f"unknown:{rule_name}", "kind": "unknown", "boundaries": ["*"], "gates": ["*"], "reason": f"No boundary or closure rule recognizes this path (ci_selection: {rule_name}); every boundary and gate is selected."})
         results.append({"path": normalized, "unknown": unknown, "matches": matches})
     for rule_id, changed in support_paths.items():
-        consumers = support_consumers(root, changed, files)
+        scan_errors: list[str] = []
+        consumers = support_consumers(root, changed, files, scan_errors)
         owners = sorted(entry["id"] for entry in boundaries.values() if any(item["path"] in consumers for item in entry["evidence"]))
-        closures.append({"rule": rule_id, "changed": sorted(changed), "consumer_count": len(consumers), "consumers": consumers[:LIST_LIMIT * 4], "boundaries": owners})
+        closures.append({"rule": rule_id, "changed": sorted(changed), "consumer_count": len(consumers), "consumers": consumers[:LIST_LIMIT * 4], "boundaries": owners, "errors": scan_errors})
     return results, closures
 
 
@@ -317,7 +405,12 @@ def _gate_order(inventory: Mapping[str, Any]) -> list[str]:
 
 
 def ci_selection_report(paths: Sequence[str], inventory: Mapping[str, Any], root: Path) -> dict[str, Any]:
-    """Reuse the production selectors; the effective set is their union."""
+    """Reuse the production selectors; the effective set is their union.
+
+    Required jobs beyond the six gates (acceptance, Arch/native) and the sanitizer
+    workflow's path filter come from the same ci_selection module and are mapped to
+    local, CI-only or manual gates; none is dropped.
+    """
     authoritative = ci_changes.select_gates(list(paths))
     try:
         candidate: dict[str, Any] = ci_selection.select(list(paths), root=root)
@@ -328,15 +421,27 @@ def ci_selection_report(paths: Sequence[str], inventory: Mapping[str, Any], root
         proposed = dict.fromkeys(ci_changes.GATES, True)
         error = candidate["error"]
     effective = {gate: bool(authoritative[gate] or proposed[gate]) for gate in ci_changes.GATES}
+    jobs = set(ci_selection.required_jobs(effective)) | set(candidate.get("required_jobs") or ())
+    job_map = inventory["ci_job_map"]
+    unmapped = sorted(job for job in jobs if job not in effective and job not in job_map)
+    # Without a candidate the sanitizer filter is unknown: select it.
+    sanitizers = bool(candidate.get("sanitizers", True))
+    platforms = {inventory["ci_gate_map"][gate]["platform"] for gate in effective if effective[gate]}
+    platforms.update(job_map[job]["platform"] for job in jobs if job in job_map)
+    if sanitizers:
+        platforms.add("linux")
     return {
         "authority": "ci_changes.select_gates selects required CI; ci_selection.select is observe-only; this plan unions both and never narrows.",
         "authoritative": authoritative,
         "candidate": candidate.get("selection", candidate),
         "candidate_error": error,
         "effective": effective,
-        "required_jobs": candidate.get("required_jobs"),
+        "required_jobs": sorted(jobs),
+        "unmapped_jobs": unmapped,
+        "sanitizers": sanitizers,
         "local_gates": {gate: inventory["ci_gate_map"][gate]["gates"] for gate in effective if effective[gate]},
-        "platforms": sorted({inventory["ci_gate_map"][gate]["platform"] for gate in effective if effective[gate]}),
+        "job_gates": {job: job_map[job]["gates"] for job in sorted(jobs) if job in job_map},
+        "platforms": sorted(platforms),
     }
 
 
@@ -397,28 +502,50 @@ def _requirement(requirement: Mapping[str, Any], context: Context, runnable: Map
     return record
 
 
+def observe_reuse(record: dict[str, Any]) -> dict[str, Any]:
+    """Stat a reuse entry and digest its key files; called at plan time and again at execution."""
+    target = Path(record["path"])
+    record["present"] = target.exists()
+    digests: dict[str, str | None] = {}
+    skipped: dict[str, str] = {}
+    if record["present"]:
+        for name in record["digest_files"]:
+            file = Path(name)
+            try:
+                info = file.stat()
+            except OSError as error:
+                skipped[name] = f"digest_skipped: {type(error).__name__}"
+                continue
+            if not file.is_file():
+                skipped[name] = "digest_skipped: not a regular file"
+            elif info.st_size > DIGEST_LIMIT:
+                skipped[name] = f"digest_skipped: larger than {DIGEST_LIMIT} bytes"
+            elif (digest := _digest_file(file)) is None:
+                skipped[name] = "digest_skipped: unreadable"
+            else:
+                digests[name] = digest
+    record["sha256"] = digests
+    record["digest_skipped"] = skipped
+    record["presented_as"] = (
+        "reused existing output, not freshly built or verified by validate_change"
+        if record["present"]
+        else "absent; the entrypoint must produce or reject it"
+    )
+    return record
+
+
 def _reuse(gate: Mapping[str, Any], context: Context) -> list[dict[str, Any]]:
-    records = []
-    for entry in gate.get("reuse", ()):
-        target = context.path(entry["path"])
-        present = target.exists()
-        digests = {}
-        if present:
-            for name in entry.get("digest_files", ()):
-                file = context.path(name)
-                if file.is_file() and file.stat().st_size <= DIGEST_LIMIT:
-                    digests[str(file)] = _digest_file(file)
-        records.append(
+    return [
+        observe_reuse(
             {
                 "id": entry["id"],
-                "path": str(target),
-                "present": present,
-                "presented_as": "reused existing output, not freshly built or verified by validate_change" if present else "absent; the entrypoint must produce or reject it",
-                "sha256": digests,
+                "path": str(context.path(entry["path"])),
+                "digest_files": [str(context.path(name)) for name in entry.get("digest_files", ())],
                 "decision": entry["decision"],
             }
         )
-    return records
+        for entry in gate.get("reuse", ())
+    ]
 
 
 def build_plan(
@@ -473,6 +600,18 @@ def build_plan(
             origin = "ci_changes.select_gates" if ci["authoritative"][gate] else "ci_selection.select (observe-only candidate)"
             for target in inventory["ci_gate_map"][gate]["gates"]:
                 select_gate(target, {"source": "ci", "rule": f"ci:{gate}", "kind": "ci-selection", "reason": f"CI gate {gate} is selected by {origin}; its local equivalent is {target}."})
+    for job in ci["required_jobs"]:
+        if job in ci["job_gates"]:
+            for target in ci["job_gates"][job]:
+                select_gate(target, {"source": "ci", "rule": f"ci-job:{job}", "kind": "ci-selection", "reason": f"Required CI job {job} (ci_selection.required_jobs) maps to local gate {target}."})
+    for job in ci["unmapped_jobs"]:
+        conservative.append(f"required CI job {job} has no gate mapping")
+        select_gate("*", {"source": "ci", "rule": f"ci-job:{job}", "kind": "unknown", "reason": f"Required CI job {job} has no inventory mapping; every gate is selected."})
+    if ci["sanitizers"]:
+        select_gate("native-sanitizers", {"source": "ci", "rule": "ci:sanitizers", "kind": "ci-selection", "reason": "ci_selection reports that the native-sanitizers workflow path filter matches this change (or could not be evaluated)."})
+    for closure in closures:
+        for message in closure["errors"]:
+            conservative.append(message)
     for name in requested_boundaries:
         select_boundary(name, {"source": "request", "rule": "--boundary", "kind": "explicit", "reason": f"Boundary {name} was requested explicitly."})
     select_gate("shared-guards", {"source": "always", "rule": "baseline", "kind": "always", "reason": "Shared guards are required before every push."})
@@ -519,6 +658,7 @@ def build_plan(
         "checks": [checks[name] for name in selected_gates],
         "conservative": bool(conservative),
         "conservative_reasons": sorted(set(conservative)),
+        "empty_change_set": not paths,
         "required_platforms": sorted(needed),
         "reuse_policy": REUSE_POLICY,
         "include_long": include_long,
@@ -565,7 +705,7 @@ def _check(
         timeout_seconds=gate["timeout_seconds"],
         prerequisites=prerequisites,
         reuse=_reuse(gate, context),
-        junit=[context.expand(item) for item in gate.get("junit", ())],
+        junit=[str(context.path(item)) for item in gate.get("junit", ())],
         availability="unavailable" if reasons else "runnable",
         unavailable_reasons=reasons,
         reason="; ".join(reasons) if reasons else None,
@@ -618,6 +758,9 @@ def _boundary(
         for item in gates
         if item["availability"] != "runnable"
     )
+    unverified.extend(
+        f"{item['id']}: deferred - {checks[item['id']]['deferred']}" for item in gates if checks[item["id"]].get("deferred")
+    )
     unverified.extend(f"manual: {entry['path']}" for entry in boundary["evidence"] if entry["kind"] == "manual")
     return {
         "id": boundary["id"],
@@ -657,39 +800,86 @@ def run_streaming(
     timeout: int,
     stream: TextIO | None = None,
 ) -> dict[str, Any]:
-    """Run an entrypoint, teeing raw output to a log and the terminal under a deadline."""
+    """Run an entrypoint, teeing raw output to a log and the terminal under a deadline.
+
+    The deadline bounds the entrypoint itself, not its output pipe: a descendant that
+    escaped the process group and still holds the pipe cannot extend the run. It is
+    reported as `leaked_descendants`, separately from `timed_out`, which is set only
+    when the entrypoint was still running at the deadline. The process group is
+    killed on every path, including interruption.
+    """
     stream = stream or sys.stdout
     started = time.monotonic()
-    timed_out = threading.Event()
-    with log_path.open("wb") as log:
-        process = subprocess.Popen(
-            list(argv), cwd=cwd, env=dict(env), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True
-        )
-
-        def expire() -> None:
-            timed_out.set()
-            _signal_group(process, signal.SIGTERM)
-            killer = threading.Timer(KILL_GRACE_SECONDS, _signal_group, (process, signal.SIGKILL))
-            killer.daemon = True
-            killer.start()
-
-        watchdog = threading.Timer(timeout, expire)
-        watchdog.daemon = True
-        watchdog.start()
+    outcome: dict[str, Any] = {
+        "returncode": None, "timed_out": False, "leaked_descendants": False, "error": None, "log": str(log_path),
+    }
+    try:
+        log = log_path.open("wb")
+    except OSError as error:
+        outcome.update(error=f"cannot open the log: {type(error).__name__}: {error}", seconds=0.0)
+        return outcome
+    with log:
         try:
+            process = subprocess.Popen(
+                list(argv), cwd=cwd, env=dict(env), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True
+            )
+        except OSError as error:
+            outcome.update(error=f"cannot start the entrypoint: {type(error).__name__}: {error}", seconds=0.0)
+            return outcome
+        problems: list[str] = []
+
+        def pump() -> None:
             reader = cast(io.BufferedReader, process.stdout)
-            while block := reader.read1(1 << 16):
-                log.write(block)
-                log.flush()
-                stream.write(block.decode(errors="replace"))
-                stream.flush()
-            code = process.wait(timeout=timeout + 2 * KILL_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            _signal_group(process, signal.SIGKILL)
-            code = process.wait(timeout=KILL_GRACE_SECONDS)
+            terminal = True
+            while True:
+                try:
+                    block = reader.read1(1 << 16)
+                except (OSError, ValueError):
+                    return
+                if not block:
+                    return
+                if not problems:
+                    try:
+                        log.write(block)
+                        log.flush()
+                    except OSError as error:
+                        problems.append(f"log write failed: {type(error).__name__}: {error}")
+                if terminal:
+                    try:
+                        stream.write(block.decode(errors="replace"))
+                        stream.flush()
+                    except (OSError, ValueError):
+                        terminal = False  # the raw log stays authoritative
+
+        thread = threading.Thread(target=pump, daemon=True)
+        thread.start()
+        try:
+            try:
+                outcome["returncode"] = process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                outcome["timed_out"] = True
+                _signal_group(process, signal.SIGTERM)
+                try:
+                    outcome["returncode"] = process.wait(timeout=KILL_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    _signal_group(process, signal.SIGKILL)
+                    outcome["returncode"] = process.wait(timeout=KILL_GRACE_SECONDS)
+            thread.join(timeout=READER_GRACE_SECONDS)
+            if thread.is_alive():
+                _signal_group(process, signal.SIGKILL)
+                thread.join(timeout=READER_GRACE_SECONDS)
+                outcome["leaked_descendants"] = thread.is_alive()
         finally:
-            watchdog.cancel()
-    return {"returncode": code, "timed_out": timed_out.is_set(), "seconds": round(time.monotonic() - started, 3), "log": str(log_path)}
+            _signal_group(process, signal.SIGKILL)
+            if process.poll() is None:
+                try:
+                    process.wait(timeout=KILL_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    pass
+    if problems:
+        outcome["error"] = problems[0]
+    outcome["seconds"] = round(time.monotonic() - started, 3)
+    return outcome
 
 
 def _signal_group(process: subprocess.Popen[bytes], number: int) -> None:
@@ -711,8 +901,28 @@ def child_environment(environ: Mapping[str, str], output: Path) -> tuple[dict[st
         policy = {**validation_evidence.temp_policy(env), "source": "created under the evidence directory", "inherited": policy}
     else:
         policy = {**policy, "source": "inherited"}
+    if not policy["compliant"]:
+        broken = [name for name, root in policy["roots"].items() if not root.get("compliant")]
+        raise PlanError(
+            "Temp-root policy is not met (private, canonical, owned and at most "
+            f"{validation_evidence.SHORT_TEMP_LIMIT} characters for Unix sockets): {', '.join(broken)}; "
+            "use a shorter private --output directory"
+        )
     env["FORESIGHT_PYTHON"] = sys.executable
     return env, policy
+
+
+def _outcome_status(outcome: Mapping[str, Any]) -> tuple[str, str | None]:
+    """Status and reason for an entrypoint's run outcome."""
+    if outcome.get("error"):
+        return "failed", str(outcome["error"])
+    if outcome.get("timed_out"):
+        return "failed", "timed out"
+    if outcome.get("leaked_descendants"):
+        return "failed", "a descendant escaped the process group and kept the output open after the entrypoint exited"
+    if outcome["returncode"] != 0:
+        return "failed", f"exit status {outcome['returncode']}"
+    return "passed", None
 
 
 def execute(
@@ -724,7 +934,11 @@ def execute(
     runner: Callable[..., dict[str, Any]] | None = None,
     stream: TextIO | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Call each selected, runnable entrypoint; record every other check honestly."""
+    """Call each selected, runnable entrypoint; record every other check honestly.
+
+    An interruption or an I/O failure is recorded as a failed check and the rest of
+    the runnable checks as not run; it never loses the results so far.
+    """
     runner = runner or run_streaming
     env, temp_policy = child_environment(environ, output)
     logs = output / "logs"
@@ -732,11 +946,12 @@ def execute(
     results: dict[str, dict[str, Any]] = {}
     outcomes: dict[str, str] = {}
     ordered = list(plan["checks"])
+    interrupted = False
     for check in ordered:
         result = {key: check[key] for key in ("id", "title", "kind", "scope", "platforms", "doc", "certifies", "long")}
         result["why"] = check["why"]
         result["entrypoint"] = check.get("entrypoint")
-        result["reuse"] = check.get("reuse", [])
+        result["reuse"] = [dict(item) for item in check.get("reuse", [])]
         result["prerequisites"] = check.get("prerequisites", [])
         availability = check["availability"]
         result["reason"] = check.get("reason")
@@ -747,8 +962,14 @@ def execute(
         elif check.get("subsumed_by"):
             result["status"] = "subsumed"
             result["subsumed_by"] = check["subsumed_by"]
+            result["reason"] = (
+                f"claimed: the inventory declares that {check['subsumed_by']} re-runs this check; "
+                "that was not independently verified"
+            )
         elif check["long"] and not include_long:
             result.update(status="not-run", reason=check.get("deferred"))
+        elif interrupted:
+            result.update(status="not-run", reason="the run was interrupted")
         else:
             blocked = [
                 item["satisfied_by"]
@@ -758,25 +979,42 @@ def execute(
             if blocked:
                 result.update(status="not-run", reason=f"prerequisite {blocked[0]} did not pass in this run")
             else:
+                for item in result["reuse"]:
+                    # The plan-time observation can be stale by now; record what is there at execution.
+                    item["at_execution"] = {
+                        key: observe_reuse({"path": item["path"], "digest_files": item.get("digest_files", [])})[key]
+                        for key in ("present", "sha256", "digest_skipped")
+                    }
                 started = time.time()
-                outcome = runner(
-                    check["entrypoint"]["argv"],
-                    cwd=Path(check["entrypoint"]["cwd"]),
-                    env=env,
-                    log_path=logs / f"{check['id']}.log",
-                    timeout=check["timeout_seconds"],
-                    **({"stream": stream} if stream is not None else {}),
-                )
+                try:
+                    outcome = runner(
+                        check["entrypoint"]["argv"],
+                        cwd=Path(check["entrypoint"]["cwd"]),
+                        env=env,
+                        log_path=logs / f"{check['id']}.log",
+                        timeout=check["timeout_seconds"],
+                        **({"stream": stream} if stream is not None else {}),
+                    )
+                except KeyboardInterrupt:
+                    interrupted = True
+                    outcome = {"returncode": None, "timed_out": False, "leaked_descendants": False, "error": "interrupted", "seconds": round(time.time() - started, 3), "log": str(logs / f"{check['id']}.log")}
+                    result["interrupted"] = True
+                except OSError as error:
+                    outcome = {"returncode": None, "timed_out": False, "leaked_descendants": False, "error": f"could not run the entrypoint: {type(error).__name__}: {error}", "seconds": 0.0, "log": None}
+                status, reason = _outcome_status(outcome)
                 result.update(
-                    status="passed" if outcome["returncode"] == 0 and not outcome["timed_out"] else "failed",
+                    status=status,
+                    reason=reason,
                     returncode=outcome["returncode"],
-                    timed_out=outcome["timed_out"],
+                    timed_out=bool(outcome.get("timed_out")),
+                    leaked_descendants=bool(outcome.get("leaked_descendants")),
                     seconds=outcome["seconds"],
                     log=outcome["log"],
                     junit=[validation_evidence.junit_counts(Path(item), started) for item in check.get("junit", ())],
                 )
-                if result["status"] == "failed":
-                    result["reason"] = "timed out" if outcome["timed_out"] else f"exit status {outcome['returncode']}"
+                if status == "passed" and (problems := validation_evidence.junit_problems(result["junit"])):
+                    # Declared JUnit evidence must exist, be fresh and show executed passing tests.
+                    result.update(status="failed", reason="JUnit evidence does not support a pass: " + "; ".join(problems))
         outcomes[check["id"]] = result["status"]
         results[check["id"]] = result
     for result in results.values():
@@ -787,7 +1025,7 @@ def execute(
 
 def reproduction_lines(plan: Mapping[str, Any], argv: Sequence[str]) -> list[str]:
     change = plan["change_set"]
-    lines = [f"cd <checkout> && {sys.executable} -m tools.validate_change {' '.join(argv)}"]
+    lines = [f"cd <checkout> && {shlex.join([sys.executable, '-m', 'tools.validate_change', *argv])}"]
     if change["mode"] == "git":
         lines.append(f"Source revision {change['revision']}; base {change['base']} (merge base {change['merge_base']}); dirty={change['dirty']}.")
     else:
@@ -865,6 +1103,7 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--bundle", type=Path, help="prepared application bundle for integration gates")
     parser.add_argument("--models", type=Path, help="model fixture directory for integration gates")
     parser.add_argument("--allow-partial", action="store_true", help="exit 0 for an incomplete run without failures")
+    parser.add_argument("--baseline-only", action="store_true", help="accept an empty change set: validate only the baseline and requested boundaries")
     parser.add_argument("--skip-inventory-check", action="store_true", help=argparse.SUPPRESS)
     arguments = parser.parse_args(argv)
     if arguments.files and arguments.base:
@@ -887,8 +1126,11 @@ def main(argv: Sequence[str] | None = None, root: Path = ROOT, environ: Mapping[
     environ = os.environ if environ is None else environ
     raw_arguments = list(sys.argv[1:] if argv is None else argv)
     arguments = parse_arguments(raw_arguments)
+    mode = "plan" if arguments.plan else "run"
+    output = None
     try:
-        if not arguments.skip_inventory_check:
+        inventory_verified = not arguments.skip_inventory_check
+        if inventory_verified:
             try:
                 boundary_inventory.verify(root)
             except ValueError as error:
@@ -898,15 +1140,20 @@ def main(argv: Sequence[str] | None = None, root: Path = ROOT, environ: Mapping[
             for boundary in inventory["boundaries"]:
                 print(f"{boundary['id']}\t{boundary['gate']}\t{boundary['title']}")
             return 0
-        explicit = arguments.files or (read_files(arguments.files_from) if arguments.files_from else None)
+        explicit = arguments.files
+        if arguments.files_from:
+            explicit = read_files(arguments.files_from)
+            if not explicit:
+                raise PlanError(f"{arguments.files_from} lists no paths; an empty change set is not a change")
         if explicit is not None:
             change_set = explicit_change_set(root, explicit, revision=arguments.revision, base_revision=arguments.base_revision)
-        elif arguments.boundary and not arguments.base:
-            change_set = empty_change_set("boundary-request")
         else:
-            change_set = collect_git(root, arguments.base, arguments.include)
-        mode = "plan" if arguments.plan else "run"
-        output = None
+            try:
+                change_set = collect_git(root, arguments.base, arguments.include)
+            except PlanError as error:
+                if not arguments.boundary or arguments.base:
+                    raise
+                change_set = empty_change_set("boundary-request", note=f"no change set was collected: {error}")
         if mode == "run" or arguments.output:
             from tools import check_local_validation
 
@@ -916,23 +1163,37 @@ def main(argv: Sequence[str] | None = None, root: Path = ROOT, environ: Mapping[
                 raise PlanError(str(error)) from error
         context = Context(root, environ, bundle=arguments.bundle, models=arguments.models, output=output)
         plan = build_plan(inventory, change_set, root, context, requested_boundaries=arguments.boundary, include_long=arguments.include_long)
-    except PlanError as error:
-        print(f"validate_change: {error}", file=sys.stderr)
+    except (PlanError, OSError, KeyError, ValueError) as error:
+        print(f"validate_change: {type(error).__name__}: {error}" if not isinstance(error, PlanError) else f"validate_change: {error}", file=sys.stderr)
         return 2
+
+    incomplete: list[str] = []
+    if not inventory_verified:
+        incomplete.append("the boundary inventory consistency check was skipped (--skip-inventory-check)")
+    if plan["empty_change_set"] and not arguments.baseline_only:
+        incomplete.append("empty change set: nothing was selected beyond the baseline" + (" and the requested boundaries" if arguments.boundary else "") + "; pass --baseline-only to validate only that")
+    change = plan["change_set"]
+    if change["unreadable_paths"]:
+        incomplete.append("change-set content was unreadable for: " + ", ".join(change["unreadable_paths"][:LIST_LIMIT]))
 
     started_utc = time.time()
     results: list[dict[str, Any]] = []
     temp_policy = validation_evidence.temp_policy(environ)
     if mode == "run":
-        results, temp_policy = execute(plan, cast(Path, output), environ, include_long=arguments.include_long)
+        try:
+            results, temp_policy = execute(plan, cast(Path, output), environ, include_long=arguments.include_long)
+        except PlanError as error:
+            print(f"validate_change: {error}", file=sys.stderr)
+            return 2
         checks = results
     else:
         checks = [dict(check, junit=[]) for check in plan["checks"]]
+    interrupted = any(check.get("interrupted") for check in checks)
     unexecuted = [] if mode == "plan" else unexecuted_platforms(plan, checks, context.platform)
     summary = validation_evidence.build_summary(
         mode=mode,
-        source={key: plan["change_set"][key] for key in ("mode", "revision", "base", "merge_base", "identity_sha256", "dirty", "dirty_paths", "counts")}
-        | {"revision_declared": plan["change_set"].get("revision_declared"), "path_count": len(plan["change_set"]["paths"])},
+        source={key: change[key] for key in ("mode", "revision", "base", "merge_base", "identity_sha256", "dirty", "dirty_paths", "dirty_unknown", "excluded_classes", "unreadable_paths", "counts")}
+        | {"revision_declared": change.get("revision_declared"), "path_count": len(change["paths"])},
         invocation={
             "entrypoint": "tools.validate_change",
             "argv": raw_arguments,
@@ -940,11 +1201,15 @@ def main(argv: Sequence[str] | None = None, root: Path = ROOT, environ: Mapping[
             "executable": sys.executable,
             "root": str(root),
             "started_epoch": round(started_utc, 3),
+            "inventory_verified": inventory_verified,
+            "baseline_only": arguments.baseline_only,
         },
         selection={
             "conservative": plan["conservative"],
             "conservative_reasons": plan["conservative_reasons"],
             "ci": plan["ci_selection"]["effective"],
+            "ci_required_jobs": plan["ci_selection"]["required_jobs"],
+            "sanitizers": plan["ci_selection"]["sanitizers"],
             "boundaries": [boundary["id"] for boundary in plan["boundaries"]],
             "required_platforms": plan["required_platforms"],
         },
@@ -953,33 +1218,45 @@ def main(argv: Sequence[str] | None = None, root: Path = ROOT, environ: Mapping[
         reproduction=reproduction_lines(plan, raw_arguments),
         environ=environ,
         tools=validation_evidence.observe_tools() if mode == "run" else None,
+        incomplete_reasons=incomplete,
     )
     summary["temp_root_policy"] = temp_policy
-    if output is not None:
-        (output / "plan.json").write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
-        validation_evidence.write_summary(summary, output / "evidence.json")
+    # Results first: a failure to publish evidence must not lose a completed run's output.
     if arguments.json:
         print(json.dumps({"plan": plan, "evidence": summary}, indent=2, sort_keys=True))
     else:
         print(render(plan, results=results or None, summary=summary if mode == "run" else None))
-        if output is not None:
-            print(f"Evidence: {output / 'evidence.json'}")
+    written = True
+    if output is not None:
+        try:
+            (output / "plan.json").write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
+            validation_evidence.write_summary(summary, output / "evidence.json")
+            if not arguments.json:
+                print(f"Evidence: {output / 'evidence.json'}")
+        except (OSError, ValueError) as error:
+            written = False
+            print(f"validate_change: the evidence could not be written: {type(error).__name__}: {error}", file=sys.stderr)
+    if interrupted:
+        return 130
     if mode == "plan":
-        return 0
+        return 0 if written else 2
     if summary["status"] == "failed":
         return 1
+    if not written:
+        return 2
     if summary["status"] == "full-validation-passed" or arguments.allow_partial:
         return 0
     return 3
 
 
 def _evidence_check(check: Mapping[str, Any]) -> dict[str, Any]:
-    keys = ("id", "title", "kind", "scope", "platforms", "status", "reason", "returncode", "timed_out", "seconds", "log", "junit", "subsumed_by", "long")
+    keys = ("id", "title", "kind", "scope", "platforms", "status", "reason", "returncode", "timed_out", "leaked_descendants", "interrupted", "seconds", "log", "junit", "subsumed_by", "long")
     record = {key: check[key] for key in keys if key in check}
     record["entrypoint"] = (check.get("entrypoint") or {}).get("argv")
     record["why"] = [entry["reason"] for entry in check.get("why", ())][:LIST_LIMIT]
     record["reuse"] = [
-        {key: item[key] for key in ("id", "path", "present", "presented_as", "sha256")} for item in check.get("reuse", ())
+        {key: item[key] for key in ("id", "path", "present", "presented_as", "sha256", "digest_skipped", "at_execution") if key in item}
+        for item in check.get("reuse", ())
     ]
     record["unavailable"] = [item["detail"] for item in check.get("prerequisites", ()) if not item["met"]]
     if check.get("availability") == "unavailable" and check.get("status") == "planned":

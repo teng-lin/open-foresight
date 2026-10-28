@@ -120,7 +120,10 @@ def test_include_selects_classes_and_no_base_means_no_committed_class(repository
     (repository / "untracked.txt").write_text("u\n")
     assert vc.collect_git(repository, None)["paths"] == ["untracked.txt"]
     only = vc.collect_git(repository, "main", include=["committed"])
-    assert only["paths"] == ["a.txt", "b.txt", "c.txt", "r.txt"] and not only["dirty"]
+    # Excluding a class narrows the paths but never hides a dirty tree.
+    assert only["paths"] == ["a.txt", "b.txt", "c.txt", "r.txt"]
+    assert only["dirty"] is True and only["dirty_paths"] == ["untracked.txt"]
+    assert only["excluded_classes"] == ["staged", "unstaged", "untracked"]
     assert vc.collect_git(repository, "main", include=["untracked"])["paths"] == ["untracked.txt"]
     assert vc.collect_git(repository, "main", include=["staged", "unstaged"])["paths"] == []
 
@@ -424,13 +427,15 @@ def fake_runner(statuses, calls=None):
 def private_output(tmp_path, monkeypatch):
     monkeypatch.setattr(check_local_validation, "TEMP_PARENT", tmp_path.resolve())
     monkeypatch.setattr(vc.shutil, "which", lambda name: f"/usr/bin/{name}")
+    # pytest's temp paths exceed the Unix-socket policy; enforcement has its own tests.
+    monkeypatch.setattr(vc.validation_evidence, "SHORT_TEMP_LIMIT", 500)
     return tmp_path / "evidence"
 
 
 def test_a_documentation_only_run_can_be_a_full_validation_of_its_own_scope(private_output, monkeypatch, capsys):
     calls = []
     monkeypatch.setattr(vc, "run_streaming", fake_runner({}, calls))
-    code = vc.main(["--files", "docs/testing.md", "--output", str(private_output), "--skip-inventory-check"], root=ROOT, environ={"GITHUB_TOKEN": "secret"})
+    code = vc.main(["--files", "docs/testing.md", "--output", str(private_output)], root=ROOT, environ={"GITHUB_TOKEN": "secret"})
     assert code == 0 and len(calls) == 1 and calls[0][0][-1] == "tools.check_local_validation"
     summary = json.loads((private_output / "evidence.json").read_text())
     assert summary["status"] == "full-validation-passed" and summary["unexecuted_platforms"] == []
@@ -440,7 +445,13 @@ def test_a_documentation_only_run_can_be_a_full_validation_of_its_own_scope(priv
     assert "Result: full-validation-passed" in capsys.readouterr().out
 
 
-def test_an_incomplete_run_is_never_a_successful_full_validation(private_output, monkeypatch, capsys):
+@pytest.fixture
+def accepting_junit(monkeypatch):
+    """For tests about other behavior; JUnit verdicts have their own tests."""
+    monkeypatch.setattr(vc.validation_evidence, "junit_problems", lambda reports: [])
+
+
+def test_an_incomplete_run_is_never_a_successful_full_validation(private_output, accepting_junit, monkeypatch, capsys):
     monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
     arguments = ["--files", "native/foresight_native.h", "--output", str(private_output), "--skip-inventory-check"]
     code = vc.main(arguments, root=ROOT, environ={})
@@ -454,7 +465,7 @@ def test_an_incomplete_run_is_never_a_successful_full_validation(private_output,
     capsys.readouterr()
 
 
-def test_allow_partial_changes_only_the_exit_status(tmp_path, private_output, monkeypatch):
+def test_allow_partial_changes_only_the_exit_status(tmp_path, private_output, accepting_junit, monkeypatch):
     monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
     arguments = ["--files", "native/foresight_native.h", "--skip-inventory-check", "--allow-partial"]
     assert vc.main([*arguments, "--output", str(private_output)], root=ROOT, environ={}) == 0
@@ -506,21 +517,17 @@ def test_unavailable_prerequisites_are_recorded_not_skipped_silently(private_out
     assert summary["full_validation"] is False
 
 
-def test_child_processes_get_private_temp_roots_unless_already_compliant(tmp_path):
+def test_child_processes_get_private_temp_roots_unless_already_compliant(tmp_path, monkeypatch):
     output = tmp_path / "out"
     output.mkdir(mode=0o700)
+    monkeypatch.setattr(vc.validation_evidence, "SHORT_TEMP_LIMIT", 500)
     env, policy = vc.child_environment({"PATH": "/bin"}, output)
     assert env["TMPDIR"] == str(output / "tmp") and env["FORESIGHT_TEST_TEMP_ROOT"] == str(output / "t")
     assert policy["source"].startswith("created") and (output / "tmp").stat().st_mode & 0o077 == 0
     assert env["FORESIGHT_PYTHON"] == sys.executable
     root = Path(os.path.realpath(tmp_path)) / "s"
     root.mkdir(mode=0o700)
-    original = vc.validation_evidence.SHORT_TEMP_LIMIT
-    vc.validation_evidence.SHORT_TEMP_LIMIT = 500
-    try:
-        env, policy = vc.child_environment({"TMPDIR": str(root), "FORESIGHT_TEST_TEMP_ROOT": str(root)}, output)
-    finally:
-        vc.validation_evidence.SHORT_TEMP_LIMIT = original
+    env, policy = vc.child_environment({"TMPDIR": str(root), "FORESIGHT_TEST_TEMP_ROOT": str(root)}, output)
     assert env["TMPDIR"] == str(root) and policy["source"] == "inherited"
 
 
@@ -597,10 +604,17 @@ def test_human_plan_explains_selection_prerequisites_reuse_and_unverified_items(
     assert "Conservative selection (unknown inputs)" in captured.out
 
 
-def test_boundary_request_without_a_change_set(capsys):
-    code, captured = cli(["--boundary", "service-helper", "--plan", "--json"], capsys)
-    plan = json.loads(captured.out)["plan"]
-    assert code == 0 and plan["change_set"]["mode"] == "boundary-request" and plan["change_set"]["paths"] == []
+def test_boundary_request_records_the_real_source_state_and_honors_include(capsys):
+    code, captured = cli(["--boundary", "service-helper", "--include", "committed", "--plan", "--json"], capsys)
+    data = json.loads(captured.out)
+    plan = data["plan"]
+    assert code == 0 and plan["change_set"]["paths"] == [] and plan["empty_change_set"]
+    if (ROOT / ".git").exists():
+        assert plan["change_set"]["mode"] == "git" and plan["change_set"]["revision"]
+        assert plan["change_set"]["excluded_classes"] == ["staged", "unstaged", "untracked"]
+        assert isinstance(plan["change_set"]["dirty"], bool)
+    else:
+        assert plan["change_set"]["mode"] == "boundary-request" and plan["change_set"]["dirty"] is None
     assert [boundary["id"] for boundary in plan["boundaries"]] == ["service-helper"]
     assert {"service-stage", "core-stage", "native-stage", "shared-guards"} <= {check["id"] for check in plan["checks"]}
 
@@ -731,3 +745,487 @@ def test_concurrent_streaming_runs_do_not_share_logs(tmp_path):
     for thread in threads:
         thread.join(timeout=60)
     assert [(tmp_path / f"{index}.log").read_text() for index in range(4)] == [f"{index}\n" for index in range(4)]
+
+
+# ------------------------------------------------- review fixes: required jobs
+
+
+def test_required_ci_jobs_beyond_the_gates_reach_a_gate_and_block_a_full_claim(private_output, accepting_junit, monkeypatch):
+    plan = plan_for(["tests/test_measure_service_rpc.py"], host="linux")
+    ci = plan["ci_selection"]
+    assert {"acceptance-cpu", "acceptance-audio", "acceptance-deb", "linux-native"} <= set(ci["required_jobs"])
+    assert not ci["unmapped_jobs"] and set(ci["job_gates"]) == {"acceptance-cpu", "acceptance-audio", "acceptance-deb", "linux-native"}
+    checks = {check["id"]: check for check in plan["checks"]}
+    assert checks["hosted-acceptance"]["availability"] == "ci-only" and checks["hosted-linux-native"]["availability"] == "ci-only"
+    assert {"integration-models", "integration-virtual-audio"} <= set(checks)
+    assert any(entry["rule"] == "ci-job:acceptance-deb" for entry in checks["hosted-acceptance"]["why"])
+    # A run therefore cannot be a full validation while those required jobs never ran.
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
+    code = vc.main(["--files", "tests/test_measure_service_rpc.py", "--output", str(private_output)], root=ROOT, environ={})
+    summary = json.loads((private_output / "evidence.json").read_text())
+    assert code == 3 and summary["status"] == "partial"
+    statuses = {check["id"]: check["status"] for check in summary["checks"]}
+    assert statuses["hosted-acceptance"] == statuses["hosted-linux-native"] == "ci-only"
+    assert "acceptance-cpu" in summary["selection"]["ci_required_jobs"]
+
+
+def test_a_required_job_without_a_mapping_selects_everything(monkeypatch):
+    real = vc.ci_selection.required_jobs
+    monkeypatch.setattr(vc.ci_selection, "required_jobs", lambda *a, **k: [*real(*a, **k), "brand-new-job"])
+    plan = plan_for(["tests/test_measure_service_rpc.py"])
+    assert plan["ci_selection"]["unmapped_jobs"] == ["brand-new-job"]
+    assert plan["conservative"] and {check["id"] for check in plan["checks"]} == GATES
+
+
+# ------------------------------------------------------ review fixes: sanitizers
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "proto/linux/helper_control.proto",
+        "services/helper/main.cpp",
+        "tests/helper/contract.cpp",
+        "tests/inference/fd_stream.cpp",
+        "tests/integration/test_native.py",
+        "tests/test_sanitizer_runtime.py",
+        "tests/test_native_leak_sanitizer.py",
+        "packaging/sanitizer-grpc.cmake",
+        "tools/run_native_sanitizers.sh",
+        ".github/workflows/native-sanitizers.yml",
+    ],
+)
+def test_the_sanitizer_workflow_path_filter_selects_the_sanitizer_gate(path):
+    plan = plan_for([path])
+    assert plan["ci_selection"]["sanitizers"] is True
+    check = next(item for item in plan["checks"] if item["id"] == "native-sanitizers")
+    assert check["availability"] == "ci-only" and "linux" in plan["required_platforms"]
+
+
+def test_documentation_does_not_select_sanitizers_and_a_broken_selector_does(monkeypatch):
+    docs = plan_for(["docs/testing.md"])
+    assert docs["ci_selection"]["sanitizers"] is False and "native-sanitizers" not in selected(docs)[1]
+    monkeypatch.setattr(vc.ci_selection, "select", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("drift")))
+    assert "native-sanitizers" in selected(plan_for(["docs/testing.md"]))[1]
+
+
+# -------------------------------------------------- review fixes: empty changes
+
+
+def test_an_empty_change_set_is_partial_unless_the_baseline_is_explicit(private_output, accepting_junit, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
+    code = vc.main(["--include", "committed", "--output", str(private_output)], root=ROOT, environ={})
+    summary = json.loads((private_output / "evidence.json").read_text())
+    assert code == 3 and summary["status"] == "partial" and not summary["full_validation"]
+    assert any("empty change set" in reason for reason in summary["not_full_validation_reasons"])
+    assert summary["source"]["path_count"] == 0
+
+    second = tmp_path / "second"
+    code = vc.main(["--include", "committed", "--baseline-only", "--output", str(second)], root=ROOT, environ={})
+    summary = json.loads((second / "evidence.json").read_text())
+    assert code == 0 and summary["status"] == "full-validation-passed" and summary["invocation"]["baseline_only"] is True
+    capsys.readouterr()
+
+
+def test_boundary_request_alone_is_partial_with_a_nothing_selected_reason(private_output, accepting_junit, monkeypatch):
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
+    code = vc.main(["--boundary", "service-helper", "--include", "committed", "--allow-partial", "--output", str(private_output)], root=ROOT, environ={})
+    summary = json.loads((private_output / "evidence.json").read_text())
+    assert code == 0 and summary["status"] == "partial"
+    assert any("empty change set" in reason and "requested boundaries" in reason for reason in summary["not_full_validation_reasons"])
+
+
+def test_empty_files_input_is_rejected(tmp_path, capsys, monkeypatch):
+    listing = tmp_path / "empty.txt"
+    listing.write_text("\n\n")
+    assert vc.main(["--files-from", str(listing), "--plan"], root=ROOT, environ={}) == 2
+    assert "lists no paths" in capsys.readouterr().err
+    monkeypatch.setattr(vc.sys, "stdin", io.StringIO(""))
+    assert vc.main(["--files-from", "-", "--plan"], root=ROOT, environ={}) == 2
+
+
+# ---------------------------------------------------- review fixes: JUnit verdict
+
+
+def junit_plan(tmp_path, report):
+    plan = plan_for(["tests/test_build_stages.py"], host="linux")
+    check = next(item for item in plan["checks"] if item["id"] == "platform-contracts")
+    check["junit"] = [str(report)]
+    plan["checks"] = [check]
+    return plan
+
+
+def junit_runner(report, text):
+    def run(argv, *, cwd, env, log_path, timeout, stream=None):
+        if text is not None:
+            report.write_text(text)
+        log_path.write_text("log\n")
+        return {"returncode": 0, "timed_out": False, "leaked_descendants": False, "seconds": 0.1, "log": str(log_path)}
+
+    return run
+
+
+@pytest.mark.parametrize(
+    ("text", "fragment"),
+    [
+        (None, "report missing"),
+        ('<testsuite tests="3" failures="1" errors="0" skipped="0"/>', "1 failure(s)"),
+        ('<testsuite tests="3" failures="0" errors="2" skipped="0"/>', "2 error(s)"),
+        ('<testsuite tests="3" failures="0" errors="0" skipped="3"/>', "no executed tests"),
+        ('<testsuites/>', "no executed tests"),
+        ("<testsuite", "unreadable (ParseError)"),
+        ('<testsuite tests="many" failures="0" errors="0"/>', "malformed count attribute"),
+    ],
+)
+def test_declared_junit_evidence_that_does_not_support_a_pass_fails_the_check(tmp_path, text, fragment):
+    report = tmp_path / "r.xml"
+    output = tmp_path / "o"
+    output.mkdir(mode=0o700)
+    original = vc.validation_evidence.SHORT_TEMP_LIMIT
+    vc.validation_evidence.SHORT_TEMP_LIMIT = 500
+    try:
+        results, _ = vc.execute(junit_plan(tmp_path, report), output, {}, include_long=False, runner=junit_runner(report, text))
+    finally:
+        vc.validation_evidence.SHORT_TEMP_LIMIT = original
+    assert results[0]["status"] == "failed" and fragment in results[0]["reason"]
+
+
+def test_fresh_passing_junit_supports_a_pass_and_stale_junit_does_not(tmp_path):
+    report = tmp_path / "r.xml"
+    output = tmp_path / "o"
+    output.mkdir(mode=0o700)
+    vc.validation_evidence.SHORT_TEMP_LIMIT, original = 500, vc.validation_evidence.SHORT_TEMP_LIMIT
+    try:
+        good = '<testsuite tests="4" failures="0" errors="0" skipped="1"/>'
+        results, _ = vc.execute(junit_plan(tmp_path, report), output, {}, include_long=False, runner=junit_runner(report, good))
+        assert results[0]["status"] == "passed" and results[0]["junit"][0]["executed"] == 3
+        old = time.time() - 3600
+        report.write_text(good)
+        os.utime(report, (old, old))
+        results, _ = vc.execute(junit_plan(tmp_path, report), output, {}, include_long=False, runner=junit_runner(report, None))
+        assert results[0]["status"] == "failed" and "not written during this run" in results[0]["reason"]
+    finally:
+        vc.validation_evidence.SHORT_TEMP_LIMIT = original
+
+
+def test_junit_paths_resolve_against_the_context_root(tmp_path):
+    context = vc.Context(tmp_path, {}, host="linux")
+    plan = vc.build_plan(INVENTORY, vc.explicit_change_set(ROOT, ["tests/test_build_stages.py"]), ROOT, context, files=FILES)
+    check = next(item for item in plan["checks"] if item["id"] == "platform-contracts")
+    assert check["junit"] == [str(tmp_path / "coverage/python/linux-contracts.xml")]
+    assert next(item for item in plan_for(["tests/test_build_stages.py"], host="linux")["checks"] if item["id"] == "platform-contracts")["junit"] == [str(ROOT / "coverage/python/linux-contracts.xml")]
+
+
+# ------------------------------------------------------ review fixes: watchdog
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_an_escaped_grandchild_cannot_extend_the_deadline_and_is_reported_as_leaked(tmp_path, monkeypatch):
+    monkeypatch.setattr(vc, "KILL_GRACE_SECONDS", 1)
+    monkeypatch.setattr(vc, "READER_GRACE_SECONDS", 1)
+    marker = tmp_path / "pid"
+    script = (
+        "import subprocess,sys;"
+        "c=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],start_new_session=True);"
+        f"open({str(marker)!r},'w').write(str(c.pid));print('parent done',flush=True)"
+    )
+    started = time.monotonic()
+    result = vc.run_streaming([sys.executable, "-c", script], cwd=tmp_path, env=os.environ, log_path=tmp_path / "log", timeout=2, stream=io.StringIO())
+    child = int(marker.read_text())
+    try:
+        assert time.monotonic() - started < 12
+        # The entrypoint exited 0 before the deadline: that is not a timeout.
+        assert result["returncode"] == 0 and result["timed_out"] is False and result["leaked_descendants"] is True
+        assert vc._outcome_status(result)[0] == "failed" and "escaped the process group" in vc._outcome_status(result)[1]
+    finally:
+        os.kill(child, 9)
+
+
+def test_a_clean_exit_is_neither_leaked_nor_timed_out(tmp_path):
+    result = vc.run_streaming([sys.executable, "-c", "print(1)"], cwd=tmp_path, env=os.environ, log_path=tmp_path / "log", timeout=30, stream=io.StringIO())
+    assert (result["returncode"], result["timed_out"], result["leaked_descendants"], result["error"]) == (0, False, False, None)
+    assert vc._outcome_status(result) == ("passed", None)
+
+
+def test_the_process_group_is_killed_when_the_run_is_interrupted(tmp_path):
+    import _thread
+
+    marker = tmp_path / "pid"
+    script = f"import os,time;open({str(marker)!r},'w').write(str(os.getpid()));time.sleep(60)"
+    timer = threading.Timer(1.5, _thread.interrupt_main)
+    timer.start()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            vc.run_streaming([sys.executable, "-c", script], cwd=tmp_path, env=os.environ, log_path=tmp_path / "log", timeout=60, stream=io.StringIO())
+    finally:
+        timer.cancel()
+    pid = int(marker.read_text())
+    deadline = time.monotonic() + 10
+    while alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not alive(pid)
+
+
+def test_start_and_log_failures_are_failed_outcomes_not_exceptions(tmp_path):
+    missing = vc.run_streaming([str(tmp_path / "no-such-binary")], cwd=tmp_path, env={}, log_path=tmp_path / "log", timeout=5, stream=io.StringIO())
+    assert "cannot start" in missing["error"] and vc._outcome_status(missing)[0] == "failed"
+    nolog = vc.run_streaming([sys.executable, "-c", "pass"], cwd=tmp_path, env=os.environ, log_path=tmp_path / "absent" / "log", timeout=5, stream=io.StringIO())
+    assert "cannot open the log" in nolog["error"]
+
+
+def test_a_failing_terminal_or_log_does_not_wedge_the_entrypoint(tmp_path):
+    class Broken(io.StringIO):
+        def write(self, text):
+            raise BrokenPipeError
+
+    result = vc.run_streaming([sys.executable, "-c", "print('x'*100000)"], cwd=tmp_path, env=os.environ, log_path=tmp_path / "log", timeout=30, stream=Broken())
+    assert result["returncode"] == 0 and (tmp_path / "log").stat().st_size > 100000
+
+
+def test_runner_oserror_is_a_failed_check_and_interruption_keeps_results(tmp_path, private_output, accepting_junit, monkeypatch):
+    plan = plan_for(["tests/test_build_stages.py"], host="linux")
+    plan["checks"] = [c for c in plan["checks"] if c["id"] in ("shared-guards", "platform-contracts")]
+    output = tmp_path / "a"
+    output.mkdir(mode=0o700)
+
+    def failing(*a, **k):
+        raise OSError("disk exploded")
+
+    monkeypatch.setattr(vc.validation_evidence, "SHORT_TEMP_LIMIT", 500)
+    results, _ = vc.execute(plan, output, {}, include_long=False, runner=failing)
+    assert {r["status"] for r in results} == {"failed"} and "disk exploded" in results[0]["reason"]
+
+    calls = []
+
+    def interrupting(argv, **keywords):
+        calls.append(argv)
+        if len(calls) == 2:
+            raise KeyboardInterrupt
+        keywords["log_path"].write_text("x")
+        return {"returncode": 0, "timed_out": False, "leaked_descendants": False, "seconds": 0, "log": str(keywords["log_path"])}
+
+    second = tmp_path / "b"
+    second.mkdir(mode=0o700)
+    results, _ = vc.execute(plan, second, {}, include_long=False, runner=interrupting)
+    assert [r["status"] for r in results] == ["passed", "failed"] and results[1]["interrupted"] and results[1]["reason"] == "interrupted"
+
+
+def test_main_writes_evidence_and_exits_130_when_interrupted(private_output, accepting_junit, monkeypatch):
+    def interrupting(argv, **keywords):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(vc, "run_streaming", interrupting)
+    code = vc.main(["--files", "docs/testing.md", "--output", str(private_output)], root=ROOT, environ={})
+    summary = json.loads((private_output / "evidence.json").read_text())
+    assert code == 130 and summary["status"] == "failed" and summary["checks"][0]["interrupted"] is True
+
+
+# --------------------------------------------------------- review fixes: editorial
+
+
+def test_markdown_fixtures_under_test_trees_are_not_editorial():
+    fixture = "apps/desktop/test/fixtures/reference_meeting_export.md"
+    plan = plan_for([fixture])
+    assert plan["conservative"] and selected(plan)[0] == BOUNDARIES and fixture in plan["conservative_reasons"]
+    assert vc.editorial("README.md", ["*.md"]) and vc.editorial("docs/a/b.md", ["docs/**"])
+    assert not vc.editorial("apps/desktop/lib/README.md", ["*.md"])
+    assert not plan_for(["docs/testing.md", "CONTRIBUTING.md"])["conservative"]
+
+
+# --------------------------------------------------- review fixes: source identity
+
+
+def test_explicit_mode_does_not_claim_a_clean_tree_and_separates_deleted_from_unreadable(tmp_path):
+    (tmp_path / "locked.txt").write_text("x")
+    (tmp_path / "locked.txt").chmod(0)
+    try:
+        change = vc.explicit_change_set(tmp_path, ["locked.txt", "deleted.txt", "../escape"])
+    finally:
+        (tmp_path / "locked.txt").chmod(0o600)
+    states = {entry["path"]: entry["content"] for entry in change["entries"]}
+    if os.geteuid() != 0:
+        assert states["locked.txt"] == "unreadable" and change["unreadable_paths"] == ["locked.txt"]
+    assert states["deleted.txt"] == "absent" and states["../escape"] == "invalid-path"
+    assert change["dirty"] is None and "not inspected" in change["dirty_unknown"]
+
+
+def test_unreadable_content_makes_a_run_partial(private_output, accepting_junit, monkeypatch, tmp_path):
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
+    monkeypatch.setattr(vc, "_content", lambda path: (None, "unreadable"))
+    code = vc.main(["--files", "docs/testing.md", "--output", str(private_output)], root=ROOT, environ={})
+    summary = json.loads((private_output / "evidence.json").read_text())
+    assert code == 3 and any("unreadable" in reason for reason in summary["not_full_validation_reasons"])
+
+
+def test_a_source_export_inside_another_checkout_is_refused(repository):
+    export = repository / "nested-export"
+    export.mkdir()
+    with pytest.raises(vc.PlanError, match="--files"):
+        vc.collect_git(export, "main")
+    assert vc.collect_git(repository, "main")["mode"] == "git"
+
+
+def test_the_nested_export_is_refused_by_the_cli(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=60)
+    export = export_tree(tmp_path / "inner")
+    completed = subprocess.run(
+        [sys.executable, "-m", "tools.validate_change", "--base", "HEAD", "--plan", "--skip-inventory-check"],
+        cwd=export, capture_output=True, text=True, timeout=120, check=False, env={"PATH": os.environ["PATH"], "GIT_CONFIG_GLOBAL": os.devnull},
+    )
+    assert completed.returncode == 2 and "not the top of a Git checkout" in completed.stderr and "--files" in completed.stderr
+
+
+# ----------------------------------------------------- review fixes: honesty flags
+
+
+def test_skipping_the_inventory_check_is_recorded_and_downgrades_the_run(private_output, accepting_junit, monkeypatch):
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
+    code = vc.main(["--files", "docs/testing.md", "--skip-inventory-check", "--output", str(private_output)], root=ROOT, environ={})
+    summary = json.loads((private_output / "evidence.json").read_text())
+    assert code == 3 and summary["status"] == "partial" and summary["invocation"]["inventory_verified"] is False
+    assert any("--skip-inventory-check" in reason for reason in summary["not_full_validation_reasons"])
+
+
+def test_temp_root_policy_is_enforced_not_just_recorded(tmp_path, capsys, monkeypatch):
+    output = tmp_path / ("deep" * 20)
+    output.mkdir(mode=0o700)
+    with pytest.raises(vc.PlanError, match="Temp-root policy"):
+        vc.child_environment({}, output)
+    monkeypatch.setattr(check_local_validation, "TEMP_PARENT", tmp_path.resolve())
+    monkeypatch.setattr(vc.shutil, "which", lambda name: f"/usr/bin/{name}")
+    code = vc.main(["--files", "docs/testing.md", "--output", str(tmp_path / ("x" * 60))], root=ROOT, environ={})
+    assert code == 2 and "Temp-root policy" in capsys.readouterr().err
+
+
+# ------------------------------------------------------- review fixes: errors
+
+
+def test_input_and_inventory_loading_errors_exit_two(tmp_path, capsys):
+    assert vc.main(["--files", "a", "--plan", "--skip-inventory-check"], root=tmp_path, environ={}) == 2
+    assert "FileNotFoundError" in capsys.readouterr().err
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools/boundary_inventory.json").write_text("{not json")
+    assert vc.main(["--files", "a", "--plan", "--skip-inventory-check"], root=tmp_path, environ={}) == 2
+    assert "JSONDecodeError" in capsys.readouterr().err
+    (tmp_path / "tools/boundary_inventory.json").write_text(json.dumps({"schema": 1, "boundaries": [], "impact_rules": []}))
+    assert vc.main(["--files", "a", "--plan", "--skip-inventory-check"], root=tmp_path, environ={}) == 2
+    assert "KeyError" in capsys.readouterr().err
+    assert vc.main(["--files-from", str(tmp_path / "missing"), "--plan"], root=ROOT, environ={}) == 2
+
+
+def test_results_are_printed_before_evidence_is_written(private_output, accepting_junit, monkeypatch, capsys):
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({}))
+
+    def refuse(summary, destination):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(vc.validation_evidence, "write_summary", refuse)
+    code = vc.main(["--files", "docs/testing.md", "--output", str(private_output)], root=ROOT, environ={})
+    captured = capsys.readouterr()
+    assert code == 2 and "Result: full-validation-passed" in captured.out and "evidence could not be written" in captured.err
+    monkeypatch.setattr(vc, "run_streaming", fake_runner({"check_local_validation": 1}))
+    code = vc.main(["--files", "docs/testing.md", "--output", str(private_output.parent / "again")], root=ROOT, environ={})
+    assert code == 1
+
+
+# ------------------------------------------------------ review fixes: low items
+
+
+def test_reuse_is_observed_again_at_execution(tmp_path):
+    build = tmp_path / "build"
+    plan = plan_for(["native/foresight_native.h"], environ={"FORESIGHT_BUILD_DIR": str(build)}, host="linux")
+    plan["checks"] = [c for c in plan["checks"] if c["id"] == "native-stage"]
+    assert plan["checks"][0]["reuse"][0]["present"] is False
+    (build / "native").mkdir(parents=True)
+    library = build / "native" / "libforesight_native.so"
+    library.write_bytes(b"built after the plan")
+    output = tmp_path / "o"
+    output.mkdir(mode=0o700)
+    vc.validation_evidence.SHORT_TEMP_LIMIT, original = 500, vc.validation_evidence.SHORT_TEMP_LIMIT
+    try:
+        results, _ = vc.execute(plan, output, {}, include_long=True, runner=fake_runner({}))
+    finally:
+        vc.validation_evidence.SHORT_TEMP_LIMIT = original
+    reuse = results[0]["reuse"][0]
+    assert reuse["present"] is False and reuse["at_execution"]["present"] is True
+    assert list(reuse["at_execution"]["sha256"].values()) == [hashlib_sha(b"built after the plan")]
+    record = {"path": str(build), "digest_files": [str(build), str(tmp_path / "gone")]}
+    observed = vc.observe_reuse(dict(record))
+    assert "not a regular file" in observed["digest_skipped"][str(build)] and "FileNotFoundError" in observed["digest_skipped"][str(tmp_path / "gone")]
+    big = tmp_path / "big"
+    big.write_bytes(b"12345")
+    original_limit = vc.DIGEST_LIMIT
+    vc.DIGEST_LIMIT = 2
+    try:
+        assert "larger than" in vc.observe_reuse({"path": str(big), "digest_files": [str(big)]})["digest_skipped"][str(big)]
+    finally:
+        vc.DIGEST_LIMIT = original_limit
+
+
+def hashlib_sha(data):
+    import hashlib
+
+    return hashlib.sha256(data).hexdigest()
+
+
+def test_closure_scan_keeps_unreadable_consumers_and_follows_parts_and_conditional_imports(tmp_path):
+    def write(path, text=""):
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+
+    write("packages/foresight_test_support/lib/a.dart")
+    write("packages/foresight_core/test/lib_test.dart", "import 'package:foresight_test_support/a.dart';\npart 'lib_part.dart';\n")
+    write("packages/foresight_core/test/lib_part.dart", "part of 'lib_test.dart';\n")
+    write("packages/foresight_core/test/conditional_test.dart", "import 'stub.dart'\n    if (dart.library.io) 'package:foresight_test_support/a.dart';\n")
+    write("packages/foresight_core/test/locked_test.dart", "import 'package:foresight_test_support/a.dart';\n")
+    files = boundary_inventory.repo_files(tmp_path)
+    locked = tmp_path / "packages/foresight_core/test/locked_test.dart"
+    locked.chmod(0)
+    errors = []
+    try:
+        consumers = vc.support_consumers(tmp_path, ["packages/foresight_test_support/lib/a.dart"], files, errors)
+    finally:
+        locked.chmod(0o600)
+    assert "packages/foresight_core/test/conditional_test.dart" in consumers
+    assert "packages/foresight_core/test/lib_part.dart" in consumers  # reached through its library
+    if os.geteuid() != 0:
+        assert "packages/foresight_core/test/locked_test.dart" in consumers and any("locked_test.dart" in e for e in errors)
+
+
+def test_closure_read_errors_make_the_plan_conservative(monkeypatch):
+    def unreadable(root, changed, files, errors=None):
+        errors.append("closure scan could not read x.dart (PermissionError); it is treated as a consumer")
+        return []
+
+    monkeypatch.setattr(vc, "support_consumers", unreadable)
+    plan = plan_for(["packages/foresight_test_support/lib/poll.dart"])
+    assert plan["conservative"] and any("closure scan could not read" in reason for reason in plan["conservative_reasons"])
+
+
+def test_deferred_long_gates_are_listed_as_unverified_and_subsumption_is_a_claim(tmp_path, monkeypatch):
+    monkeypatch.setattr(vc.shutil, "which", lambda name: f"/usr/bin/{name}")
+    plan = plan_for([], boundaries=["dart-native-ffi"])
+    boundary = plan["boundaries"][0]
+    assert any(item.startswith("native-stage: deferred - long-running") for item in boundary["unverified"])
+    plan = plan_for(["tools/build.sh"], include_long=True)
+    output = tmp_path / "o"
+    output.mkdir(mode=0o700)
+    monkeypatch.setattr(vc.validation_evidence, "SHORT_TEMP_LIMIT", 500)
+    results, _ = vc.execute(plan, output, {}, include_long=True, runner=fake_runner({}))
+    guards = next(r for r in results if r["id"] == "shared-guards")
+    assert guards["status"] == "subsumed" and guards["reason"].startswith("claimed:") and "not independently verified" in guards["reason"]
+
+
+def test_reproduction_line_quotes_arguments():
+    plan = {"change_set": {"mode": "explicit", "identity_sha256": "0" * 64}}
+    line = vc.reproduction_lines(plan, ["--files", "a file with spaces.txt", "$(touch x)"])[0]
+    assert "'a file with spaces.txt'" in line and "'$(touch x)'" in line
