@@ -14,7 +14,8 @@ def install_media_prerequisite_fixture(root):
     # Only shell sequencing is controlled here. The media prerequisite suite
     # separately exercises its real receipt, signing and inherited selection.
     (root / "tools/run_media_test_gate.py").write_text(
-        "import os,pathlib,sys\n"
+        "import json,os,pathlib,sys\n"
+        "pathlib.Path(os.environ['COMMAND_LOG']+'.media-arguments').write_text(json.dumps(sys.argv[1:]))\n"
         "sys.exit(int(os.getenv('FAIL_MEDIA', '0'))) if os.getenv('FAIL_MEDIA', '0') != '0' else None\n"
         "keys=('WORKER','BUILD_ID','SHA256','CDHASH')\n"
         "path=pathlib.Path(sys.argv[sys.argv.index('--environment-output')+1])\n"
@@ -365,6 +366,40 @@ def test_normal_core_tests_receive_verified_media_identity(dart_gate_tree):
     assert selected == {
         key: "controlled-" + key for key in ("WORKER", "BUILD_ID", "SHA256", "CDHASH")
     }
+
+
+@pytest.mark.parametrize(
+    ("product", "inherited", "reuse_build"),
+    [
+        ("directory", {}, True),
+        ("dangling-link", {}, True),
+        ("absent", {}, False),
+        ("directory", {"FORESIGHT_TEST_MEDIA_WORKER": "/selected/worker"}, False),
+        ("directory", {"FORESIGHT_TEST_MEDIA_CDHASH": ""}, False),
+    ],
+)
+def test_core_selects_restored_build_only_without_inherited_identity(
+    dart_gate_tree, product, inherited, reuse_build
+):
+    import json
+
+    root, environment = dart_gate_tree
+    for key in ("WORKER", "BUILD_ID", "SHA256", "CDHASH"):
+        environment.pop("FORESIGHT_TEST_MEDIA_" + key, None)
+    existing = root / "build/media-worker"
+    if product == "directory":
+        existing.mkdir()
+    elif product == "dangling-link":
+        existing.symlink_to(root / "missing-product")
+    result = invoke_dart_gate(dart_gate_tree, "core", **inherited)
+    assert result.returncode == 0, result.stdout + result.stderr
+    arguments = json.loads(
+        Path(environment["COMMAND_LOG"] + ".media-arguments").read_text()
+    )
+    assert "--reuse-selected" in arguments
+    assert ("--existing-product" in arguments) is reuse_build
+    if reuse_build:
+        assert arguments[arguments.index("--existing-product") + 1] == str(existing)
 
 
 def test_media_prerequisite_failure_blocks_tests_but_not_failure_evidence(

@@ -178,6 +178,86 @@ def test_same_verified_selection_is_reused_without_another_build(tmp_path, produ
     )
 
 
+def test_existing_product_is_verified_without_build_or_fetch(tmp_path, producer):
+    calls, _ = producer
+    selected = gate.prepare_environment(
+        tmp_path / "cache", tmp_path / "first", fetch=False, jobs=2, environment={}
+    )
+    calls.clear()
+    output = tmp_path / "selection"
+    again = gate.prepare_environment(
+        tmp_path / "uncached",
+        output,
+        fetch=True,
+        jobs=2,
+        environment={},
+        reuse_selected=True,
+        existing_product=tmp_path / "first",
+    )
+    assert again == selected
+    assert calls == [("verify", gate.ROOT, tmp_path / "first", "linux-x86_64")]
+    assert not (tmp_path / "uncached").exists()
+    receipt = json.loads((output / "media-test-selection.json").read_text())
+    assert receipt["reused_verified_build"] is True
+    assert receipt["reused_verified_selection"] is False
+
+
+def test_invalid_existing_product_is_refused_without_download_fallback(
+    tmp_path, monkeypatch, producer
+):
+    calls, _ = producer
+
+    def refuse(root, product, target):
+        calls.append(("refused", root, product, target))
+        raise ValueError("media_application_source_mismatch")
+
+    monkeypatch.setattr(gate.media_worker_package, "prepare", refuse)
+    output = tmp_path / "selection"
+    with pytest.raises(ValueError, match="source_mismatch"):
+        gate.prepare_environment(
+            tmp_path / "cache",
+            output,
+            fetch=True,
+            jobs=2,
+            environment={},
+            existing_product=tmp_path / "existing",
+        )
+    assert calls == [("refused", gate.ROOT, tmp_path / "existing", "linux-x86_64")]
+    assert not (output / "media-test-selection.json").exists()
+    assert not (tmp_path / "cache").exists()
+
+
+def test_existing_product_cannot_override_a_partial_inherited_selection(
+    tmp_path, producer
+):
+    calls, _ = producer
+    with pytest.raises(ValueError, match="separate modes"):
+        gate.prepare_environment(
+            tmp_path / "cache",
+            tmp_path / "output",
+            fetch=True,
+            jobs=2,
+            environment={gate.SELECTION_KEYS[0]: "/selected/foresight-media-worker"},
+            reuse_selected=True,
+            existing_product=tmp_path / "existing",
+        )
+    assert calls == []
+
+
+def test_existing_product_path_must_be_absolute(tmp_path, producer):
+    calls, _ = producer
+    with pytest.raises(ValueError, match="absolute"):
+        gate.prepare_environment(
+            tmp_path / "cache",
+            tmp_path / "output",
+            fetch=True,
+            jobs=2,
+            environment={},
+            existing_product=Path("relative"),
+        )
+    assert calls == []
+
+
 def test_stale_selected_identity_is_refused_not_rebuilt(tmp_path, producer):
     calls, _ = producer
     selected = gate.prepare_environment(

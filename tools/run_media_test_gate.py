@@ -59,6 +59,7 @@ def prepare_environment(
     jobs: int,
     environment: dict[str, str],
     reuse_selected: bool = False,
+    existing_product: Path | None = None,
 ) -> dict[str, str]:
     host = (platform.system(), platform.machine())
     target = {
@@ -74,11 +75,21 @@ def prepare_environment(
     if not 1 <= jobs <= 32:
         raise ValueError("Media build jobs must be between 1 and 32")
     reusing = reuse_selected and any(key in environment for key in SELECTION_KEYS)
+    if reusing and existing_product is not None:
+        raise ValueError(
+            "Selected media identity and existing product are separate modes"
+        )
     if reusing:
         worker = Path(environment.get(SELECTION_KEYS[0], ""))
         if not worker.is_absolute() or worker.name != "foresight-media-worker":
             raise ValueError("Invalid selected media worker path")
         product = worker.parent
+        output = build_media_worker.private_directory(output)
+    elif existing_product is not None:
+        if not existing_product.is_absolute():
+            raise ValueError("Existing media product path must be absolute")
+        product = existing_product
+        worker = product / "foresight-media-worker"
         output = build_media_worker.private_directory(output)
     else:
         _build_with_logs(cache, output, fetch=fetch, jobs=jobs)
@@ -113,6 +124,7 @@ def prepare_environment(
                 "cdhash": cdhash,
                 "target": target,
                 "reused_verified_selection": reusing,
+                "reused_verified_build": existing_product is not None,
                 "source_receipt_sha256": prepared.source_receipt_sha256,
                 "uid": os.geteuid(),
                 "scope": "Current-source fixed worker for the following test gate",
@@ -131,6 +143,7 @@ def main() -> None:
     parser.add_argument("--fetch", action="store_true")
     parser.add_argument("--jobs", type=int, default=2)
     parser.add_argument("--reuse-selected", action="store_true")
+    parser.add_argument("--existing-product", type=Path)
     parser.add_argument("--environment-output", type=Path)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -146,6 +159,7 @@ def main() -> None:
         jobs=args.jobs,
         environment=dict(os.environ),
         reuse_selected=args.reuse_selected,
+        existing_product=args.existing_product,
     )
     if args.environment_output is not None:
         # Only four fixed names cross the shell boundary; no eval or sourced text.

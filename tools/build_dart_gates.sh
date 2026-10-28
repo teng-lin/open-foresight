@@ -126,9 +126,18 @@ case "$task_gate" in
       if [[ "$task_worker_ready" == 1 ]]; then
         task_blocked_worker=media
         task_media_environment="$task_checks/media-environment"
+        task_media_args=(--fetch --reuse-selected)
+        # The restored producer already owns a complete pinned worker build.
+        # Verify that exact product offline; never rebuild after a refusal.
+        # Any inherited selection (including a partial one) keeps its existing
+        # strict identity validation instead of being silently replaced.
+        if [[ -z ${FORESIGHT_TEST_MEDIA_WORKER+x}${FORESIGHT_TEST_MEDIA_BUILD_ID+x}${FORESIGHT_TEST_MEDIA_SHA256+x}${FORESIGHT_TEST_MEDIA_CDHASH+x} &&
+              ( -e "$task_source_build/media-worker" || -L "$task_source_build/media-worker" ) ]]; then
+          task_media_args+=(--existing-product "$task_source_build/media-worker")
+        fi
         if task_run "media worker prerequisite" "$task_python" "$task_root/tools/run_media_test_gate.py" \
           --cache "$task_build/media-test-cache" --output "$task_checks/media-worker" \
-          --fetch --reuse-selected --environment-output "$task_media_environment"; then
+          "${task_media_args[@]}" --environment-output "$task_media_environment"; then
           task_media_count=0
           while IFS= read -r -d '' task_media_key && IFS= read -r -d '' task_media_value; do
             case "$task_media_key" in
