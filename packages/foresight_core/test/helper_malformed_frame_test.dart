@@ -63,6 +63,11 @@ class Client {
     );
   }
   final Socket socket;
+
+  /// Errors the fixture swallowed on this socket (a failed flush, a broken
+  /// pipe). A scenario asserts there were none while the peer was active, so a
+  /// swallowed EPIPE cannot turn "half a header then EOF" into a plain EOF.
+  final swallowed = <Object>[];
   final _buffer = <int>[];
   final _request = Completer<void>();
   final _closed = Completer<void>();
@@ -119,7 +124,9 @@ final scenarios = [
           // Flush first: destroying at once may discard the unsent bytes and
           // turn this into a plain EOF. On macOS the bytes arrive either way
           // (probed); the delivery test below pins them for other platforms.
-          await client.socket.flush().catchError((Object _) {});
+          await client.socket.flush().catchError((Object error) {
+            client.swallowed.add(error);
+          });
           client.socket.destroy();
         }),
       );
@@ -309,6 +316,10 @@ class _Peer {
   final String path;
   final ServerSocket listener;
   final clients = <Client>[];
+
+  /// Errors swallowed on any fixture socket so far.
+  List<Object> get swallowed => [for (final c in clients) ...c.swallowed];
+
   // ignore: close_sinks
   final accepted = StreamController<Client>.broadcast();
 
@@ -322,8 +333,12 @@ class _Peer {
     final peer = _Peer._(root, path, listener);
     listener.listen((socket) {
       // EPIPE or ECONNRESET on the fixture's own side is not the client's fault.
-      unawaited(socket.done.catchError((Object _) {}));
       final client = Client(socket, listen: watch);
+      unawaited(
+        socket.done.catchError((Object error) {
+          client.swallowed.add(error);
+        }),
+      );
       peer.clients.add(client);
       peer.accepted.add(client);
       behave?.call(client);
@@ -447,6 +462,8 @@ Future<void> _exercise(Scenario hostile, List<Object> uncaught) async {
         reason: secondReason,
       );
     }
+    // The fixture's own writes succeeded; only teardown may swallow errors.
+    expect(peer.swallowed, isEmpty, reason: hostile.name);
     await _serveReplacement(helper, peer);
     expect(uncaught, isEmpty);
   } catch (error) {

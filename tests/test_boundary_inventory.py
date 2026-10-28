@@ -430,7 +430,7 @@ def test_a_closed_cell_has_no_missing_coverage_and_no_gap_language_in_its_note()
     for item in inventory.load(ROOT)["lifecycle_reconciliation"]:
         if str(item["status"]).startswith("closed"):
             assert not item.get("missing"), item
-            assert not re.search(r"not covered|not exercised|never exercised|never covered|never tested|untested|not proven|unproven|not yet", str(item.get("note", "")), re.I), item
+            assert not inventory.GAP_LANGUAGE.search(str(item.get("note", ""))), item
         elif item["status"] != "open":
             assert item["missing"], item  # a non-closed cell says what is missing
 
@@ -523,7 +523,17 @@ def test_class_and_module_level_skips_in_cited_files_must_declare_a_skip_gate(ex
 
 
 def test_a_closed_cells_note_cannot_hide_a_gap(export, editable):
-    for phrase in ("Not covered: several requests in flight", "this was never exercised", "still untested", "NOT PROVEN for startup"):
+    for phrase in (
+        "Not covered: several requests in flight",
+        "this was never exercised",
+        "still untested",
+        "NOT PROVEN for startup",
+        "Several requests in flight are not tested.",
+        "Does not cover a crash during startup.",
+        "There is no test for a kill before the commit.",
+        "A crash during startup is uncovered.",
+        "Not yet exercised with a recording active.",
+    ):
         def hide(data, phrase=phrase):
             target = cell(data, "Desktop to service", "Crash")
             target.update(status="closed-production", missing=None, note=phrase)
@@ -537,6 +547,16 @@ def test_a_closed_cells_note_cannot_hide_a_gap(export, editable):
 
     editable("tools/boundary_inventory.json", honest)
     assert inventory.verify(export)["lifecycle_cells"] == len(inventory.load(export)["lifecycle_reconciliation"])
+
+
+def test_gap_language_accepts_ordinary_prose_that_merely_contains_similar_words():
+    for fine in (
+        "A request not yet dispatched is resent once.",
+        "Verified by the SIGKILL contract test.",
+        "The test covers the kill; a covered case is listed in evidence.",
+        "Nothing was untouched.",
+    ):
+        assert inventory.GAP_LANGUAGE.search(fine) is None, fine
 
 
 HOSTILE_SCENARIOS = [

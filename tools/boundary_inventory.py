@@ -43,6 +43,14 @@ REQUIRED_RULE_KINDS = (
     "toolchain",
     "orchestration",
 )
+# Text that names something a closed cell does not prove. A closed cell lists no
+# missing coverage, so its note must not either.
+GAP_LANGUAGE = re.compile(
+    r"\bnot (?:covered|exercised|tested|proven)\b|\bnever (?:exercised|covered|tested)\b"
+    r"|\buntested\b|\bunproven\b|\buncovered\b|\bno tests?\b|\b(?:does|do) not cover\b"
+    r"|\bnot yet (?:covered|tested|proven|exercised)\b",
+    re.I,
+)
 _PRUNE = {".git", ".venv", "build", "dist", "coverage", "test-results", ".dart_tool", "node_modules"}
 
 
@@ -513,9 +521,7 @@ def verify(root: Path = ROOT) -> dict[str, Any]:
         if status == "closed-production":
             if cell.get("missing"):
                 fail(f"{label}: a closed cell cannot list missing coverage")
-            gap_language = re.search(
-                r"not covered|not exercised|never exercised|never covered|never tested|untested|not proven|unproven|not yet", str(cell.get("note") or ""), re.I
-            )
+            gap_language = GAP_LANGUAGE.search(str(cell.get("note") or ""))
             if gap_language:
                 fail(f"{label}: a closed cell's note names a gap ({gap_language.group(0)!r}); list it in missing")
             backed = [entry for entry in evidence if "production both" in str(entry.get("sides", "")).lower()]
