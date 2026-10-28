@@ -442,10 +442,19 @@ void main() {
       });
       await eventually(
         () => session.health.nativeReason == NativeDiagnosticHealth.unsettled,
+        label: 'native health unsettled while close is gated',
+        describe: () =>
+            '${_ownerEvidence(owner, nativeReason: session.health.nativeReason)}; '
+            'close completed=$completed',
       );
       actorRelease();
       await owner!.laterAppendEntered.future.timeout(
         const Duration(milliseconds: 350),
+        onTimeout: () => throw TestFailure(
+          'Late summary APPEND did not reach the owner within 350ms of the '
+          'actor release; ${_ownerEvidence(owner, nativeReason: session.health.nativeReason)}; '
+          'close completed=$completed',
+        ),
       );
       expect(owner!.active, 1);
       gate(0);
