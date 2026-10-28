@@ -291,6 +291,48 @@ arguments other than `--stage`, `--suite`, `--platform` and `--build-only`, and
 lists inline `dart test`, `flutter test`, `ctest` or `pytest` invocations in its
 `--json` output for information only.
 
+## Reliability report
+
+`python -m tools.reliability_report DIRECTORY [--minimum-sample N] [--json]
+[--write-baseline FILE [--replace]]` aggregates the `evidence.json` packets in a
+directory (local runs, or artifacts downloaded from CI) into a descriptive report:
+outcomes per check, platform, hosted or local origin, selection (conservative or
+narrowed), cache state (reused, fresh, none) and attempt, plus a rollup per
+boundary. It reuses `ci_stats.failure_rate` and `ci_stats.percentile`.
+
+What it refuses to do is the point:
+
+- **Packets are untrusted.** Only regular files (never symlinks) up to 8 MiB are
+  read, to a depth of 3 directories, with caps of 5000 files, 500 directories and
+  256 MiB in total. Each packet must pass the evidence validation. Rejections are
+  counted by class (not a regular file, too large, unreadable, not JSON, not an
+  evidence summary, invalid, bad timestamp, duplicate, cap) and never shown. A
+  cap that is hit makes the report incomplete: it is printed with that marked, the
+  exit status is 3, and no baseline is written from it.
+- **Nothing a packet wrote is printed.** Groups use check ids and boundary ids from
+  this checkout's inventory and closed vocabularies; an unknown check id is
+  counted as `unknown-check`. No path, user name, host, revision or reason can
+  appear.
+- **No invented rates.** A rate is shown only at or above the minimum sample of
+  eligible (passed or failed) runs, default 20; below it the report says
+  `insufficient sample (n eligible, m needed)` and shows counts alone. The
+  denominator, excluded outcomes and cancellations sit beside every rate.
+  Cancelled checks, checks that never started (setup failed), checks failed
+  because their subsuming check failed, and unavailable, not-run, manual, CI-only,
+  subsumed and planned checks are excluded and counted.
+- **A rerun is not a sample.** Only the first run of a change identity (per check,
+  platform and origin) is an independent sample; later runs are reported
+  separately as qualification repeats, so a green rerun never offsets a failed
+  first run. A packet with no change identity is labelled `unidentified`.
+- **Descriptive, with a fresh baseline.** Plan-only packets execute nothing and are
+  not counted. Local and hosted runs are never mixed. The report states its own
+  window, is a fresh baseline and is never compared with an earlier or frozen
+  window; it makes no improvement, regression or flakiness claim. A check counts
+  toward every boundary it serves, so boundary rows overlap, and boundary names
+  come from the current inventory. The execution mode (source or compiled) is not
+  recorded in a packet, so it is not a dimension. Recurring first-run failures
+  list a check that failed on at least two distinct change identities.
+
 | Overall status | Meaning |
 | --- | --- |
 | `plan-only` | Nothing executed. |

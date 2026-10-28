@@ -2127,6 +2127,7 @@
         "tools/check_local_validation.py",
         "tools/validate_change.py",
         "tools/validation_replay.py",
+        "tools/reliability_report.py",
         "tools/check_entrypoint_parity.py",
         "tools/validation_evidence.py",
         "tools/boundary_inventory.py",
