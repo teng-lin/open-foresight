@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import ssl
 import stat
 import subprocess
 import tarfile
@@ -137,6 +138,10 @@ def transient_source_failure(error: BaseException) -> bool:
         )
     if isinstance(error, socket.gaierror):
         return error.errno == socket.EAI_AGAIN
+    if isinstance(error, ssl.SSLError):
+        # An abrupt TLS close needs a fresh connection. Certificate and other
+        # TLS policy failures remain permanent, regardless of numeric errno.
+        return isinstance(error, ssl.SSLEOFError)
     if isinstance(error, (TimeoutError, http.client.IncompleteRead)):
         return True
     return isinstance(error, OSError) and error.errno in (
