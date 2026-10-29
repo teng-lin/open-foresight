@@ -388,6 +388,14 @@
       ],
       "gate": "core-native",
       "reason": "Explicit fresh native/SQL inputs plus the sibling native_recording_capture_test fixture exercise actual first/resumed raw WAV publication against strict SQL span bounds."
+    },
+    {
+      "path": "packages/foresight_core/test/model_transport_cancellation_ownership_test.dart",
+      "conditions": [
+        "!Platform.isLinux ? 'Requires Linux pipe retirement probe' : false"
+      ],
+      "gate": "platform",
+      "reason": "Linux core and restored-integration suites verify the kernel pipe-retirement barrier; macOS uses its existing closed-stdin fixture."
     }
   ]
 }

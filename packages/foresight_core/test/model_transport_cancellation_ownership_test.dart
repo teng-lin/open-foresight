@@ -97,14 +97,33 @@ Future<File> closedStdinWorker(
   Directory root, {
   bool closesStdin = true,
   Duration startupDelay = Duration.zero,
+  bool retainReader = false,
 }) async {
   final worker = File('${root.path}/transport-worker');
   final python = Platform.environment['FORESIGHT_PYTHON'] ?? '/usr/bin/python3';
   worker.writeAsStringSync('''#!$python
-import os,pathlib,time
+import os,pathlib,sys,time
+probe=None
+if sys.platform=='linux':
+ import select
+ # A write-only descriptor observes POLLERR only when every reader is gone.
+ # Closing fd0 alone cannot exclude a copy inherited by a concurrent fork.
+ probe=os.open('/proc/self/fd/0',os.O_WRONLY|os.O_NONBLOCK|os.O_CLOEXEC)
 time.sleep(${startupDelay.inMilliseconds / 1000})
+retained=os.dup(0) if ${retainReader ? 'True' : 'False'} else None
 ${closesStdin ? 'os.close(0)' : ''}
 ${closesStdin ? "pathlib.Path(__file__+'.stdin-closed').write_text('closed')" : ''}
+if probe is not None and ${closesStdin ? 'True' : 'False'}:
+ poll=select.poll()
+ poll.register(probe,select.POLLOUT)
+ deadline=time.monotonic()+20
+ while time.monotonic()<deadline:
+  if any(events & select.POLLERR for _,events in poll.poll(10)):
+   os.close(probe)
+   probe=None
+   pathlib.Path(__file__+'.readers-retired').touch()
+   break
+  time.sleep(.005)
 time.sleep(20)
 ''');
   final mode = await Process.run('/bin/chmod', ['700', worker.path]);
@@ -127,6 +146,9 @@ Future<OwnedProcess> launchAtClosedStdin(
 }) async {
   final marker = File('${worker.path}.stdin-closed');
   if (marker.existsSync()) marker.deleteSync();
+  final readersRetired = File('${worker.path}.readers-retired');
+  if (readersRetired.existsSync()) readersRetired.deleteSync();
+  final setup = Stopwatch()..start();
   trace.enter('launching');
   final process = await owned.start(
     command.first,
@@ -145,6 +167,16 @@ Future<OwnedProcess> launchAtClosedStdin(
       owner: process,
     );
     trace.enter('stdin-closed');
+    if (Platform.isLinux) {
+      await awaitMarker(
+        readersRetired,
+        timeout: barrier - setup.elapsed,
+        trace: trace,
+        pending: 'kernel confirmation that every configuration reader retired',
+        owner: process,
+      );
+      trace.enter('readers-retired');
+    }
     entered?.call();
     return process;
   } catch (_) {
@@ -165,6 +197,35 @@ GemmaModel controlModel() => GemmaModel(
   4,
   0,
 );
+
+class ObservedConfigurationFailure extends PublicModelFileDownloader {
+  ObservedConfigurationFailure({required super.startWorkerForTesting});
+  Object? failure;
+
+  @override
+  Future<File> download(
+    GemmaModel model,
+    Directory root, {
+    void Function(int, int)? progress,
+    void Function(ModelDownloadPhase)? phase,
+    Uri? sourceForTesting,
+    File? existingFile,
+  }) async {
+    try {
+      return await super.download(
+        model,
+        root,
+        progress: progress,
+        phase: phase,
+        sourceForTesting: sourceForTesting,
+        existingFile: existingFile,
+      );
+    } catch (error) {
+      failure = error;
+      rethrow;
+    }
+  }
+}
 
 class ProcessView implements Process {
   ProcessView(this.process);
@@ -343,13 +404,19 @@ Future<({Duration setup, Duration retirement})> brokenConfigPipeScenario(
   );
 
   final model = controlModel();
+  final downloaders = <ObservedConfigurationFailure>[];
   store.setPreference('modelTerms.fixture/model.revision', 'accepted');
   final owner = ModelAssetAcquisitionCoordinator(
     store: store,
     changed: () {},
     catalog: (_) => [model],
-    createDownloader: () =>
-        PublicModelFileDownloader(startWorkerForTesting: startWorker),
+    createDownloader: () {
+      final downloader = ObservedConfigurationFailure(
+        startWorkerForTesting: startWorker,
+      );
+      downloaders.add(downloader);
+      return downloader;
+    },
     modelRoot: Directory('${root.path}/models'),
     prepareGemma: (_) async {},
   );
@@ -392,6 +459,14 @@ Future<({Duration setup, Duration retirement})> brokenConfigPipeScenario(
       ),
     );
     retirement = clock.elapsed;
+    expect(
+      downloaders.last.failure,
+      isA<SocketException>().having(
+        (error) => error.osError?.errorCode,
+        'real configuration-pipe EPIPE',
+        32,
+      ),
+    );
     expect(owner.restartRequired, isFalse);
     expect(owner.busy, isFalse);
   }
@@ -700,6 +775,42 @@ void main() {
       owned.expectNoneRunning(reason: 'Stalled worker survived its barrier');
       expect(owned.started.single.exitStatus, isNotNull);
     },
+  );
+
+  test(
+    'closed fd0 without kernel retirement cannot admit a configuration write',
+    () async {
+      final root = createTestTempDirectorySync('reader-retirement-');
+      final owned = OwnedProcesses.forTest();
+      final worker = await closedStdinWorker(root, retainReader: true);
+      final trace = PhaseTrace();
+      await expectLater(
+        launchAtClosedStdin(
+          owned,
+          worker,
+          [worker.path],
+          trace,
+          name: 'unconfirmed reader retirement',
+          barrier: const Duration(seconds: 2),
+        ),
+        throwsA(
+          isA<TestFailure>().having(
+            (error) => error.message,
+            'kernel retirement barrier',
+            allOf(
+              contains('${worker.path}.readers-retired'),
+              contains('last observed phase: stdin-closed'),
+            ),
+          ),
+        ),
+      );
+      expect(File('${worker.path}.stdin-closed').existsSync(), isTrue);
+      owned.expectNoneRunning(
+        reason: 'Unconfirmed worker survived its barrier',
+      );
+      expect(owned.started.single.exitStatus, isNotNull);
+    },
+    skip: !Platform.isLinux ? 'Requires Linux pipe retirement probe' : false,
   );
 
   test('closed-stdin worker settles cleanup while paused', () async {
