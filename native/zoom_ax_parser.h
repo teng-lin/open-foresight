@@ -5,6 +5,8 @@
 // every evidence path. All strings are UTF-8 and untrusted source data.
 #include <cstddef>
 #include <cstdint>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -28,6 +30,10 @@ struct AxNode {
   // is alive within one helper process; 0 when unknown.
   uint64_t object_id = 0;
   std::vector<AxNode> children;
+  // Platform extras: AT-SPI state names and attributes. The macOS collector
+  // leaves them empty.
+  std::set<std::string> states;
+  std::map<std::string, std::string> attributes;
 };
 
 struct AxSnapshot {
@@ -39,7 +45,7 @@ struct AxSnapshot {
 };
 
 enum class AudioState { Unknown, Muted, Unmuted };
-enum class Method { ParticipantStatus, CompactTalkingLabel };
+enum class Method { ParticipantStatus, CompactTalkingLabel, AtspiState };
 
 struct Participant {
   std::string name; // display spelling, only trimmed at the edges

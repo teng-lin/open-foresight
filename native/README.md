@@ -135,6 +135,22 @@ worker has exited.
 
 Live speech uses `foresight-whisper-worker`, installed beside the diagnostic Whisper CLI. Recording retains native speech handles across segments; microphone and playback handles share one serialized model worker. The final handle releases the worker at recording shutdown. Explicit external installations can set `FORESIGHT_WHISPER_WORKER`; CLI-only installations retain compatibility with the per-request diagnostic path.
 
+## Zoom speaker observer (Linux)
+
+`zoom_observer_linux` reads Zoom's accessibility tree through libatspi and speaks
+the [observer protocol](../docs/architecture/speaker-observer-protocol.md) on
+stdin/stdout, on top of the protocol core shared with macOS
+(`foresight_zoom_observer_core`). It is built only on Linux and only when `atspi-2`,
+`gio-2.0` and `dbus-1` development files are found; otherwise CMake prints a status line and
+skips the target, so the application and recording build and start without it. The
+Linux parser and `Source` always build on Linux and are tested with synthetic
+fixtures in `tests/fixtures/zoom_observer_linux`; the `zoom_observer_protocol`
+CTest drives the built helper with a scrubbed environment (no session bus or
+display), so it never touches the developer's desktop. Real Zoom trees and
+participant names must not be committed. The shipped rule set enables nothing until
+a recorded Linux Zoom snapshot justifies a rule. See
+[the Linux helper notes](../docs/architecture/zoom-observer-linux.md).
+
 ## Asynchronous application cleanup
 
 Generation and recording use native-owned completion tokens for probe, worker

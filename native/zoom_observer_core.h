@@ -47,6 +47,15 @@ struct SnapshotOutcome {
   // (for example the identity table is full): references and the read are not
   // trustworthy for continuity.
   bool identity_incomplete = false;
+  // The source cannot continue and a restart is the remedy (for example
+  // libatspi lost its registry and cannot reconnect in-process). The core then
+  // writes one terminal `error` frame whose `code` is `reason` (with the id of
+  // the request that caused the read, if any) and exits with `fatal_exit`. A
+  // shutdown that began first wins and the request is answered `cancelled`:
+  // after a stop `stopped` is written and the exit is 0; end of input writes no
+  // further frame and exits 0; a broken stdout writes nothing and exits 3.
+  bool fatal = false;
+  int fatal_exit = 0;
   AxSnapshot snapshot;
 };
 

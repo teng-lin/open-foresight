@@ -1,0 +1,89 @@
+{
+  "description": "The only window has the wrong name: no meeting window.",
+  "expect": {
+    "available": false,
+    "complete": false,
+    "participants": [],
+    "reason": "no_meeting_window",
+    "speakers": []
+  },
+  "rules": {
+    "roster": {
+      "container": {
+        "name": "Roster",
+        "role": "synthetic-roster"
+      },
+      "enabled": true,
+      "item_role": "synthetic-person",
+      "self_attribute": "me",
+      "self_value": "true",
+      "window": {
+        "name": "Synthetic Meeting",
+        "role": "synthetic-window"
+      }
+    },
+    "speaker": {
+      "enabled": true,
+      "state": "synthetic-speaking"
+    }
+  },
+  "snapshot": {
+    "root": {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 4,
+                  "role": "synthetic-person",
+                  "states": [
+                    "synthetic-speaking"
+                  ],
+                  "value": "Synthetic Decoy"
+                }
+              ],
+              "description": "",
+              "object_id": 3,
+              "role": "synthetic-toolbar",
+              "value": "Controls"
+            },
+            {
+              "children": [
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 6,
+                  "role": "synthetic-person",
+                  "value": "Synthetic Alpha"
+                },
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 7,
+                  "role": "synthetic-person",
+                  "value": "Synthetic Beta"
+                }
+              ],
+              "description": "",
+              "object_id": 5,
+              "role": "synthetic-roster",
+              "value": "Roster"
+            }
+          ],
+          "description": "",
+          "object_id": 2,
+          "role": "synthetic-window",
+          "value": "Other Window"
+        }
+      ],
+      "description": "",
+      "object_id": 1,
+      "role": "synthetic-application",
+      "value": "Synthetic App"
+    },
+    "truncated": false
+  }
+}

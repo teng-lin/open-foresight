@@ -1,0 +1,84 @@
+{
+  "description": "The shipped state: no validated rule, so no tree is interpreted.",
+  "expect": {
+    "available": false,
+    "complete": false,
+    "participants": [],
+    "reason": "no_validated_rules",
+    "speakers": []
+  },
+  "rules": {
+    "roster": {
+      "container": {
+        "name": "Roster",
+        "role": "synthetic-roster"
+      },
+      "enabled": false,
+      "item_role": "synthetic-person",
+      "self_attribute": "me",
+      "self_value": "true",
+      "window": {
+        "role": "synthetic-window"
+      }
+    },
+    "speaker": {
+      "enabled": false,
+      "state": "synthetic-speaking"
+    }
+  },
+  "snapshot": {
+    "root": {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 4,
+                  "role": "synthetic-person",
+                  "states": [
+                    "synthetic-speaking"
+                  ],
+                  "value": "Synthetic Decoy"
+                }
+              ],
+              "description": "",
+              "object_id": 3,
+              "role": "synthetic-toolbar",
+              "value": "Controls"
+            },
+            {
+              "children": [
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 6,
+                  "role": "synthetic-person",
+                  "states": [
+                    "synthetic-speaking"
+                  ],
+                  "value": "Synthetic Alpha"
+                }
+              ],
+              "description": "",
+              "object_id": 5,
+              "role": "synthetic-roster",
+              "value": "Roster"
+            }
+          ],
+          "description": "",
+          "object_id": 2,
+          "role": "synthetic-window",
+          "value": "Synthetic Meeting"
+        }
+      ],
+      "description": "",
+      "object_id": 1,
+      "role": "synthetic-application",
+      "value": "Synthetic App"
+    },
+    "truncated": false
+  }
+}

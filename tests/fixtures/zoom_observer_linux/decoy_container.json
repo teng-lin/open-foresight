@@ -1,0 +1,119 @@
+{
+  "description": "A container with the right role but the wrong name is not the roster.",
+  "expect": {
+    "available": true,
+    "complete": true,
+    "participants": [
+      {
+        "name": "Synthetic Alpha",
+        "self": false
+      },
+      {
+        "name": "Synthetic Beta",
+        "self": false
+      }
+    ],
+    "reason": "",
+    "speakers": []
+  },
+  "rules": {
+    "roster": {
+      "container": {
+        "name": "Roster",
+        "role": "synthetic-roster"
+      },
+      "enabled": true,
+      "item_role": "synthetic-person",
+      "self_attribute": "me",
+      "self_value": "true",
+      "window": {
+        "role": "synthetic-window"
+      }
+    },
+    "speaker": {
+      "enabled": true,
+      "state": "synthetic-speaking"
+    }
+  },
+  "snapshot": {
+    "root": {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 910,
+                  "role": "synthetic-person",
+                  "value": "Decoy 0"
+                },
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 911,
+                  "role": "synthetic-person",
+                  "value": "Decoy 1"
+                }
+              ],
+              "description": "",
+              "object_id": 900,
+              "role": "synthetic-roster",
+              "value": "Decoy"
+            },
+            {
+              "children": [
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 4,
+                  "role": "synthetic-person",
+                  "states": [
+                    "synthetic-speaking"
+                  ],
+                  "value": "Synthetic Decoy"
+                }
+              ],
+              "description": "",
+              "object_id": 3,
+              "role": "synthetic-toolbar",
+              "value": "Controls"
+            },
+            {
+              "children": [
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 6,
+                  "role": "synthetic-person",
+                  "value": "Synthetic Alpha"
+                },
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 7,
+                  "role": "synthetic-person",
+                  "value": "Synthetic Beta"
+                }
+              ],
+              "description": "",
+              "object_id": 5,
+              "role": "synthetic-roster",
+              "value": "Roster"
+            }
+          ],
+          "description": "",
+          "object_id": 2,
+          "role": "synthetic-window",
+          "value": "Synthetic Meeting"
+        }
+      ],
+      "description": "",
+      "object_id": 1,
+      "role": "synthetic-application",
+      "value": "Synthetic App"
+    },
+    "truncated": false
+  }
+}
