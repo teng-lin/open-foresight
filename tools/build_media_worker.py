@@ -73,6 +73,7 @@ def private_directory(path: Path) -> Path:
 def checked_archive(
     cache: Path, name: str, url: str, expected: str, fetch: bool
 ) -> Path:
+    """Verify pinned bytes, restarting only incomplete or transient transfers."""
     archive = cache / (name + ".tar.gz")
     if not archive.exists() and fetch:
         if not url.startswith("https://"):
@@ -92,12 +93,17 @@ def checked_archive(
                     with urllib.request.urlopen(url, timeout=remaining) as response:  # noqa: S310 - reviewed hash-pinned HTTPS URLs
                         if not response.url.startswith("https://"):
                             raise ValueError("source download redirected outside HTTPS")
+                        declared_length = response.length
                         total = 0
                         while block := response.read(65536):
                             total += len(block)
                             if total > 64 * 1024 * 1024:
                                 raise ValueError("source archive exceeds size limit")
                             output.write(block)
+                        # Bounded HTTPResponse.read() can silently reach EOF
+                        # with bytes still owed by Content-Length.
+                        if declared_length is not None and total < declared_length:
+                            raise http.client.IncompleteRead(b"", declared_length - total)
                 if sha(partial) != expected:
                     raise ValueError(f"source checksum mismatch: {name}")
                 partial.replace(archive)
