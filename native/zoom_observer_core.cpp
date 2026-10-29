@@ -13,6 +13,7 @@
 #include <deque>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <poll.h>
 #include <sys/stat.h>
 #include <thread>
@@ -641,6 +642,13 @@ public:
     SnapshotOutcome outcome = source_.snapshot(cancelled());
     if (shared_.cancel)
       return false;
+    if (outcome.fatal) {
+      // No session is started: the caller reports the fatal error against this
+      // request instead of `started`.
+      fatal_ = outcome;
+      fatal_id_ = request.id;
+      return true;
+    }
     session_ = request.session;
     poll_ms_ = request.poll_ms;
     started_ = true;
@@ -662,7 +670,23 @@ public:
       return; // a read abandoned for shutdown reports nothing
     }
     publish(outcome);
+    if (outcome.fatal) {
+      fatal_ = outcome; // the unavailable interval is out; now end the session
+      return;
+    }
     schedule(begin);
+  }
+
+  // A fatal source outcome waiting to end the process, if any.
+  const std::optional<SnapshotOutcome> &fatal() const {
+    return fatal_;
+  }
+  const json &fatal_id() const {
+    return fatal_id_;
+  }
+  void clear_fatal() {
+    fatal_.reset();
+    fatal_id_ = nullptr;
   }
 
 private:
@@ -769,6 +793,8 @@ private:
   const ObserverConfig &config_;
   RefTable refs_;
   std::map<uint64_t, std::string> windows_;
+  std::optional<SnapshotOutcome> fatal_;
+  json fatal_id_;
   std::string session_;
   std::string reason_;
   uint64_t since_ms_ = 0;
@@ -850,6 +876,30 @@ int run_observer(Source &source, const ObserverConfig &config) {
                           {"message", "request cancelled by shutdown"}});
     return true;
   };
+  // Ends the process on a source's fatal outcome: one terminal error frame,
+  // then the source's exit status (3 if that frame could not be written).
+  auto finish_fatal = [&](const SnapshotOutcome &outcome, const json &id) {
+    if (shared.cancel) {
+      // Shutdown began first (stop, end of input, a broken stdout): it wins.
+      // The pending Stop is answered and the exit is the clean one.
+      session.clear_fatal();
+      if (!id.is_null())
+        writer.emit("error", {{"id", id},
+                              {"code", "cancelled"},
+                              {"message", "request cancelled by shutdown"}});
+      return;
+    }
+    json frame = {{"code", outcome.reason}, {"message", "fatal source error"}};
+    if (!id.is_null())
+      frame["id"] = id;
+    exit_code =
+        writer.emit("error", std::move(frame), true) == Writer::Result::Failed
+            ? kExitOutput
+            : outcome.fatal_exit;
+    if (config.after_closing_frame)
+      config.after_closing_frame();
+    running = false;
+  };
   while (running) {
     Request request;
     bool have = false;
@@ -879,6 +929,10 @@ int run_observer(Source &source, const ObserverConfig &config) {
             source.snapshot([&] { return shared.cancel.load(); });
         if (refuse_if_cancelled(request))
           break;
+        if (outcome.fatal) {
+          finish_fatal(outcome, request.id);
+          break;
+        }
         Capabilities caps = describe_capabilities(outcome, config.parse);
         writer.emit("capabilities", capabilities_frame(request, caps));
         break;
@@ -928,6 +982,8 @@ int run_observer(Source &source, const ObserverConfig &config) {
     if (running && !shared.cancel && session.started() &&
         Clock::now() >= session.next_poll())
       session.poll();
+    if (running && session.fatal())
+      finish_fatal(*session.fatal(), session.fatal_id());
   }
   {
     std::lock_guard<std::mutex> lock(shared.mutex);
