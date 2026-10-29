@@ -1,0 +1,39 @@
+{
+  "description": "No meeting window at all, read complete: no meeting.",
+  "expect": {
+    "available": false,
+    "complete": false,
+    "participants": [],
+    "reason": "no_meeting_window",
+    "speakers": []
+  },
+  "rules": {
+    "roster": {
+      "container": {
+        "name": "Roster",
+        "role": "synthetic-roster"
+      },
+      "enabled": true,
+      "item_role": "synthetic-person",
+      "self_attribute": "me",
+      "self_value": "true",
+      "window": {
+        "role": "synthetic-window"
+      }
+    },
+    "speaker": {
+      "enabled": true,
+      "state": "synthetic-speaking"
+    }
+  },
+  "snapshot": {
+    "root": {
+      "children": [],
+      "description": "",
+      "object_id": 1,
+      "role": "synthetic-application",
+      "value": "Synthetic App"
+    },
+    "truncated": false
+  }
+}

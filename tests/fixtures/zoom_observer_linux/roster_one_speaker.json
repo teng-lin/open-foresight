@@ -1,0 +1,116 @@
+{
+  "description": "Names keep punctuation, equal names with different ids stay separate, the speaking decoy outside the roster is ignored.",
+  "expect": {
+    "available": true,
+    "complete": true,
+    "participants": [
+      {
+        "name": "Synthetic Alpha",
+        "self": true
+      },
+      {
+        "name": "Beta, Synthetic Jr.",
+        "self": false
+      },
+      {
+        "name": "Synthetic Alpha",
+        "self": false
+      }
+    ],
+    "reason": "",
+    "speakers": [
+      1
+    ]
+  },
+  "rules": {
+    "roster": {
+      "container": {
+        "name": "Roster",
+        "role": "synthetic-roster"
+      },
+      "enabled": true,
+      "item_role": "synthetic-person",
+      "self_attribute": "me",
+      "self_value": "true",
+      "window": {
+        "role": "synthetic-window"
+      }
+    },
+    "speaker": {
+      "enabled": true,
+      "state": "synthetic-speaking"
+    }
+  },
+  "snapshot": {
+    "root": {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 4,
+                  "role": "synthetic-person",
+                  "states": [
+                    "synthetic-speaking"
+                  ],
+                  "value": "Synthetic Decoy"
+                }
+              ],
+              "description": "",
+              "object_id": 3,
+              "role": "synthetic-toolbar",
+              "value": "Controls"
+            },
+            {
+              "children": [
+                {
+                  "attributes": {
+                    "me": "true"
+                  },
+                  "children": [],
+                  "description": "",
+                  "object_id": 6,
+                  "role": "synthetic-person",
+                  "value": "Synthetic Alpha"
+                },
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 7,
+                  "role": "synthetic-person",
+                  "states": [
+                    "synthetic-speaking"
+                  ],
+                  "value": "Beta, Synthetic Jr."
+                },
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 8,
+                  "role": "synthetic-person",
+                  "value": "Synthetic Alpha"
+                }
+              ],
+              "description": "",
+              "object_id": 5,
+              "role": "synthetic-roster",
+              "value": "Roster"
+            }
+          ],
+          "description": "",
+          "object_id": 2,
+          "role": "synthetic-window",
+          "value": "Synthetic Meeting"
+        }
+      ],
+      "description": "",
+      "object_id": 1,
+      "role": "synthetic-application",
+      "value": "Synthetic App"
+    },
+    "truncated": false
+  }
+}

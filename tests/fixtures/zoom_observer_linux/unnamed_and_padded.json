@@ -1,0 +1,93 @@
+{
+  "description": "An invisible-only name is dropped (incomplete); edge spaces, including no-break space, are trimmed.",
+  "expect": {
+    "available": true,
+    "complete": false,
+    "participants": [
+      {
+        "name": "Synthetic Beta",
+        "self": false
+      }
+    ],
+    "reason": "",
+    "speakers": []
+  },
+  "rules": {
+    "roster": {
+      "container": {
+        "name": "Roster",
+        "role": "synthetic-roster"
+      },
+      "enabled": true,
+      "item_role": "synthetic-person",
+      "self_attribute": "me",
+      "self_value": "true",
+      "window": {
+        "role": "synthetic-window"
+      }
+    },
+    "speaker": {
+      "enabled": true,
+      "state": "synthetic-speaking"
+    }
+  },
+  "snapshot": {
+    "root": {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 4,
+                  "role": "synthetic-person",
+                  "states": [
+                    "synthetic-speaking"
+                  ],
+                  "value": "Synthetic Decoy"
+                }
+              ],
+              "description": "",
+              "object_id": 3,
+              "role": "synthetic-toolbar",
+              "value": "Controls"
+            },
+            {
+              "children": [
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 6,
+                  "role": "synthetic-person",
+                  "value": "\u200b\u200d "
+                },
+                {
+                  "children": [],
+                  "description": "",
+                  "object_id": 7,
+                  "role": "synthetic-person",
+                  "value": "\u00a0 Synthetic Beta \u00a0"
+                }
+              ],
+              "description": "",
+              "object_id": 5,
+              "role": "synthetic-roster",
+              "value": "Roster"
+            }
+          ],
+          "description": "",
+          "object_id": 2,
+          "role": "synthetic-window",
+          "value": "Synthetic Meeting"
+        }
+      ],
+      "description": "",
+      "object_id": 1,
+      "role": "synthetic-application",
+      "value": "Synthetic App"
+    },
+    "truncated": false
+  }
+}

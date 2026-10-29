@@ -1,0 +1,39 @@
+{
+  "description": "A truncated read with no evidence is a failed read, never no meeting.",
+  "expect": {
+    "available": false,
+    "complete": false,
+    "participants": [],
+    "reason": "incomplete_read",
+    "speakers": []
+  },
+  "rules": {
+    "roster": {
+      "container": {
+        "name": "Roster",
+        "role": "synthetic-roster"
+      },
+      "enabled": true,
+      "item_role": "synthetic-person",
+      "self_attribute": "me",
+      "self_value": "true",
+      "window": {
+        "role": "synthetic-window"
+      }
+    },
+    "speaker": {
+      "enabled": true,
+      "state": "synthetic-speaking"
+    }
+  },
+  "snapshot": {
+    "root": {
+      "children": [],
+      "description": "",
+      "object_id": 1,
+      "role": "synthetic-application",
+      "value": "Synthetic App"
+    },
+    "truncated": true
+  }
+}

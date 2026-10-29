@@ -46,6 +46,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(foresight_native PRIVATE PkgConfig::FORESIGHT_PIPEWIRE)
   target_compile_definitions(foresight_native PRIVATE FORESIGHT_HAVE_PIPEWIRE=1)
 endif()
+# The platform-neutral Zoom speaker observer protocol core is shared by the macOS
+# and Linux helpers. It links no parser and no OS framework: a platform supplies
+# its own parse function and Source.
+if(APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_library(foresight_zoom_observer_core STATIC zoom_observer_core.cpp)
+  target_compile_features(foresight_zoom_observer_core PUBLIC cxx_std_20)
+  target_include_directories(foresight_zoom_observer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(foresight_zoom_observer_core PUBLIC Threads::Threads nlohmann_json::nlohmann_json)
+endif()
 if(APPLE)
   set_target_properties(foresight_native PROPERTIES OBJCXX_STANDARD 20)
   target_sources(foresight_native PRIVATE macos_audio.mm macos_pcm_output.mm)
@@ -66,12 +75,6 @@ if(APPLE)
   target_compile_options(foresight_zoom_ax_parser PRIVATE -fobjc-arc)
   target_link_libraries(foresight_zoom_ax_parser PUBLIC "-framework Foundation")
   target_include_directories(foresight_zoom_ax_parser PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-  # The protocol core needs no parser or OS framework: a platform supplies its
-  # own parse function through ObserverConfig.
-  add_library(foresight_zoom_observer_core STATIC zoom_observer_core.cpp)
-  target_compile_features(foresight_zoom_observer_core PUBLIC cxx_std_20)
-  target_include_directories(foresight_zoom_observer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(foresight_zoom_observer_core PUBLIC Threads::Threads nlohmann_json::nlohmann_json)
   add_library(foresight_zoom_mac_source STATIC zoom_collector.cpp zoom_mac_source.cpp)
   target_compile_features(foresight_zoom_mac_source PUBLIC cxx_std_20)
   target_link_libraries(foresight_zoom_mac_source PUBLIC foresight_zoom_observer_core foresight_zoom_ax_parser)
@@ -87,6 +90,29 @@ if(APPLE)
   target_link_libraries(zoom_observer_macos PRIVATE foresight_zoom_ax_convert foresight_zoom_mac_source "-framework AppKit" "-framework ApplicationServices" "-framework Foundation")
   target_link_options(zoom_observer_macos PRIVATE "LINKER:-sectcreate,__TEXT,__info_plist,${CMAKE_CURRENT_SOURCE_DIR}/zoom_observer_macos_info.plist")
   install(TARGETS zoom_observer_macos RUNTIME DESTINATION bin)
+endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # Zoom speaker observer (docs/architecture/zoom-observer-linux.md). The parser
+  # and Source are plain C++ and always build on Linux so their tests run. The
+  # AT-SPI reader is optional: without libatspi and GIO headers it is skipped and
+  # neither the application nor recording is affected.
+  add_library(foresight_zoom_linux STATIC zoom_atspi_parser.cpp zoom_atspi_collect.cpp zoom_linux_proc.cpp zoom_linux_source.cpp)
+  target_compile_features(foresight_zoom_linux PUBLIC cxx_std_20)
+  target_link_libraries(foresight_zoom_linux PUBLIC foresight_zoom_observer_core)
+  pkg_check_modules(FORESIGHT_ATSPI QUIET IMPORTED_TARGET atspi-2 gio-2.0)
+  option(FORESIGHT_REQUIRE_ATSPI
+    "Fail configuration when libatspi/GIO development files are missing instead of skipping zoom_observer_linux" OFF)
+  if(FORESIGHT_ATSPI_FOUND)
+    add_executable(zoom_observer_linux zoom_observer_linux.cpp)
+    target_compile_options(zoom_observer_linux PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(zoom_observer_linux PRIVATE foresight_zoom_linux PkgConfig::FORESIGHT_ATSPI)
+    install(TARGETS zoom_observer_linux RUNTIME DESTINATION bin)
+  elseif(FORESIGHT_REQUIRE_ATSPI)
+    message(FATAL_ERROR "FORESIGHT_REQUIRE_ATSPI is ON but atspi-2 and gio-2.0 development files "
+      "were not found (Debian/Ubuntu libatspi2.0-dev and libglib2.0-dev)")
+  else()
+    message(STATUS "libatspi/GIO development files not found: zoom_observer_linux is skipped")
+  endif()
 endif()
 install(TARGETS foresight_native LIBRARY DESTINATION lib)
 install(FILES foresight_native.h diagnostic_queue.h DESTINATION include)
@@ -612,6 +638,65 @@ if(BUILD_TESTING)
     add_test(NAME native_process_identity COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/test_native_process.py
       $<TARGET_FILE:foresight_native> $<TARGET_FILE:ForesightHelper>)
+  endif()
+endif()
+
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_executable(zoom_atspi_parser_test ../tests/native/zoom_atspi_parser.cpp)
+  target_link_libraries(zoom_atspi_parser_test PRIVATE foresight_zoom_linux)
+  add_test(NAME zoom_atspi_parser COMMAND zoom_atspi_parser_test
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures/zoom_observer_linux")
+  add_executable(zoom_linux_proc_test ../tests/native/zoom_linux_proc.cpp)
+  target_link_libraries(zoom_linux_proc_test PRIVATE foresight_zoom_linux)
+  add_test(NAME zoom_linux_proc COMMAND zoom_linux_proc_test)
+  add_executable(zoom_linux_source_test ../tests/native/zoom_linux_source.cpp)
+  target_link_libraries(zoom_linux_source_test PRIVATE foresight_zoom_linux)
+  add_test(NAME zoom_linux_source COMMAND zoom_linux_source_test)
+  add_executable(zoom_atspi_collect_test ../tests/native/zoom_atspi_collect.cpp)
+  target_link_libraries(zoom_atspi_collect_test PRIVATE foresight_zoom_linux)
+  add_test(NAME zoom_atspi_collect COMMAND zoom_atspi_collect_test)
+  # The platform-neutral core suite, with a Linux-only stand-in for the macOS
+  # parser (see the header of zoom_core_test_parser.cpp).
+  add_executable(zoom_observer_core_test ../tests/native/zoom_observer_core.cpp
+    ../tests/native/zoom_core_test_parser.cpp)
+  target_compile_features(zoom_observer_core_test PRIVATE cxx_std_20)
+  target_link_libraries(zoom_observer_core_test PRIVATE foresight_zoom_observer_core
+    nlohmann_json::nlohmann_json)
+  add_test(NAME zoom_observer_core COMMAND zoom_observer_core_test)
+  set_tests_properties(zoom_observer_core PROPERTIES TIMEOUT 60)
+  add_executable(zoom_linux_core_test ../tests/native/zoom_linux_core.cpp)
+  target_link_libraries(zoom_linux_core_test PRIVATE foresight_zoom_linux)
+  add_test(NAME zoom_linux_core COMMAND zoom_linux_core_test)
+  set_tests_properties(zoom_atspi_parser zoom_atspi_collect zoom_linux_proc zoom_linux_source zoom_linux_core PROPERTIES TIMEOUT 120)
+  # A skipped helper must be visible in CTest output, not silent: this reports
+  # "Skipped" (exit 77) when the helper was not built and passes when it was.
+  if(TARGET zoom_observer_linux)
+    add_test(NAME zoom_observer_linux_built COMMAND ${CMAKE_COMMAND} -E true)
+  else()
+    add_test(NAME zoom_observer_linux_built COMMAND /bin/sh -c "echo 'libatspi/GIO missing: zoom_observer_linux was not built' >&2; exit 77")
+    set_tests_properties(zoom_observer_linux_built PROPERTIES SKIP_RETURN_CODE 77)
+  endif()
+  if(TARGET zoom_observer_linux)
+    # The same helper, told to look for a process no machine runs, so a Zoom on
+    # the developer's machine cannot change what the bus test observes.
+    add_executable(zoom_observer_linux_absent zoom_observer_linux.cpp)
+    target_compile_definitions(zoom_observer_linux_absent PRIVATE
+      FORESIGHT_ZOOM_OBSERVER_EXECUTABLE="zoom-observer-ctest-absent")
+    target_link_libraries(zoom_observer_linux_absent PRIVATE foresight_zoom_linux PkgConfig::FORESIGHT_ATSPI)
+    add_executable(zoom_observer_linux_protocol_test ../tests/native/zoom_observer_protocol.cpp)
+    target_compile_features(zoom_observer_linux_protocol_test PRIVATE cxx_std_20)
+    target_link_libraries(zoom_observer_linux_protocol_test PRIVATE nlohmann_json::nlohmann_json)
+    add_test(NAME zoom_observer_protocol COMMAND zoom_observer_linux_protocol_test
+      "$<TARGET_FILE:zoom_observer_linux>" "${CMAKE_CURRENT_SOURCE_DIR}/zoom_observer_linux.cpp")
+    set_tests_properties(zoom_observer_protocol PROPERTIES TIMEOUT 120)
+    # Needs dbus-daemon; exits 77 (reported as skipped) without it.
+    add_executable(zoom_observer_bus_test ../tests/native/zoom_observer_bus.cpp)
+    target_compile_features(zoom_observer_bus_test PRIVATE cxx_std_20)
+    target_link_libraries(zoom_observer_bus_test PRIVATE nlohmann_json::nlohmann_json
+      PkgConfig::FORESIGHT_ATSPI Threads::Threads)
+    add_test(NAME zoom_observer_bus COMMAND zoom_observer_bus_test
+      "$<TARGET_FILE:zoom_observer_linux_absent>")
+    set_tests_properties(zoom_observer_bus PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
   endif()
 endif()
 
