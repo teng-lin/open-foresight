@@ -18,11 +18,12 @@ active speaker. See [Linux live feasibility](zoom-speaker-attribution.md#linux-l
 | `native/zoom_ax_parser.h` | Shared snapshot types. Linux uses `AxNode::states` and `attributes` (empty on macOS) and `Method::AtspiState` (wire token `atspi_state`). |
 | `native/zoom_atspi_parser.{h,cpp}` | Pure Linux parser. Snapshot and data-only rules in, participants and speakers out. No AT-SPI, no desktop. |
 | `native/zoom_linux_source.{h,cpp}` | The Linux `Source`: the gate order over a `LinuxDesktop` interface, plus the element-identity registry. Tested with fakes. |
-| `native/zoom_observer_linux.cpp` | Only the libatspi/GDBus bindings (`AtspiDesktop`) and `main`. |
+| `native/zoom_atspi_desktop.{h,cpp}` | The libatspi/GDBus bindings (`AtspiDesktop`): bus status, `setup`, process scan, libatspi lifecycle, the node and registry adapters. |
+| `native/zoom_observer_linux.cpp` | Only `main`. |
 | `tests/fixtures/zoom_observer_linux/` | Synthetic fixtures with made-up roles and names. Never real trees or names. |
 | `native/zoom_atspi_collect.{h,cpp}` | The bounded traversal behind a thin node interface, so limits, failures and cancellation run against a fake tree. |
 | `tests/native/zoom_atspi_parser.cpp`, `zoom_atspi_collect.cpp`, `zoom_linux_source.cpp`, `zoom_linux_core.cpp`, `zoom_observer_core.cpp` (shared, with the Linux-only stand-in parser `zoom_core_test_parser.cpp`) | CTests `zoom_atspi_parser`, `zoom_atspi_collect`, `zoom_linux_source`, `zoom_linux_core`, `zoom_observer_core`. |
-| `tests/native/zoom_observer_protocol.cpp`, `zoom_observer_bus.cpp`, `zoom_helper_harness.h` | CTests that drive the built helper: `zoom_observer_protocol` (scrubbed environment) and `zoom_observer_bus` (a private `dbus-daemon --session` with a fake `org.a11y.Bus`; skipped without dbus-daemon). `zoom_observer_linux_built` reports Skipped when the helper was not built. |
+| `tests/native/zoom_observer_protocol.cpp`, `zoom_observer_bus.cpp`, `zoom_helper_harness.h` | CTests that drive the built helper: `zoom_observer_protocol` (scrubbed environment) and `zoom_observer_bus` (a private `dbus-daemon --session` with a fake `org.a11y.Bus` and a fake registry, driving `zoom_observer_bus_helper`, a test-only `main` with synthetic rules and a controllable process name; skipped without dbus-daemon). `zoom_observer_linux_built` reports Skipped when the helper was not built. |
 
 The AT-SPI reader builds only on Linux and only when pkg-config finds `atspi-2`
 and `gio-2.0`; otherwise CMake skips it and its protocol test, and the parser,
@@ -31,55 +32,82 @@ and `gio-2.0`; otherwise CMake skips it and its protocol test, and the parser,
 ## Gate order (`LinuxSource`)
 
 Capability inspection and every poll walk the same gates, read-only. No D-Bus call
-activates a service (`NO_AUTO_START`) except the one in `setup`:
+activates a service (`NO_AUTO_START`), `setup` included. libatspi is not initialized by
+the first six gates, only by gate 7, and only when a validated rule needs a read.
 
-1. Session bus: `DBUS_SESSION_BUS_ADDRESS`, else `$XDG_RUNTIME_DIR/bus`. Missing is
+1. Session bus: `DBUS_SESSION_BUS_ADDRESS` restricted to `unix:` transports (`autolaunch:`
+   and `unixexec:` entries are dropped), else `$XDG_RUNTIME_DIR/bus`. Missing is
    `unavailable`/`no_session_bus`; unreachable or timing out (1 s, asynchronous connect)
    `session_bus_unreachable`. The helper never lets D-Bus autolaunch a bus.
-2. Accessibility bus: `NameHasOwner("org.a11y.Bus")`. An error is
-   `session_bus_unreachable`; absent is `needs_setup`/`atspi_bus_absent`, or
-   `atspi_bus_lost` if libatspi was already connected.
+2. Accessibility bus: `GetNameOwner("org.a11y.Bus")`. A failure other than "no owner" is
+   `session_bus_unreachable`; no owner is `needs_setup`/`atspi_bus_absent`. If libatspi was
+   already connected, no owner, or an owner different from the one it connected to, is
+   `atspi_bus_lost` (see below).
 3. `org.a11y.Status.IsEnabled`. Unreadable or not a boolean is `atspi_status_unreadable`;
    false is `needs_setup`/`accessibility_disabled`, `permission_denied`/`setup_not_effective`
    after a `setup` that did not turn it on, and `permission_denied`/`accessibility_lost`
-   after a grant that was seen and then lost.
-4. libatspi: the address comes from a bounded `org.a11y.Bus.GetAddress` call and is handed
-   over through `AT_SPI_BUS_ADDRESS`; `atspi_init()` is checked (2 means unreachable, and
-   asking libatspi for the desktop after that would abort the process). A failure is
-   `unavailable`/`atspi_unreachable` with `atspi_exit()` and a retry after a growing delay
-   (1 s doubling to 60 s). A registry that disappears later is `atspi_bus_lost` for one poll,
-   then libatspi is re-initialized. The first attempt runs before the protocol threads start,
-   because `setenv` races other threads' `getenv`; a later re-init still calls it from the
-   polling thread.
-5. Zoom: processes of the same user whose executable is named `zoom`
+   after a grant that was seen and then lost. An absent accessibility bus stays
+   `needs_setup`/`atspi_bus_absent` even after `setup` (the helper cannot start it, so the
+   contract's "permission_denied after setup" sentence does not apply to this state).
+4. Zoom: processes of the same user whose executable is named `zoom`
    (`/proc/<pid>/exe`, a ` (deleted)` suffix removed); none is `zoom_not_running`,
    several `ambiguous_processes`, an unreadable `/proc` (or an unexpected error reading an
    exe link) `process_scan_failed`. A process that exited or that this user may not inspect
-   (`EACCES`, as for non-dumpable helpers on a real desktop) is skipped. The version
-   is the first line of `version.txt` beside the executable. A Flatpak or snap Zoom runs
-   in another pid namespace, so its pid never matches the registry: it is reported as
-   `zoom_not_exposed` and is unsupported.
-6. Rules: no validated rule gives `unsupported_version`/`no_validated_rules`; an
+   (`EACCES`, as for non-dumpable helpers on a real desktop) is skipped. The version is the
+   first line of a regular file `version.txt` beside the executable (opened without blocking
+   and without following links). A Flatpak or snap Zoom runs in another pid namespace, so
+   its pid never matches the registry: it is reported as `zoom_not_exposed` and is
+   unsupported.
+5. Rules: no validated rule gives `unsupported_version`/`no_validated_rules`; an
    unreadable version `version_unreadable`; a build outside the rule set
    `zoom_version_unsupported`.
+6. libatspi, on the first read that gate 5 allows: the address comes from a bounded
+   `org.a11y.Bus.GetAddress` call and is handed over through `AT_SPI_BUS_ADDRESS`;
+   `atspi_init()` is checked (2 means unreachable, and asking libatspi for the desktop after
+   that would abort the process). A failure is `unavailable`/`atspi_unreachable` with
+   `atspi_exit()` and a retry after a growing delay (1 s doubling to 60 s). Because the
+   first init happens on the polling thread, `setenv` races other threads' `getenv`; the
+   reader thread only polls and reads, and GDBus does not consult the environment after
+   startup. libatspi's calls inside `atspi_init` (`dbus_bus_register`, the registry's
+   first replies) have no timeout of their own: a hang there is bounded only by the
+   shutdown guard of the core, not by `deadline_ms`.
 7. One bounded traversal (`zoom_atspi_collect`): depth 64, 20000 nodes, 1.5 s, 250 ms per
    libatspi call (`atspi_set_timeout(250, -1)`; a non-negative second argument is a startup
-   grace that stretches a new application's timeout), three call errors. The time and
-   cancellation are checked before every remote call, and traversal stops at a limit, a
+   grace that stretches a new application's timeout), three call errors. Cancellation and
+   the budget are polled before every remote call, including between the six calls one node
+   makes, so a slow application overruns by at most one call. Traversal stops at a limit, a
    cancellation or the error limit. Every application owned by the pid is read and their
    windows are joined; an application with no windows, a failed property call (error, a
    NULL attribute table, a state set holding only `defunct`), an unreadable child list or a
    node over the state/attribute caps makes the read incomplete (never proof of absence).
-   A failure on the desktop's own child list is `ax_read_failed` (or `atspi_bus_lost` when
-   the registry is gone); no application for the pid is `zoom_not_exposed`; cancellation is
-   `read_cancelled`.
-8. Cache: libatspi caches names, states and children per application and only keeps them
-   current through event listeners, which this helper does not register. Each poll sets the
-   cache mask to none and clears it, so every read is live. Whether Zoom's Qt bridge behaves
-   with that is part of the live validation below.
+   An identity from an over-long object path is treated as missing. A failure on one
+   desktop child is `ax_read_failed`; no application for the pid is `zoom_not_exposed`;
+   cancellation is `read_cancelled`.
+8. Signals and cache: `atspi_init` subscribes to the registry's cache and event signals on
+   the default GLib context. The helper registers no event listener of its own, but it
+   drains that context (bounded) once per poll and around every read, because nothing else
+   iterates it and the signals would otherwise pile up until calls time out. Names, states
+   and children are cached per application and kept current only by those signals; each
+   read sets the cache mask of the desktop and of every application to none and clears it,
+   so every read is live. Whether Zoom's Qt bridge behaves with that is part of the live
+   validation below.
+
+A registry that goes away after libatspi connected cannot be recovered in-process: libatspi
+keeps a static table of applications that `atspi_exit()` does not clear, so a later
+`atspi_init()` cannot reach a new registry. The helper reports `unavailable`/`atspi_bus_lost`
+once and exits with status 4 (`kExitRegistryLost`) at the next poll or request, leaving the
+supervisor to restart it within its bounded budget. The contract's exit codes (2 protocol,
+3 stdout, 64 usage) do not list 4; a Linux-only addition for the contract owner to record.
+
+Reason tokens the Linux helper adds to the contract's list: `no_session_bus`,
+`session_bus_unreachable`, `atspi_bus_absent`, `atspi_status_unreadable`,
+`accessibility_disabled`, `setup_not_effective`, `accessibility_lost`, `atspi_unreachable`,
+`atspi_bus_lost`, `process_scan_failed`, `no_validated_rules`, `zoom_not_exposed`,
+`read_cancelled`.
 
 `setup` is the only request that changes anything: it sets
-`org.a11y.Status.IsEnabled` to true (the desktop-neutral switch toolkits read;
+`org.a11y.Status.IsEnabled` to true without activating any service (so on a desktop where
+the accessibility bus is not running it can do nothing and capabilities keep saying so) (the desktop-neutral switch toolkits read;
 at-spi-bus-launcher mirrors it into GSettings where that exists), then reports
 capabilities. Whether Zoom needs a restart afterwards is unknown. A test greps the
 source for the only `Set` call and for any action, input or settings API.
