@@ -125,6 +125,9 @@ bool spawn_daemon(Daemon &daemon) {
   daemon.pid = fork();
   if (daemon.pid == 0) {
     close(address_pipe[0]);
+    // A sanitizer run preloads its runtime into every process CTest starts; the
+    // system dbus-daemon (and what it activates) must not inherit that.
+    unsetenv("LD_PRELOAD");
     const std::string print =
         "--print-address=" + std::to_string(address_pipe[1]);
     const std::string file = "--config-file=" + config;

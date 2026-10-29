@@ -680,11 +680,18 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
       PASS_REGULAR_EXPRESSION "${_zoom_test}: [0-9]+ checks, 0 failures")
   endforeach()
   # A skipped helper must be visible in CTest output, not silent: this reports
-  # "Skipped" (exit 77) when the helper was not built and passes when it was.
+  # "Skipped" (exit 77) when the helper was not built, and starts the real helper
+  # once when it was. It is our own executable: sanitizer runs preload their
+  # runtime into every process CTest starts, which crashes uninstrumented system
+  # binaries (cmake, sh), so no zoom test uses one as its command.
+  add_executable(zoom_observer_linux_built_check ../tests/native/zoom_observer_linux_built.cpp)
   if(TARGET zoom_observer_linux)
-    add_test(NAME zoom_observer_linux_built COMMAND ${CMAKE_COMMAND} -E true)
+    add_test(NAME zoom_observer_linux_built COMMAND zoom_observer_linux_built_check
+      "$<TARGET_FILE:zoom_observer_linux>")
+    set_tests_properties(zoom_observer_linux_built PROPERTIES TIMEOUT 60
+      PASS_REGULAR_EXPRESSION "zoom_observer_linux_built: [0-9]+ checks, 0 failures")
   else()
-    add_test(NAME zoom_observer_linux_built COMMAND /bin/sh -c "echo 'atspi-2, gio-2.0 or dbus-1 missing: zoom_observer_linux was not built' >&2; exit 77")
+    add_test(NAME zoom_observer_linux_built COMMAND zoom_observer_linux_built_check --not-built)
     set_tests_properties(zoom_observer_linux_built PROPERTIES SKIP_RETURN_CODE 77)
   endif()
   if(TARGET zoom_observer_linux)

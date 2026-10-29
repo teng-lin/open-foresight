@@ -2,6 +2,7 @@
 #include "zoom_linux_proc.h"
 
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sys/stat.h>
@@ -145,9 +146,9 @@ int main() {
     chmod((proc + "/107").c_str(), 0700);
   }
 
-  std::string cleanup = "rm -rf '" + dir + "'";
-  if (system(cleanup.c_str()) != 0)
-    std::cerr << "cleanup failed\n";
+  std::error_code ignored;
+  std::filesystem::remove_all(
+      dir, ignored); // no shell: see zoom_observer_linux_built.cpp
   std::cout << "zoom_linux_proc: " << checks << " checks, " << failures
             << " failures\n";
   return failures == 0 ? 0 : 1;
