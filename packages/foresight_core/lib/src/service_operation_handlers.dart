@@ -8,6 +8,8 @@ import 'operation_registry.dart';
 import 'operation_requests.dart';
 import 'rpc_error.dart';
 import 'service_lifetime.dart';
+import 'service_diagnostics.dart';
+import 'diagnostics/events.dart';
 
 /// Per-request transport state; never retained by the dispatch metadata.
 class ServiceRequestContext {
@@ -32,6 +34,7 @@ class ServiceOperationHandlers {
     required this.onAttached,
     required this.onDetached,
     required this.stopRecording,
+    required this.cancelRecordingStart,
     required this.preference,
     required this.setPreference,
     required this.stopIfIdle,
@@ -42,6 +45,28 @@ class ServiceOperationHandlers {
   final Set<Socket> desktopClients;
   final void Function() onAttached, onDetached;
   final Future<void> Function() stopRecording;
+  final Future<void> Function() cancelRecordingStart;
+  final _diagnostics = captureServiceDiagnosticEmitter();
+  void _visibilityChanged(bool visible) {
+    try {
+      _diagnostics?.emit(
+        DiagnosticEvent.captureVisibilityChanged,
+        fields: () => {DiagnosticField.enabled: visible},
+      );
+    } catch (_) {
+      // Logging never changes desktop or capture ownership.
+    }
+    if (!visible) {
+      unawaited(
+        cancelRecordingStart().catchError((Object error) {
+          stderr.writeln(
+            'Cancel recording startup after desktop hidden: $error',
+          );
+        }),
+      );
+    }
+  }
+
   final String Function(String key, String fallback) preference;
   final void Function(String key, String value) setPreference;
   final Future<void> Function(Socket, int, ServiceStopIfIdleRequest) stopIfIdle;
@@ -66,15 +91,7 @@ class ServiceOperationHandlers {
             );
             desktopClients.add(client);
             onAttached();
-            if (!access.hasVisibleHost) {
-              unawaited(
-                stopRecording().catchError((Object error) {
-                  stderr.writeln(
-                    'Stop recording after hidden desktop attach: $error',
-                  );
-                }),
-              );
-            }
+            _visibilityChanged(request.visible);
             return true;
           },
         ),
@@ -82,13 +99,9 @@ class ServiceOperationHandlers {
           Operation.securityDesktopVisibility,
           (request, {current}) {
             access.setVisible(context!.client, request.visible);
-            if (!request.visible) {
-              unawaited(
-                stopRecording().catchError((Object error) {
-                  stderr.writeln('Stop recording after desktop hidden: $error');
-                }),
-              );
-            }
+            // Window visibility gates approvals, not an already authorized
+            // capture. Occlusion/minimizing must not end a meeting.
+            _visibilityChanged(request.visible);
             return true;
           },
         ),

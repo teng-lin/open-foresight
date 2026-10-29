@@ -46,6 +46,10 @@ class MeetingReadModel {
   ModelRegistration? get speech => _current(StoreReadQueries.model('speech'))
       ? _value<ModelRegistration?>(StoreReadQueries.model('speech'))
       : null;
+  // Same-owner previews remain display state while a newer read is pending.
+  // Recording admission still requires its separate current setup read.
+  ModelRegistration? get presentedSpeech =>
+      _value<ModelRegistration?>(StoreReadQueries.model('speech'));
   MeetingDetails? meeting(int id, {bool preview = false}) =>
       _value<MeetingDetails?>(StoreReadQueries.meeting(id, preview: preview));
   bool meetingLoaded(int id, {bool preview = false}) =>

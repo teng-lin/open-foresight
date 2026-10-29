@@ -412,7 +412,8 @@ class HookedServiceProcess {
         ),
       );
 
-  void signal(ProcessSignal signal) => process.kill(signal);
+  /// Whether the signal was delivered to the process.
+  bool signal(ProcessSignal signal) => process.kill(signal);
 
   /// Release every gate, SIGTERM, and return the exit code. SIGKILL only if
   /// the service does not exit within [timeout].

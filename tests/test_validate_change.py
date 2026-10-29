@@ -2042,3 +2042,17 @@ def test_any_failure_while_assembling_the_evidence_keeps_the_results_and_the_ver
     captured = capsys.readouterr()
     assert code == 1  # the failed check wins
     assert "shared-guards" in captured.out and "the evidence could not be built" in captured.err and "Traceback" not in captured.err
+
+
+# --------------------------------------------- batch 3a review: core test support
+
+
+def test_core_test_support_helpers_are_shared_test_support():
+    for path in ("packages/foresight_core/test/support/current_read.dart", "packages/foresight_core/test/support/boundary_analysis.dart"):
+        plan = plan_for([path])
+        assert not plan["conservative"], path
+        assert [entry["kind"] for entry in plan["paths"][0]["matches"]] == ["shared-test-support"]
+        assert {"core-stage", "desktop-stage", "service-stage"} <= selected(plan)[1]
+        assert "desktop-service" in selected(plan)[0]
+    consumers = vc.support_consumers(ROOT, ["packages/foresight_core/test/support/current_read.dart"], FILES)
+    assert "packages/foresight_core/test/remote_domain_test.dart" in consumers

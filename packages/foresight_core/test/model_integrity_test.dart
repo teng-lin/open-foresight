@@ -20,22 +20,25 @@ void main() {
   });
   tearDown(() => directory.deleteSync(recursive: true));
 
-  test('same-size stored model tampering is refused on reopening', () async {
-    final file = File('${directory.path}/model')
-      ..writeAsStringSync('trusted bytes');
-    var store = Store(database);
-    addTearDown(store.close);
-    await store.register('generation', file.path, '/bin/true');
-    await store.verifyRegisteredModels();
-    store.close();
-    file.writeAsStringSync('changed bytes');
-    store = Store(database);
-    addTearDown(store.close);
-    await expectLater(store.verifyRegisteredModels(), throwsStateError);
-  });
+  test(
+    'explicit verification refuses same-size tampering after reopening',
+    () async {
+      final file = File('${directory.path}/model')
+        ..writeAsStringSync('trusted bytes');
+      var store = Store(database);
+      addTearDown(store.close);
+      await store.register('generation', file.path, '/bin/true');
+      await store.verifyRegisteredModels();
+      store.close();
+      file.writeAsStringSync('changed bytes');
+      store = Store(database);
+      addTearDown(store.close);
+      await expectLater(store.verifyRegisteredModels(), throwsStateError);
+    },
+  );
 
   test(
-    'service startup checks stored bytes before creating model workers',
+    'service startup skips content hashing while explicit verification remains available',
     () async {
       final file = File('${directory.path}/model')
         ..writeAsStringSync('trusted bytes');
@@ -49,10 +52,14 @@ void main() {
         desktopPeerVerifier: trustInProcessDesktop,
       );
       addTearDown(service.close);
-      expect(service.domain.store.model('generation'), isNull);
+      expect(service.domain.store.model('generation'), isNotNull);
       expect(
         service.domain.store.preference('modelIntegrityError.generation'),
-        contains('Set up the model again'),
+        isEmpty,
+      );
+      await expectLater(
+        service.domain.store.verifyRegisteredModels(),
+        throwsStateError,
       );
       expect(file.readAsStringSync(), 'changed bytes');
       expect(
@@ -70,7 +77,7 @@ void main() {
     },
   );
 
-  test('directory model manifest is rehashed at startup', () async {
+  test('explicit verification rehashes directory model manifests', () async {
     final model = Directory('${directory.path}/model')..createSync();
     final file = File('${model.path}/weights')..writeAsStringSync('trusted');
     final store = Store(database);

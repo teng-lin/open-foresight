@@ -282,7 +282,13 @@ void main() {
       expect(gap['sample_start'], 62400);
       expect(store.rows('SELECT * FROM transcript WHERE final=0'), isEmpty);
       expect(meetingState(), 'recording');
-      await app.stopRecording();
+      await app.stopRecording(
+        reason: 'Recording stopped because the desktop connection detached.',
+      );
+      expect(
+        app.recordingState,
+        contains('Recording stopped because the desktop connection detached.'),
+      );
       expect(meetingState(), 'completed');
       final geometry = media.audio.playbackTimeline.chunk(
         gap['session_id'] as String,
@@ -302,35 +308,45 @@ void main() {
     },
   );
 
-  test('inactivity finalizes capture and releases its owned devices', () async {
-    await speechModel();
-    store.setPreference('inactivity', '0.001');
-    await app.startRecording(meeting);
-    platform.clock += 1000000;
-    await eventually(
-      () => app.recording == null,
-      timeout: const Duration(seconds: 8),
+  for (final minutes in ['0.001', '15']) {
+    test(
+      'inactivity after $minutes minutes finalizes capture and releases its owned devices',
+      () async {
+        await speechModel();
+        store.setPreference('inactivity', minutes);
+        await app.startRecording(meeting);
+        platform.clock += ((double.parse(minutes) * 60 + 1) * 1000000).round();
+        await eventually(
+          () => app.recording == null,
+          timeout: const Duration(seconds: 8),
+        );
+        expect(emit({'type': 'state', 'state': 'late'}), 0);
+        expect(meetingState(), 'completed');
+        final retained = media.audio.db.select(
+          "SELECT * FROM audio_chunks WHERE state='published'",
+        );
+        expect(retained, isNotEmpty);
+        for (final row in retained) {
+          final chunk = media.audio.chunk(row['id'] as String)!;
+          final silence = await media.readPcm(
+            chunk,
+            frameOffset: 0,
+            frameCount: chunk.sampleCount,
+          );
+          expect(silence, hasLength(chunk.sampleCount));
+          expect(silence, everyElement(0));
+        }
+        expect(platform.routes.every((r) => r.retired), isTrue);
+        expect(store.rows('SELECT * FROM transcript'), isEmpty);
+        expect(app.captureState['active'], isFalse);
+        expect(app.captureState['error'], isNull);
+        expect(
+          app.recordingState,
+          contains('Recording stopped after $minutes minutes without audio.'),
+        );
+      },
     );
-    expect(emit({'type': 'state', 'state': 'late'}), 0);
-    expect(meetingState(), 'completed');
-    final retained = media.audio.db.select(
-      "SELECT * FROM audio_chunks WHERE state='published'",
-    );
-    expect(retained, isNotEmpty);
-    for (final row in retained) {
-      final chunk = media.audio.chunk(row['id'] as String)!;
-      final silence = await media.readPcm(
-        chunk,
-        frameOffset: 0,
-        frameCount: chunk.sampleCount,
-      );
-      expect(silence, hasLength(chunk.sampleCount));
-      expect(silence, everyElement(0));
-    }
-    expect(platform.routes.every((r) => r.retired), isTrue);
-    expect(store.rows('SELECT * FROM transcript'), isEmpty);
-    expect(app.captureState['active'], isFalse);
-  });
+  }
 
   test(
     'capture failure retains committed text and publishes interrupted state',

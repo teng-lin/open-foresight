@@ -62,6 +62,29 @@ enum DiagnosticOutcome {
 
 enum DiagnosticProvider { google, granola, local, unknown }
 
+enum DiagnosticCaptureStopReason {
+  user,
+  inactivity,
+  desktopDisconnected,
+  desktopDetached,
+  desktopHiddenBeforeStart,
+  applicationClosing,
+  captureFailure,
+  transcriptStorageFailure,
+  controlFailure,
+}
+
+enum DiagnosticCaptureStage {
+  start,
+  poll,
+  nativeRoute,
+  publish,
+  reserve,
+  pause,
+  stopState,
+  finish,
+}
+
 enum DiagnosticField {
   operation,
   category,
@@ -82,6 +105,8 @@ enum DiagnosticField {
   lastMs,
   precisionLost,
   call,
+  reason,
+  stage,
 }
 
 enum DiagnosticEvent {
@@ -96,6 +121,10 @@ enum DiagnosticEvent {
   helperExited('helper.exited', DiagnosticLevel.warn),
   nativeWorkerFailed('native.worker_failed', DiagnosticLevel.error),
   captureStateChanged('capture.state_changed', DiagnosticLevel.info),
+  captureVisibilityChanged('capture.visibility_changed', DiagnosticLevel.info),
+  captureStopRequested('capture.stop_requested', DiagnosticLevel.info),
+  captureStopped('capture.stopped', DiagnosticLevel.info),
+  captureFailed('capture.failed', DiagnosticLevel.error),
   runtimeFailed('runtime.failed', DiagnosticLevel.error),
   authChanged('auth.changed', DiagnosticLevel.info),
   recordsDropped('logging.records_dropped', DiagnosticLevel.warn),
@@ -149,6 +178,19 @@ enum DiagnosticEvent {
       DiagnosticField.durationUs,
       DiagnosticField.precisionLost,
     },
+    captureVisibilityChanged => const {DiagnosticField.enabled},
+    captureStopRequested => const {
+      DiagnosticField.reason,
+      DiagnosticField.active,
+    },
+    captureStopped => const {
+      DiagnosticField.reason,
+      DiagnosticField.outcome,
+      DiagnosticField.active,
+      DiagnosticField.queued,
+      DiagnosticField.durationUs,
+    },
+    captureFailed => const {DiagnosticField.stage, DiagnosticField.status},
     runtimeFailed => const {
       DiagnosticField.category,
       DiagnosticField.status,
@@ -388,6 +430,8 @@ final class DiagnosticRecord {
         DiagnosticCategory category => category.name,
         DiagnosticOutcome outcome => outcome.name,
         DiagnosticProvider provider => provider.name,
+        DiagnosticCaptureStopReason reason => reason.name,
+        DiagnosticCaptureStage stage => stage.name,
         DiagnosticIdentity identity => identity.value,
         int number => number,
         bool boolean => boolean,
@@ -428,6 +472,12 @@ final class DiagnosticRecord {
       value is String && DiagnosticOutcome.values.any((v) => v.name == value),
     DiagnosticField.provider =>
       value is String && DiagnosticProvider.values.any((v) => v.name == value),
+    DiagnosticField.reason =>
+      value is String &&
+          DiagnosticCaptureStopReason.values.any((v) => v.name == value),
+    DiagnosticField.stage =>
+      value is String &&
+          DiagnosticCaptureStage.values.any((v) => v.name == value),
     DiagnosticField.active ||
     DiagnosticField.enabled ||
     DiagnosticField.precisionLost => value is bool,

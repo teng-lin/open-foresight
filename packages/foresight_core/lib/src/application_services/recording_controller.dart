@@ -11,6 +11,8 @@ import '../persistence/meeting_queries.dart';
 import '../proactive_questions.dart';
 import '../recording.dart';
 import '../rpc_error.dart';
+import '../service_diagnostics.dart';
+import '../diagnostics/events.dart';
 import '../store.dart';
 import 'capture_activity.dart';
 import 'generation_coordinator.dart';
@@ -41,6 +43,18 @@ final class RecordingController {
   final MeetingQueries meetings;
   final CaptureQueries queries;
   final void Function() changed, levelsChanged;
+  final _diagnostics = captureServiceDiagnosticEmitter();
+  void _diagnose(
+    DiagnosticEvent event,
+    Map<DiagnosticField, Object> Function() fields,
+  ) {
+    try {
+      _diagnostics?.emit(event, fields: fields);
+    } catch (_) {
+      // Diagnostics cannot change capture cleanup or replace its failure.
+    }
+  }
+
   RecordingMedia? _media;
   RecordingAudioWorkPort? _audioWork;
   DurableCapturePlatform? _capturePlatform;
@@ -82,6 +96,7 @@ final class RecordingController {
   var _session = 0, _unsavedSegments = 0;
   bool _physicalActive = false;
   String _persistenceState = 'saved';
+  String _terminalError = '';
   Map<String, Object?> get state => {
     'meeting_id': recordingMeeting,
     // Active retains session ownership while paused; capture_active alone
@@ -90,7 +105,9 @@ final class RecordingController {
     'capture_active': recording?.captureActive ?? false,
     'error': recording?.lastError.isNotEmpty == true
         ? recording!.lastError
-        : null,
+        : _terminalError.isEmpty
+        ? null
+        : _terminalError,
     'audio_session_id': recording?.audioSessionId,
     'starting': recording?.starting ?? false,
     'finishing': recording?.finishing ?? false,
@@ -149,6 +166,7 @@ final class RecordingController {
     final session = ++_session;
     _unsavedSegments = 0;
     _persistenceState = 'saved';
+    _terminalError = '';
     final persistence = _persistence = RecordingTranscriptPersistence(
       store: store,
       meeting: id,
@@ -197,7 +215,11 @@ final class RecordingController {
         // Finish the callback before stopping its own speech producer.
         scheduleMicrotask(() {
           if (session == _session && recording != null) {
-            unawaited(stopRecording().catchError((Object _) {}));
+            unawaited(
+              stopRecording(
+                cause: DiagnosticCaptureStopReason.transcriptStorageFailure,
+              ).catchError((Object _) {}),
+            );
           }
         });
       },
@@ -239,7 +261,11 @@ final class RecordingController {
         if (!_closed) levelsChanged();
         if (owner?.lastError.isNotEmpty == true && _stopping == null) {
           scheduleMicrotask(() {
-            if (session == _session) stopRecording().ignore();
+            if (session == _session) {
+              stopRecording(
+                cause: DiagnosticCaptureStopReason.captureFailure,
+              ).ignore();
+            }
           });
         }
       },
@@ -305,7 +331,13 @@ final class RecordingController {
                           ))
                       .inSeconds >=
                   minutes * 60) {
-            unawaited(stopRecording().catchError((Object _) {}));
+            unawaited(
+              stopRecording(
+                cause: DiagnosticCaptureStopReason.inactivity,
+                reason:
+                    'Recording stopped after ${minutes == minutes.truncateToDouble() ? minutes.toInt() : minutes} minutes without audio.',
+              ).catchError((Object _) {}),
+            );
           }
         } catch (error, stack) {
           unawaited(
@@ -361,13 +393,23 @@ final class RecordingController {
     }
   }
 
-  Future<void> stopRecording() => _beginStop();
+  Future<void> stopRecording({
+    String? reason,
+    DiagnosticCaptureStopReason cause = DiagnosticCaptureStopReason.user,
+  }) => _beginStop(reason: reason, cause: cause);
 
-  Future<void> _beginStop({Object? initialFailure, StackTrace? initialStack}) =>
-      _stopping ??= _stopRecording(
-        initialFailure: initialFailure,
-        initialStack: initialStack,
-      ).whenComplete(() => _stopping = null);
+  Future<void> _beginStop({
+    Object? initialFailure,
+    StackTrace? initialStack,
+    String? reason,
+    DiagnosticCaptureStopReason cause =
+        DiagnosticCaptureStopReason.controlFailure,
+  }) => _stopping ??= _stopRecording(
+    initialFailure: initialFailure,
+    initialStack: initialStack,
+    reason: reason,
+    cause: cause,
+  ).whenComplete(() => _stopping = null);
 
   Recording _activeRecording(int? id) {
     final active = recording;
@@ -466,6 +508,8 @@ final class RecordingController {
   }
 
   void _releaseRecording() {
+    final error = recording?.lastError ?? '';
+    if (error.isNotEmpty) _terminalError = error;
     recording = null;
     _physicalActive = false;
     recordingMeeting = null;
@@ -505,10 +549,20 @@ final class RecordingController {
   Future<void> _stopRecording({
     Object? initialFailure,
     StackTrace? initialStack,
+    String? reason,
+    required DiagnosticCaptureStopReason cause,
   }) async {
     final active = recording;
     final id = recordingMeeting;
     if (active == null || id == null) return;
+    final started = _diagnostics?.clockMicros();
+    _diagnose(
+      DiagnosticEvent.captureStopRequested,
+      () => {
+        DiagnosticField.reason: cause,
+        DiagnosticField.active: active.captureActive,
+      },
+    );
     final persistence = _persistence;
     final session = _session;
     _liveIndex?.cancel();
@@ -599,8 +653,29 @@ final class RecordingController {
             : 'Capture stopped; meeting status could not be saved. '
                   'Committed transcript retained.';
       }
+      if (!interrupted && failure == null && reason != null) {
+        recordingState = '$reason $recordingState';
+      }
+      _terminalError = interrupted || failure != null ? recordingState : '';
       _notify();
       _trackIndex(id, session, finalIndex: true);
+      _diagnose(
+        DiagnosticEvent.captureStopped,
+        () => {
+          DiagnosticField.reason: cause,
+          DiagnosticField.outcome: interrupted || failure != null
+              ? DiagnosticOutcome.failed
+              : DiagnosticOutcome.completed,
+          DiagnosticField.active: active.hasCaptureOwnership,
+          DiagnosticField.queued: _unsavedSegments.clamp(0, 0x7fffffff),
+          if (started != null)
+            DiagnosticField.durationUs:
+                ((_diagnostics?.clockMicros() ?? started) - started).clamp(
+                  0,
+                  0x7fffffff,
+                ),
+        },
+      );
     }
     if (failure != null) {
       Error.throwWithStackTrace(failure!, failureStack ?? StackTrace.current);
@@ -631,7 +706,9 @@ final class RecordingController {
   Future<void> close() => _closing ??= Future.sync(() async {
     stopScheduling();
     try {
-      await stopRecording();
+      await stopRecording(
+        cause: DiagnosticCaptureStopReason.applicationClosing,
+      );
     } finally {
       await Future.wait(_finalIndexes.toList());
     }

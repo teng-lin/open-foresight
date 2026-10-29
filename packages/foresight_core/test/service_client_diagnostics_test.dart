@@ -57,6 +57,8 @@ void main() {
   late Completer<void> failedConnectionRecorded;
   late Completer<void> firstRefusedRecorded;
   void Function()? heldRetryReply;
+  Future<void>? heldRetryAdmission;
+  Object? retryAdmissionFailure;
 
   setUp(() async {
     environment = Map.of(runtimeConfiguration.environment);
@@ -68,6 +70,8 @@ void main() {
     failedConnectionRecorded = Completer<void>();
     firstRefusedRecorded = Completer<void>();
     heldRetryReply = null;
+    heldRetryAdmission = null;
+    retryAdmissionFailure = null;
     listener = messages.listen((value) {
       if (value == null) {
         closed.complete();
@@ -81,9 +85,6 @@ void main() {
             record['fields']['operation'] == 'notes.list' &&
             record['attempt'] == 1) {
           firstRefusedRecorded.complete();
-          final reply = heldRetryReply;
-          heldRetryReply = null;
-          reply?.call();
         }
         if (!failedConnectionRecorded.isCompleted &&
             record['event'] == 'rpc.connection_changed' &&
@@ -104,9 +105,10 @@ void main() {
   });
   tearDown(() async {
     // A failed assertion or timeout must not leave a reply callback owning a
-    // socket after its fixture has closed. There is no detached Future.
+    // socket after its fixture has closed. Join the owned admission observer.
     heldRetryReply = null;
     await fixture.close();
+    await heldRetryAdmission;
     final result = await session.close();
     expect(result.writerExited, true);
     expect(result.flushed, true);
@@ -121,6 +123,7 @@ void main() {
     expect(clientDiagnosticObservation()['calls'], 0);
     expect(clientDiagnosticObservation()['connections'], 0);
     expect(jsonEncode(records), isNot(contains(canary)));
+    expect(retryAdmissionFailure, isNull);
   });
 
   Future<void> observe(Future<void> Function() action) =>
@@ -147,12 +150,36 @@ void main() {
 
   void replyAfterFirstRefused(Socket socket, Map<String, dynamic> request) {
     // These owner/correlation assertions require admitted completion records.
-    // Let the writer return the first batch's credits before completing retry.
-    if (firstRefusedRecorded.isCompleted) {
-      fixture.reply(socket, request, canary);
-    } else {
-      heldRetryReply = () => fixture.reply(socket, request, canary);
-    }
+    // A grant flag can still describe a spent or revoking lease. Drain the
+    // writer, then match its available bytes to the producer's received epoch
+    // before replying. The two-attempt assertion is about correlation, rather
+    // than best-effort admission under deliberate logging pressure.
+    heldRetryReply = () => fixture.reply(socket, request, canary);
+    heldRetryAdmission =
+        () async {
+          await firstRefusedRecorded.future.timeout(const Duration(seconds: 2));
+          await eventually(() async {
+            final budget = await session.inspectBudgetForTesting();
+            final grants = session.producer.receivedGrantsForTesting;
+            return budget.queuedRecords == 0 &&
+                budget.producers.length == 1 &&
+                budget.producers.single.normalEpoch == grants.$1 &&
+                grants.$2 &&
+                budget.producers.single.normalBytes >= 2048 &&
+                budget.producers.single.normalRecords > 0;
+          }, timeout: const Duration(seconds: 2));
+          final reply = heldRetryReply;
+          heldRetryReply = null;
+          reply?.call();
+        }().then<void>(
+          (_) {},
+          onError: (Object error, StackTrace stack) {
+            retryAdmissionFailure = error;
+            heldRetryReply = null;
+            // Unblock the actual RPC as well as joining this observer in teardown.
+            socket.destroy();
+          },
+        );
   }
 
   test(

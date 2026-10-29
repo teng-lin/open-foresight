@@ -102,6 +102,7 @@ Future<void> show(
   AudioTranscriptSeekTarget? target,
   double scale = 1,
   bool scrollable = false,
+  bool playbackOnly = false,
 }) {
   final player = SizedBox(
     width: 500,
@@ -110,6 +111,7 @@ Future<void> show(
       playback: playback,
       actions: actions,
       transcriptTarget: target,
+      playbackOnly: playbackOnly,
     ),
   );
   return tester.pumpWidget(
@@ -126,6 +128,55 @@ Future<void> show(
 }
 
 void main() {
+  testWidgets('live chunk processing does not shift the recording player', (
+    tester,
+  ) async {
+    final actions = Actions();
+    await show(
+      tester,
+      actions,
+      session: clip(physical: MeetingAudioPhysicalState.recording),
+    );
+    final height = tester.getSize(find.byType(MeetingAudioPlayer)).height;
+    await show(
+      tester,
+      actions,
+      session: clip(
+        physical: MeetingAudioPhysicalState.recording,
+        sources: const [
+          AudioSourceProcessingPresentation(
+            source: MeetingAudioSource.microphone,
+            pendingDurationUs: 5000000,
+            pendingJobs: 1,
+          ),
+        ],
+        compression: const AudioWorkPresentation(pending: 1),
+      ),
+    );
+    expect(find.text('Saving space in the background…'), findsNothing);
+    expect(find.textContaining('transcription is catching up'), findsNothing);
+    expect(tester.getSize(find.byType(MeetingAudioPlayer)).height, height);
+    await show(
+      tester,
+      actions,
+      session: clip(
+        physical: MeetingAudioPhysicalState.recording,
+        compression: const AudioWorkPresentation(
+          state: MeetingAudioWorkState.failed,
+        ),
+        captureError: 'fixture capture failure',
+      ),
+    );
+    expect(
+      find.text('Audio compression needs attention. Available audio is kept.'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Recording stopped unexpectedly'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('storage distinguishes saved audio from additional copies', (
     tester,
   ) async {
@@ -188,12 +239,7 @@ void main() {
           find.bySemanticsLabel(RegExp('Recording storage: 1.5 TB')),
           findsOneWidget,
         );
-        expect(
-          find.text(
-            'Uses more storage. Already removed originals cannot be restored.',
-          ),
-          findsOneWidget,
-        );
+        expect(find.text('Keep remaining originals'), findsNothing);
         expect(tester.takeException(), isNull);
         await tester.ensureVisible(find.text('Save audio'));
         await tester.pumpAndSettle();
@@ -579,30 +625,48 @@ void main() {
       expect(actions.calls, isEmpty);
     },
   );
+  testWidgets('live playback bar omits activity and retains command errors', (
+    tester,
+  ) async {
+    final actions = Actions()..fail = true;
+    await show(
+      tester,
+      actions,
+      playbackOnly: true,
+      session: clip(
+        canChangeRetention: true,
+        compression: const AudioWorkPresentation(pending: 1),
+      ),
+    );
+    expect(find.byType(Slider), findsOneWidget);
+    expect(find.text('Saved recording'), findsNothing);
+    expect(find.text('Saving space in the background…'), findsNothing);
+    expect(find.textContaining('Recording storage'), findsNothing);
+    expect(find.text('Keep remaining originals'), findsNothing);
+    expect(find.text('Save audio'), findsNothing);
+    await tester.tap(find.byTooltip('Play audio'));
+    await tester.pump();
+    expect(
+      find.text('Couldn’t play this recording. Try again.'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets(
-    'remaining-original retention sends explicit choice without optimistic success',
+    'remaining-originals switch is hidden for every saved preference',
     (tester) async {
       final actions = Actions();
-      await show(tester, actions, session: clip(canChangeRetention: true));
-      expect(find.text('Keep remaining originals'), findsOneWidget);
-      await tester.tap(find.byType(SwitchListTile));
-      await tester.pumpAndSettle();
-      expect(actions.calls, [
-        ['retain', 'session', true],
-      ]);
-      expect(
-        tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
-        false,
-      );
-      await show(
-        tester,
-        actions,
-        session: clip(canChangeRetention: true, retainLossless: true),
-      );
-      expect(
-        tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
-        true,
-      );
+      for (final retain in [false, true]) {
+        await show(
+          tester,
+          actions,
+          session: clip(canChangeRetention: true, retainLossless: retain),
+        );
+        expect(find.text('Keep remaining originals'), findsNothing);
+        expect(find.byType(SwitchListTile), findsNothing);
+        expect(find.byTooltip('Play audio'), findsOneWidget);
+        expect(actions.calls, isEmpty);
+      }
     },
   );
   testWidgets('whole export keeps incomplete admission false', (tester) async {

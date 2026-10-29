@@ -55,8 +55,8 @@ class ModelStore {
   List<Map<String, Object?>> get models => _queries.models;
   String? _ownedRuntime(String resource) => _queries.ownedRuntime(resource);
 
-  /// Re-read stored bytes before any model worker is created. Startup rejects
-  /// invalid registrations while preserving their files so setup can repair them.
+  /// Explicitly re-read stored bytes. Invalid registrations can be rejected
+  /// while preserving their files so setup can repair them.
   Future<List<String>> verifyRegisteredModels({
     bool rejectInvalidRegistrations = false,
   }) async {

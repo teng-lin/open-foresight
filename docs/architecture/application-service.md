@@ -153,7 +153,7 @@ The worker accepts identity metadata only as the first frame on a bridge whose O
 
 For unbundled development only, the service launcher may set `FORESIGHT_DEVELOPMENT_DESKTOP_EXECUTABLES` to a JSON array of up to eight absolute native executable paths. For example, use the Flutter Linux debug runner at `apps/desktop/build/linux/x64/debug/bundle/open-foresight`, or the macOS debug app's `Contents/MacOS/Open Foresight`. Canonical OS peer paths must match that explicit list; scripts and generic Dart/Python interpreters do not qualify. Set it in the service's launch environment, never a request or database preference. Any configured installation root or packaged runtime revision disables this developer list. The compiled service/MCP development gate identifies its synthetic native approval relay and real Flutter test runner separately; it does not count as installed-package identity acceptance.
 
-Direct desktop Start/Resume controls provide user consent without a second dialog. External recording start or resume requests require a visible desktop confirmation. The persistent recording controls show elapsed time, waveform, pause/resume and **Stop transcribing**. Lifecycle `resumed` and `inactive` count as visible, including a window that loses keyboard focus; `hidden`, `paused` and `detached` count as hidden. Hiding the desktop retains its host slot, reports visibility to the service and finishes active capture; new capture and approvals are refused until it is visible. Closing the desktop releases the host. Quick-meeting requests received through `commands.sock`, including a forwarded `--quick-meeting` launch, activate the window and ask for confirmation before creating or recording a meeting. Disconnecting just the MCP client leaves capture running while the desktop indicator remains visible.
+Direct desktop Start/Resume controls provide user consent without a second dialog. External recording start or resume requests require a visible desktop confirmation. The persistent recording controls show elapsed time, waveform, pause/resume and **Stop transcribing**. Lifecycle `resumed` and `inactive` count as visible, including a window that loses keyboard focus; `hidden`, `paused` and `detached` count as hidden. Hiding the desktop retains its host slot and reports visibility to the service. An existing, authorized recording continues while the window is hidden, minimized or covered; pending recording startup is cancelled, and new capture and approvals are refused until it is visible. Closing the desktop releases the host and finishes capture. Quick-meeting requests received through `commands.sock`, including a forwarded `--quick-meeting` launch, activate the window and ask for confirmation before creating or recording a meeting. Disconnecting just the MCP client leaves capture running while the desktop indicator remains visible.
 
 In packaged installations, model runtime executables and query worker code must resolve inside the canonical installation root. Symbolic links do not permit escape. The check runs before admission and at execution boundaries, so an old saved external runtime cannot execute on restore; it reports an actionable denied error and can be replaced with a bundled runtime through model settings. Model data may remain in the profile. Source/development configurations without an installed root retain their runtime selection behavior.
 
@@ -188,7 +188,7 @@ The owned helper API is `foresight.helper.v1.RagService`; all failures use non-O
 
 ## Shared operation and lifecycle
 
-Launching either client attaches to an existing service or starts one. A per-profile OS lock prevents two launchers from creating competing owners. Clients can disconnect independently. Closing or hiding the desktop stops capture because its on-screen indicator is no longer available. Closing the MCP adapter leaves the meeting running while the desktop remains visible; models are released only when the process exits.
+Launching either client attaches to an existing service or starts one. A per-profile OS lock prevents two launchers from creating competing owners. Clients can disconnect independently. Closing or disconnecting the desktop stops capture. Hiding, minimizing or covering the window leaves an existing recording running. Closing the MCP adapter leaves the meeting running while the desktop remains connected; models are released only when the process exits.
 
 | Who is connected | Process exits when |
 |---|---|
@@ -488,7 +488,7 @@ import grants remains deferred with the typed import-grant architecture. Approva
 dialogs show available requester information, highlight risky options and limit
 repeated identical requests. Direct desktop Start/Resume gestures provide capture
 consent; external requests require confirmation from the visible approval host.
-Closing, hiding or disconnecting that host stops capture. Verification of the
+Closing, detaching or disconnecting that host stops capture. Visibility changes alone do not stop an existing recording; a hidden host still cannot approve requests or start/resume capture. Verification of the
 attached desktop executable does not establish the identity of every external
 program behind an MCP connection.
 

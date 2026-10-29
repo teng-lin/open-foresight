@@ -317,6 +317,12 @@ void main() {
       }).hashCode,
     );
     expect(first, isNot(CapturePresentation.fromWire({'meeting_id': 4})));
+    expect(
+      first,
+      isNot(
+        CapturePresentation.fromWire({...wire, 'error': 'capture failure'}),
+      ),
+    );
     expect(first.summary(3), isNot(MeetingRunPresentation.fromWire({})));
     expect(first.proactive, isNot(ProactivePresentation.fromWire({})));
     expect(

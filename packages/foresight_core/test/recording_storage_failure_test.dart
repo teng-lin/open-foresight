@@ -556,9 +556,12 @@ void main() {
       expect(app.recording, isNull);
       expect(platform.routes.every((r) => r.retired), isTrue);
       expect(app.recordingState, contains('Capture stopped'));
+      expect(app.captureState['error'], app.recordingState);
       store.db.execute('DROP TRIGGER fault_initial');
       await app.startRecording(meeting);
+      expect(app.captureState['error'], isNull);
       await app.stopRecording();
+      expect(app.captureState['error'], isNull);
     },
   );
 
@@ -624,6 +627,7 @@ void main() {
         'marker_411',
       );
       expect(app.recordingState, contains('metadata needs recovery'));
+      expect(app.captureState['error'], app.recordingState);
     },
   );
 
@@ -890,14 +894,14 @@ void main() {
 
   for (final disconnect in [false, true]) {
     test(
-      '${disconnect ? 'desktop disconnect' : 'hide'} fences durable capture despite state-write failure',
+      '${disconnect ? 'desktop disconnect' : 'desktop detach after hide'} fences durable capture despite state-write failure',
       () async {
         final label = disconnect ? 'disconnect' : 'hide';
         if (Platform.environment['FORESIGHT_TEST_CAPTURE_BOUNDARY_CHILD'] !=
             label) {
           await _freshBoundaryProcess(
             label,
-            '${disconnect ? 'desktop disconnect' : 'hide'} fences durable capture despite state-write failure',
+            '${disconnect ? 'desktop disconnect' : 'desktop detach after hide'} fences durable capture despite state-write failure',
           );
           return;
         }
@@ -959,6 +963,11 @@ void main() {
           await desktop.close();
         } else {
           await desktop.call('security.desktop_visibility', {'visible': false});
+          expect(service.application.recording, same(owner));
+          expect(owner.captureActive, isTrue);
+          expect(boundaryPlatform.routes.every((r) => !r.retired), isTrue);
+          expect(service.access.hasVisibleHost, isFalse);
+          await desktop.call('security.detach_desktop', {});
         }
         await eventually(() => service.application.recording == null);
         expect(boundaryPlatform.routes.every((r) => r.retired), isTrue);

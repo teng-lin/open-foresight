@@ -6,6 +6,26 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-28
+
+### Fixed
+
+- Collapse recording playback behind a Show recording button, hide live storage
+  and activity updates, and remove the remaining-originals switch. Show the final
+  recording status in the bottom bar after capture stops, with a red error bar
+  for failures and neutral completion messages. Retain the reason for inactivity
+  or desktop-disconnection stops.
+- Skip the full registered-model content scan during service startup. Model
+  downloads and registration continue to verify their checksums.
+- Keep the speech setup display stable while recording data refreshes, avoiding
+  a transient setup warning that repeatedly shifts the meeting notes.
+
+- Continue an existing recording while the connected desktop window is hidden,
+  minimized or covered. Closing the desktop or explicitly stopping still ends
+  capture; hidden windows cannot approve requests or start/resume recording.
+- Log recording stop reasons and the first capture failure stage at the default
+  diagnostic level, without recording exception messages or meeting content.
+
 ## [0.1.5] - 2026-10-28
 
 Release publication uses the existing build and CI evidence. The repository owner
@@ -258,7 +278,8 @@ The macOS disk image in this release is ad-hoc signed and is not notarized.
 Physical-device recovery and echo-cancellation quality were not validated across
 hardware. Model weights are downloaded after install and are not inside the packages.
 
-[Unreleased]: https://github.com/teng-lin/open-foresight/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/teng-lin/open-foresight/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.6
 [0.1.5]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.5
 [0.1.4]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.4-signed
 [0.1.3]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.3

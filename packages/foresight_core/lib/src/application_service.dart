@@ -23,6 +23,7 @@ import 'profile_paths.dart';
 import 'rpc_error.dart';
 import 'service_admission.dart';
 import 'service_diagnostics.dart';
+import 'diagnostics/events.dart';
 import 'service_gates.dart';
 import 'service_framing.dart';
 import 'service_lifetime.dart';
@@ -371,7 +372,8 @@ class ApplicationService {
       await clearStaleServiceSocket(path);
       sweepStaleSpeechAudio(profile.data);
       store = Store('${profile.data}/application.db', configuration: owned);
-      await store.verifyRegisteredModels(rejectInvalidRegistrations: true);
+      // Downloads and registration verify model contents. Opening the service
+      // must not reread every multi-gigabyte asset before publishing its socket.
       store.meetingStore.interruptActiveCaptures();
       helper = Helper(
         '${profile.runtime}/helper.sock',
@@ -767,9 +769,15 @@ class ApplicationService {
     access.detach(client);
     if (wasHost) {
       unawaited(
-        application.stopRecording().catchError((Object e) {
-          stderr.writeln('Stop capture after desktop closed: $e');
-        }),
+        application
+            .stopRecording(
+              cause: DiagnosticCaptureStopReason.desktopDisconnected,
+              reason:
+                  'Recording stopped because the desktop connection closed.',
+            )
+            .catchError((Object e) {
+              stderr.writeln('Stop capture after desktop closed: $e');
+            }),
       );
     }
     _clients.remove(client);
@@ -904,7 +912,18 @@ class ApplicationService {
       _exitIfIdle();
     },
     onDetached: _exitIfIdle,
-    stopRecording: application.stopRecording,
+    stopRecording: () => application.stopRecording(
+      cause: DiagnosticCaptureStopReason.desktopDetached,
+      reason: 'Recording stopped because the desktop connection detached.',
+    ),
+    cancelRecordingStart: () async {
+      if (application.recording?.starting != true) return;
+      await application.stopRecording(
+        cause: DiagnosticCaptureStopReason.desktopHiddenBeforeStart,
+        reason:
+            'Recording startup cancelled because the desktop became hidden.',
+      );
+    },
     preference: domain.store.preference,
     setPreference: domain.store.setPreference,
     stopIfIdle: _stopIfIdle,

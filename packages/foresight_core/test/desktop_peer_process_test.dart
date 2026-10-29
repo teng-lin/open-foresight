@@ -322,7 +322,7 @@ void main() {
   }
 
   peerTest(
-    'a hidden verified replacement finalizes capture and retains the host pin',
+    'a hidden verified replacement preserves active capture and retains the host pin',
     () async {
       await service.close();
       late CapturePlatformFixture capture;
@@ -358,6 +358,7 @@ void main() {
         isNull,
       );
       expect(owner.application.recording, isNotNull);
+      final active = owner.application.recording!;
       expect(owner.application.captureState['capture_active'], true);
       expect(capture.routes, hasLength(2));
       final replacement = await peer();
@@ -370,6 +371,18 @@ void main() {
       );
       expect(owner.access.hasHost, true);
       expect(owner.access.hasVisibleHost, false);
+      expect(owner.application.recording, same(active));
+      expect(active.captureActive, true);
+      expect(capture.routes.every((route) => !route.finished), true);
+      final state = (await replacement.frame('status'))['result'] as Map;
+      expect((state['lifetime'] as Map)['pinned_by_desktop'], true);
+      expect(
+        (await replacement.frame('meetings.start', {'id': meeting}))['error'],
+        isNotNull,
+      );
+      expect(await replacement.frame('security.detach_desktop', {}), {
+        'result': true,
+      });
       await eventually(() => owner.application.recording == null);
       expect(owner.application.recordingMeeting, isNull);
       for (final route in capture.routes) {
@@ -387,12 +400,6 @@ void main() {
             )
             .single['count'],
         2,
-      );
-      final state = (await replacement.frame('status'))['result'] as Map;
-      expect((state['lifetime'] as Map)['pinned_by_desktop'], true);
-      expect(
-        (await replacement.frame('meetings.start', {'id': meeting}))['error'],
-        isNotNull,
       );
     },
   );
