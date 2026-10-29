@@ -411,6 +411,10 @@ def test_concurrency_records_only_the_settings_the_runner_allowlists(monkeypatch
     record = evidence.concurrency({"FORESIGHT_BUILD_JOBS": "8", "FORESIGHT_PYTEST_WORKERS": "2", "FORESIGHT_CI_GOOGLE_REFRESH_TOKEN": "secret", "PATH": "/x"})
     assert record["settings"] == {"FORESIGHT_BUILD_JOBS": "8", "FORESIGHT_PYTEST_WORKERS": "2"}
     assert record["cpu_count"] == os.cpu_count() and record["checks_run"] == "sequential"
+    # The runner can legitimately export these settings for the whole suite.
+    # Own the process-environment case rather than requiring an empty parent.
+    for name in evidence.CONCURRENCY_ENV:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("FORESIGHT_PARALLEL_GATES", "1")
     assert evidence.concurrency()["settings"] == {"FORESIGHT_PARALLEL_GATES": "1"}
 
