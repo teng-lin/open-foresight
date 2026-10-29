@@ -135,14 +135,16 @@ void main() {
 
   group('copy', () {
     testWidgets(
-      'full copy names speakers, leaves other rows exactly as saved',
+      'full copy names speakers and labels every other row by its channel',
       (tester) async {
         String? copied;
         await tester.pumpWidget(panel(rows, onCopy: (text) => copied = text));
         await tester.tap(find.byTooltip('Copy full transcript'));
         expect(
           copied,
-          'Ada Lovelace: We should ship Friday?\n\nAgreed.\n\nCandidate only',
+          'Ada Lovelace: We should ship Friday?\n\n'
+          'Microphone: Agreed.\n\n'
+          'Remote: Candidate only',
         );
       },
     );
@@ -193,7 +195,7 @@ void main() {
     const items = [
       'Correct speaker…',
       'Mark as not a named speaker',
-      'Reset speaker',
+      'Clear speaker name',
       'Rename participant…',
     ];
     // The desktop toolbar lists every item; the mobile one hides some in an
@@ -405,7 +407,7 @@ void main() {
             tester,
             () => find.textContaining('iPhone').evaluate().isEmpty,
           );
-          await chooseMenu(tester, 'Reset speaker');
+          await chooseMenu(tester, 'Clear speaker name');
           await pumpUntil(
             tester,
             () => f.store.meetingQueries.attribution(row) == null,

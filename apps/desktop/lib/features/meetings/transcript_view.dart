@@ -63,7 +63,7 @@ class MeetingTranscriptPanel extends StatelessWidget {
       if (onMarkUnnamed != null)
         item('Mark as not a named speaker', onMarkUnnamed),
       if (onResetSpeaker != null && segment.attributionState != null)
-        item('Reset speaker', onResetSpeaker),
+        item('Clear speaker name', onResetSpeaker),
       if (onRenameParticipant != null && segment.participantId != null)
         item('Rename participant…', onRenameParticipant),
     ];

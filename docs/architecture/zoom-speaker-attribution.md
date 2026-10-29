@@ -326,11 +326,11 @@ Implementation status of this section (consumers): the formatter
 (`attributed_transcript.dart`; modes display, export, retrieval and model input),
 transcript and question rows, copy-full-transcript, summaries, question
 generation and note text use persisted attribution, and the desktop transcript
-menu offers correction, reset and participant rename through
+menu offers correction, "Clear speaker name" and participant rename through
 `meetings.attribute`, `meetings.reset_attribution` and
 `meetings.rename_participant` (desktop-only, no MCP tool). The speaker-naming
 availability indicator is a nullable UI model until the coordinator supplies
-capability state. Export of notes is unchanged, and first-person commitment
+capability state. Clearing a speaker name deletes the stored attribution (automatic or corrected) and the row shows its channel label; the earlier automatic name is not restored because nothing re-observes a saved segment. `meetings.get` returns only the sanitized one-line name. Export of notes is unchanged, and first-person commitment
 resolution is not implemented.
 
 ## Lifecycle and operational behavior

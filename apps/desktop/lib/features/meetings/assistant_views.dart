@@ -160,7 +160,7 @@ extension _TranscriptActions on MeetingsController {
             final name = controller.text.trim();
             if (name.isEmpty) {
               throw StateError(
-                'Enter a name. To remove a name, use Reset speaker.',
+                'Enter a name. To remove a name, use Clear speaker name.',
               );
             }
             await save(name, identity, current);
@@ -176,7 +176,7 @@ extension _TranscriptActions on MeetingsController {
       _nameDialog(
         meeting: meeting,
         title: 'Correct speaker',
-        initial: row.participantName ?? '',
+        initial: AttributedTranscript.personName(row) ?? '',
         save: (name, identity, current) =>
             meetingsAttributeDescriptor.sendCurrent(
               d,
@@ -195,7 +195,7 @@ extension _TranscriptActions on MeetingsController {
     return _nameDialog(
       meeting: meeting,
       title: 'Rename participant',
-      initial: row.participantName ?? '',
+      initial: AttributedTranscript.personName(row) ?? '',
       save: (name, identity, current) =>
           meetingsRenameParticipantDescriptor.sendCurrent(
             d,
