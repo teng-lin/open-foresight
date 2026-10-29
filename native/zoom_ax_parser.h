@@ -43,7 +43,7 @@ enum class Method { ParticipantStatus, CompactTalkingLabel };
 
 struct Participant {
   std::string name; // display spelling, only trimmed at the edges
-  std::string key;  // comparison form: folded case/diacritics/width, spaces
+  std::string key;  // comparison form: case-folded, canonical, spaces collapsed
   AudioState audio = AudioState::Unknown;
   bool self = false;
   uint64_t object_id = 0;
@@ -74,8 +74,9 @@ struct ParseResult {
 
 ParseResult parse_snapshot(const AxSnapshot &snapshot);
 
-// Comparison normalization: fold case, diacritics and character width, then
-// collapse whitespace. Never used for display.
+// Comparison normalization: fold case, canonicalize Unicode composition and
+// collapse whitespace. Diacritics and width are kept, so distinct people do not
+// merge. Never used for display.
 std::string comparison_key(const std::string &name);
 
 // Initial acceptance covers Zoom 7.2.x on macOS. Anything else is reported as

@@ -305,16 +305,6 @@ bool invisible_only(NSString *text) {
   return true;
 }
 
-// A tile is `<name>, <audio status>[, <active marker>][, other details]`.
-//
-// The status anchors on its LAST occurrence: Zoom writes it after the name. If
-// the text before it still contains any status or marker phrase, the name is
-// ambiguous and the tile is dropped (see below). The research rule took the
-// earliest phrase.
-//
-// A description with an active marker but no audio status is not accepted as a
-// tile: that structure is unvalidated and a participant named "Eve, Active
-// speaker" would otherwise become a speaker. It marks the read incomplete.
 // True when `text` contains any locale's audio status or active-speaker phrase.
 bool contains_status_text(NSString *text) {
   for (const auto &locale : decoded_locales())
@@ -324,6 +314,48 @@ bool contains_status_text(NSString *text) {
   return false;
 }
 
+// True when `text` holds `marker` as a comma-separated item that is not the
+// last one (`<x>, Active speaker, <y>`).
+bool has_inner_marker(NSString *text, NSString *marker) {
+  NSCharacterSet *space = NSCharacterSet.whitespaceAndNewlineCharacterSet;
+  NSRange search = NSMakeRange(0, text.length);
+  for (;;) {
+    NSRange found = [text rangeOfString:marker options:kFold range:search];
+    if (found.location == NSNotFound)
+      return false;
+    NSUInteger before = found.location;
+    while (before > 0 &&
+           [space characterIsMember:[text characterAtIndex:before - 1]])
+      --before;
+    NSUInteger after = NSMaxRange(found);
+    while (after < text.length &&
+           [space characterIsMember:[text characterAtIndex:after]])
+      ++after;
+    bool starts_item =
+        before > 0 && is_separator([text characterAtIndex:before - 1]);
+    bool inner = after < text.length && is_separator([text
+                                            characterAtIndex:after]);
+    if (starts_item && inner)
+      return true;
+    search = NSMakeRange(NSMaxRange(found), text.length - NSMaxRange(found));
+  }
+}
+
+// A tile is `<name>, <audio status>[, <active marker>][, other details]`.
+//
+// The status anchors on its LAST occurrence: Zoom writes it after the name. If
+// the text before it still contains any status or marker phrase, the name is
+// ambiguous and the tile is dropped. The research rule took the earliest
+// phrase.
+//
+// The marker makes the tile active only as the LAST item after the status. A
+// marker that is a separated item but not last (`..., Active speaker, Video
+// on`) is not a structure we have seen: the tile stays inactive but the read is
+// incomplete, since a confident "nobody is speaking" would be a guess.
+//
+// A description with an active marker but no audio status is not accepted as a
+// tile: that structure is unvalidated and a participant named "Eve, Active
+// speaker" would otherwise become a speaker. It marks the read incomplete.
 std::optional<Tile> parse_tile(const AxNode &node, bool &dropped) {
   NSString *description = to_ns(node.description);
   if (!description) {
@@ -379,6 +411,12 @@ std::optional<Tile> parse_tile(const AxNode &node, bool &dropped) {
       trimmed([description substringFromIndex:NSMaxRange(best.range)]);
   NSUInteger separator = 0;
   tile.active = ends_with_marker(rest, best.locale->active, separator);
+  if (!tile.active)
+    for (const auto &locale : decoded_locales())
+      if (has_inner_marker(rest, locale.active)) {
+        dropped = true; // a marker that is not last: inactive but unsure
+        break;
+      }
   tile.audio = best.audio;
   tile.locale = best.locale;
   NSString *name = trimmed(strip_trailing_separators(

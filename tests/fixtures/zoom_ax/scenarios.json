@@ -372,7 +372,7 @@
    }
   },
   {
-   "name": "trailing detail after the marker is not active",
+   "name": "a marker followed by more items is inactive but unsure",
    "truncated": false,
    "snapshot": {
     "role": "AXApplication",
@@ -384,6 +384,116 @@
        {
         "role": "AXTabGroup",
         "description": "Alice Example, Computer audio unmuted, Active speaker, Video on"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": false,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "Alice Example",
+      "self": false
+     }
+    ],
+    "speakers": []
+   }
+  },
+  {
+   "name": "a marker followed by more items in simplified chinese",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "张三，电脑音频开启，当前演讲者，视频开启"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": false,
+    "locale": "zh-Hans",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "张三",
+      "self": false
+     }
+    ],
+    "speakers": []
+   }
+  },
+  {
+   "name": "a marker followed by more items still reports other speakers",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "Alice Example, Computer audio unmuted, Active speaker, Video on"
+       },
+       {
+        "role": "AXTabGroup",
+        "description": "Bob Example, Computer audio unmuted, Active speaker"
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "available": true,
+    "complete": false,
+    "locale": "en",
+    "window_index": 0,
+    "participants": [
+     {
+      "name": "Alice Example",
+      "self": false
+     },
+     {
+      "name": "Bob Example",
+      "self": false
+     }
+    ],
+    "speakers": [
+     {
+      "name": "Bob Example",
+      "method": "participant_status",
+      "index": 1
+     }
+    ]
+   }
+  },
+  {
+   "name": "unrelated trailing details are a complete inactive read",
+   "truncated": false,
+   "snapshot": {
+    "role": "AXApplication",
+    "children": [
+     {
+      "role": "AXWindow",
+      "object_id": 100,
+      "children": [
+       {
+        "role": "AXTabGroup",
+        "description": "Alice Example, Computer audio unmuted, Video on"
        }
       ]
      }
