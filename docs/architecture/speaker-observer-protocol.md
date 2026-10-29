@@ -111,14 +111,18 @@ reason tokens include `zoom_not_running`, `accessibility_not_trusted`,
 `zoom_version_unsupported`, `no_meeting_window`, `no_participant_evidence`,
 `ambiguous_windows`, `ambiguous_processes`, `locale_conflict`,
 `unsupported_locale`, `ax_read_failed`, `ax_timeout_unavailable`,
-`version_unreadable`, `incomplete_read`, `frame_too_large`. `incomplete_read`
+`version_unreadable`, `incomplete_read`, `frame_too_large`. The Linux helper also
+reports `no_session_bus`, `session_bus_unreachable`, `atspi_bus_absent`,
+`atspi_status_unreadable`, `accessibility_disabled`, `setup_not_effective`,
+`no_validated_rules`, `zoom_not_exposed` and `read_cancelled`. `incomplete_read`
 means a bound, timeout or failed attribute cut the read short and no evidence
 was found, so a meeting is neither confirmed nor ruled out; only a complete read
 with no evidence reports `no_meeting`. `needs_setup` means
 accessibility was never granted to this helper; after an explicit `setup` that
 is still not granted, or after a grant is lost, the state is `permission_denied`.
 `clock.uptime_ms` is the same instant on the sleep-excluding uptime clock
-(`mach_absolute_time` on macOS), provided because native capture timestamps may
+(`mach_absolute_time` on macOS; on Linux `CLOCK_MONOTONIC` already excludes sleep, so
+it equals `monotonic_ms`), provided because native capture timestamps may
 be derived from a steady clock that does not count system sleep.
 
 ### Observation

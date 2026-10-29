@@ -89,6 +89,22 @@ component image; its recipe digest invalidates tooling reuse when they change.
 its raw FIFO cannot supply the acquisition timing required by saved recordings.
 See [native capture](../../native/README.md) and [audio codecs](../architecture/audio-codecs.md).
 
+The optional Zoom speaker observer, `zoom_observer_linux`, reads Zoom's accessibility
+tree through libatspi. A host build includes it only when pkg-config finds `atspi-2`
+and `gio-2.0`; otherwise CMake prints a status line, skips the helper and its tests that
+need it (the CTest `zoom_observer_linux_built` then reports Skipped), and everything else
+builds. Configure with `-DFORESIGHT_REQUIRE_ATSPI=ON` to make a missing library a configure
+error instead. Development packages (checked against the package index): Debian 13 and
+Ubuntu 24.04 `libatspi2.0-dev` and `libglib2.0-dev`; Arch `at-spi2-core` and `glib2`
+(headers and `libatspi.so` ship in the runtime package). Fedora `at-spi2-core-devel` and
+`glib2-devel` exist in rawhide; Fedora 44 itself is not checked. Runtime libraries: Debian
+13 and Ubuntu 24.04 `libatspi2.0-0t64`; Fedora `at-spi2-core` (it provides `libatspi.so.0`;
+there is no `at-spi2-core-libs`); Arch `at-spi2-core`; plus GLib/GIO. GTK 3 already pulls
+these in on the supported distributions. The helper links them dynamically from the host and
+is not bundled; its absence must never stop the application or recording. Package metadata,
+ABI audits, the CI tooling image and `FORESIGHT_REQUIRE_ATSPI` do not yet cover it: see
+[the Linux helper notes](../architecture/zoom-observer-linux.md#ci-and-packaging-owner-changes).
+
 ## Document import sandbox
 
 PDF and RTF imports require `/usr/bin/bwrap` (bubblewrap), `/usr/bin/pdftotext`

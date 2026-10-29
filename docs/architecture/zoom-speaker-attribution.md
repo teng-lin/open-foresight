@@ -211,6 +211,75 @@ inaccessible Zoom trees, headless service use, or missing session access produce
 a capability result without interrupting recording. Test Wayland and Xorg
 independently. Do not introduce X11-only automation into the reader.
 
+### Linux live feasibility
+
+Status of the Linux adapter against a real Zoom. This section records what was executed
+and what was not; the shipped rule set (`validated_rules()` in
+[zoom_atspi_parser.cpp](../../native/zoom_atspi_parser.cpp)) enables no roster or
+speaker rule, so the helper reports capabilities and `unavailable` and never a participant
+or active speaker. No real tree, name or title is stored in the repository.
+
+Executed, on the Linux test host (Omarchy, kernel 7.2.8, Hyprland on Wayland with Xwayland,
+at-spi2-core 2.62.1, Arch `zoom` 7.2.1-1 whose `/opt/zoom/version.txt` reads `7.2.1.5760`):
+
+- Accessibility is off by default there: `org.a11y.Status.IsEnabled` is `false`, the property
+  `ScreenReaderEnabled` does not exist, and GSettings `toolkit-accessibility` is `false`.
+  `at-spi-bus-launcher` and `at-spi2-registryd` are running, so the bus exists but is disabled.
+- Zoom bundles its own Qt 6 (`/opt/zoom/Qt`, with `libQt6Core` and `libQt6DBus`) and no
+  separate accessible-bridge plugin. Qt's built-in AT-SPI bridge activates from the bus
+  `IsEnabled` property or `QT_LINUX_ACCESSIBILITY_ALWAYS_ON`; which of the two this build
+  honors is not yet established.
+
+These facts were read without changing anything on that host.
+
+Executed against a stand-in, not Zoom (an earlier revision of the helper, before it moved
+onto the shared protocol core): the helper ran on Debian 13 (aarch64) with a real session bus,
+`at-spi-bus-launcher`, and a GTK 4 dialog standing in for a meeting window. The read-only
+capability states (`needs_setup` with the bus absent, then with accessibility disabled;
+`zoom_not_running`; `available`), explicit `setup` flipping `IsEnabled`, a full tree read in
+about 30 ms and stable participant refs behaved as designed. This validates the collector and
+protocol only; it says nothing about Zoom's tree.
+
+Executed against the installed Zoom 7.2.1 (5760) on that host, with the owner's approval to launch it
+with `WAYLAND_DISPLAY=wayland-1` in a per-process environment. No accessibility, GSettings or service
+setting was changed (`IsEnabled` stayed `false`). Deviations and side effects, stated plainly:
+
+- `DISPLAY=:0` (Xwayland) was needed beyond the approved environment. Zoom forces Qt's `xcb` platform
+  and crashes with SIGSEGV without an X display, even when `QT_QPA_PLATFORM=wayland` is set.
+- Four launches without `DISPLAY` crashed at start-up. They left four crash dumps in `~/.zoom/logs`
+  on the test host, with matching systemd-coredump entries; these were not cleaned up.
+- The `IsEnabled=true` path (the helper's `setup`) was not tested, because it changes a persistent
+  setting that was not approved.
+- No roster or active-speaker signal was observed: only a pre-meeting screen was read.
+
+Each successful run was about 25 seconds with no sign-in and no meeting, and Zoom was closed by PID.
+Structure only was captured (roles, state flags, attribute keys, name lengths):
+
+| Launch environment | Result |
+| --- | --- |
+| `DISPLAY=:0` (default) | Zoom runs under Xwayland but no accessible application is registered for it |
+| `DISPLAY=:0` and `QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1` | Qt 6.8.8 registers; the first screen exposes 342 nodes (depth 7, 221 ms) |
+
+So with the bus disabled, Zoom exposes a tree only when launched with
+`QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1`. The first screen has 7 `frame` windows (most hidden) holding
+`label` (140), `button` (106), `filler` (47), `text` (9), `scroll bar`, `link`, `panel`, `list`,
+`combo box`, `table column header`, `list item` and `check box` nodes. Names are present on most
+controls; every node's attribute list is empty; states are the usual `enabled`, `sensitive`,
+`focusable`, `showing`, `visible`, `read-only`, `editable`, with `active` on one frame. This is a
+pre-meeting screen: it has no participant roster and no speaking signal.
+
+Not executed: whether `IsEnabled=true` (the helper's `setup`) also exposes Zoom without the environment
+variable or a restart (not approved: it changes a persistent setting), any signed-in or join screen, any
+meeting, and any Xorg session. The roster and active-speaker signals, node counts and failure rates
+under load, and event reliability are therefore unknown. Closing this needs a signed-in three-person call
+with controlled participant names; until then the `atspi_state` method stays reserved and `speakers` is
+only ever empty with `complete: false`.
+
+To repeat the probe, dump the tree locally with Python GI (`Atspi.get_desktop(0)` then
+`get_role_name()`, `get_state_set()` and `get_attributes()` per node, names hidden unless
+explicitly requested) and keep the output out of the repository; derive rules into
+[synthetic fixtures](../../tests/fixtures/zoom_observer_linux) with invented roles and names.
+
 ## Participant identity and attribution policy
 
 Create separate models for `AudioChannel`, `MeetingParticipant`,
