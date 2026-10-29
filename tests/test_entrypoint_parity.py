@@ -1471,6 +1471,37 @@ def test_a_gate_that_states_a_platform_is_not_satisfied_by_a_disagreeing_runner(
 
 # ------------------------------------------------- review round 10: classification is linear in the text
 
+@pytest.mark.parametrize("text", [
+    "", "echo x\n", "a\r\nb\r", "\r", "'unclosed", '"quoted\nline"',
+    "a\\\nb", "a\u2028b\u0085c\v", "a\fb",
+])
+def test_text_without_comments_or_heredocs_keeps_its_exact_normalization(text):
+    assert parity.strip_comments(text) == text
+    assert parity.split_heredocs(text) == ("\n".join(text.splitlines()), [])
+
+
+def test_unquoted_tokenization_matches_the_standard_shell_lexer():
+    import itertools
+    import shlex
+
+    cases = [
+        "env A=$x tools/a.sh >&2&&\n(tools/b.sh);;",
+        "x\u00a0y\u2028z\x00q\v\f tools/a.sh\t\rnext",
+        "echo a#b $# ${#x} { } $(x) >file &>>out |& cat",
+    ]
+    # Exercise fused operators, words, ASCII/Unicode whitespace and NULs
+    # independently of the optimized scanner's implementation.
+    cases.extend("".join(chars) for chars in itertools.product(
+        ("x", ";", "\n", " ", "|", ">", "\u00a0", "\x00"), repeat=4,
+    ))
+    for text in cases:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=";()<>|&\n")
+        lexer.whitespace_split = True
+        lexer.whitespace = " \t\r"
+        lexer.commenters = ""
+        assert parity._tokens(text) == list(lexer), repr(text)
+
+
 def timed(text):
     import time
 

@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import subprocess
 import socket
+import ssl
 import tarfile
 import urllib.error
 
@@ -80,6 +81,83 @@ def test_private_directories_and_archive_links(tmp_path):
 
 class Download(io.BytesIO):
     url = "https://fixture.invalid/source"
+    length = None
+
+
+def http_download(request, body, headers=b""):
+    """A real HTTP parser over an owned socket that reaches transport EOF."""
+    client, peer = socket.socketpair()
+    try:
+        client.settimeout(1)
+        peer.settimeout(1)
+        peer.sendall(b"HTTP/1.1 200 OK\r\nConnection: close\r\n" + headers + b"\r\n" + body)
+        response = http.client.HTTPResponse(client)
+        request.addfinalizer(response.close)
+        response.begin()
+        response.url = Download.url
+        return response
+    finally:
+        # HTTPResponse's makefile owns the reader until response.close().
+        client.close()
+        peer.close()
+
+
+@pytest.mark.parametrize("headers,body,retained", [
+    (b"Content-Length: 8\r\n", b"short", b"short"),
+    (b"Transfer-Encoding: chunked\r\n", b"8\r\nshort", b""),
+])
+def test_short_http_body_retries_using_a_fresh_response(
+    tmp_path, monkeypatch, request, headers, body, retained
+):
+    replies = iter([(body, headers), (b"complete", b"Content-Length: 8\r\n")])
+    calls, waits = [], []
+
+    def open_source(url, *, timeout):
+        calls.append((url, timeout))
+        payload, fields = next(replies)
+        return http_download(request, payload, fields)
+
+    monkeypatch.setattr(media.urllib.request, "urlopen", open_source)
+    monkeypatch.setattr(media.time, "sleep", waits.append)
+    result = media.checked_archive(
+        tmp_path, "fixture", Download.url, hashlib.sha256(b"complete").hexdigest(), True
+    )
+    assert result.read_bytes() == b"complete"
+    assert len(calls) == 2 and waits == [1]
+    partials = list(tmp_path.glob("download-*"))
+    assert len(partials) == 1 and partials[0].read_bytes() == retained
+
+
+@pytest.mark.parametrize("headers,body", [
+    (b"Content-Length: 8\r\n", b"complete"),
+    (b"", b"complete"),
+    (b"Transfer-Encoding: chunked\r\n", b"8\r\ncomplete\r\n0\r\n\r\n"),
+])
+def test_complete_http_body_with_wrong_digest_is_not_retried(
+    tmp_path, monkeypatch, request, headers, body
+):
+    calls = []
+
+    def open_source(url, *, timeout):
+        calls.append(url)
+        return http_download(request, body, headers)
+
+    monkeypatch.setattr(media.urllib.request, "urlopen", open_source)
+    monkeypatch.setattr(media.time, "sleep", lambda _: pytest.fail("unexpected retry"))
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        media.checked_archive(tmp_path, "fixture", Download.url, "0" * 64, True)
+    assert calls == [Download.url]
+    assert not (tmp_path / "fixture.tar.gz").exists()
+
+
+def test_eof_delimited_http_body_still_requires_the_pinned_digest(
+    tmp_path, monkeypatch, request
+):
+    monkeypatch.setattr(media.urllib.request, "urlopen", lambda *a, **k: http_download(request, b"complete"))
+    result = media.checked_archive(
+        tmp_path, "fixture", Download.url, hashlib.sha256(b"complete").hexdigest(), True
+    )
+    assert result.read_bytes() == b"complete"
 
 
 def test_download_requires_verified_https(tmp_path, monkeypatch):
@@ -110,6 +188,8 @@ def test_download_requires_verified_https(tmp_path, monkeypatch):
     [
         ConnectionResetError(errno.ECONNRESET, "reset"),
         urllib.error.URLError(ConnectionResetError(errno.ECONNRESET, "reset")),
+        ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "unexpected TLS EOF"),
+        urllib.error.URLError(ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "unexpected TLS EOF")),
         TimeoutError("socket timed out"),
         socket.gaierror(socket.EAI_AGAIN, "temporary resolver failure"),
         urllib.error.HTTPError("https://fixture.invalid", 503, "busy", {}, None),
@@ -144,13 +224,17 @@ def test_transient_download_restarts_with_original_checksum(
     assert len(list(tmp_path.glob("download-*"))) == 1
 
 
+@pytest.mark.parametrize("failure", [
+    ConnectionResetError(errno.ECONNRESET, "reset during body"),
+    ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "TLS EOF during body"),
+])
 def test_interrupted_body_is_retained_and_never_appended_to_retry(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, failure
 ):
     class Interrupted(Download):
         def read(self, size=-1):
             if self.tell():
-                raise ConnectionResetError(errno.ECONNRESET, "reset during body")
+                raise failure
             return super().read(size)
 
     replies = iter([Interrupted(b"interrupted prefix"), Download(b"complete")])
@@ -173,6 +257,10 @@ def test_interrupted_body_is_retained_and_never_appended_to_retry(
     [
         urllib.error.HTTPError("https://fixture.invalid", 404, "missing", {}, None),
         urllib.error.URLError("certificate verification failed"),
+        ssl.SSLCertVerificationError(ssl.SSL_ERROR_SSL, "certificate verification failed"),
+        urllib.error.URLError(ssl.SSLCertVerificationError(ssl.SSL_ERROR_SSL, "certificate verification failed")),
+        ssl.SSLError(ssl.SSL_ERROR_SSL, "unsupported protocol"),
+        urllib.error.URLError(ssl.SSLError(ssl.SSL_ERROR_SSL, "unsupported protocol")),
         urllib.error.URLError(PermissionError(errno.EACCES, "denied")),
         socket.gaierror(socket.EAI_NONAME, "unknown host"),
     ],
@@ -194,22 +282,26 @@ def test_permanent_download_failure_is_not_retried(tmp_path, monkeypatch, failur
     assert not (tmp_path / "fixture.tar.gz").exists()
 
 
+@pytest.mark.parametrize("failure", [
+    ConnectionResetError(errno.ECONNRESET, "reset"),
+    urllib.error.URLError(ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "unexpected TLS EOF")),
+])
 def test_download_retries_share_original_budget_and_stop_after_three(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, failure
 ):
     now = [0]
     timeouts = []
 
     def open_source(*args, timeout):
         timeouts.append(timeout)
-        raise ConnectionResetError(errno.ECONNRESET, "reset")
+        raise failure
 
     monkeypatch.setattr(media.urllib.request, "urlopen", open_source)
     monkeypatch.setattr(media.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(
         media.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
     )
-    with pytest.raises(ConnectionResetError):
+    with pytest.raises(type(failure)):
         media.checked_archive(
             tmp_path, "fixture", "https://fixture.invalid", "0" * 64, True
         )

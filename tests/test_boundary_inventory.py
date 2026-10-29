@@ -610,7 +610,8 @@ HOSTILE_SCENARIOS = [
     "EOF once the request arrived: the handshake, then nothing",
     "half a frame header then EOF: the handshake plus the five header bytes reach the client before the close",
     "KNOWN DEFICIENCY: bytes that are not HTTP/2 are reported only at the deadline",
-    "KNOWN DEFICIENCY: a peer that closes before any frame is reported only at the deadline",
+    "KNOWN DEFICIENCY: a peer that closes before any frame is reported at the deadline, or at once as UNKNOWN if the close follows the stream",
+    "a peer that closes after the request stream exists is reported at once as UNKNOWN, not at the deadline",
 ]
 
 
@@ -620,7 +621,7 @@ def test_the_hostile_peer_scenarios_cited_by_one_template_name_all_still_exist()
     source = re.sub(r"'\s*\n\s*'", "", source)  # adjacent literals the formatter wrapped
     for name in HOSTILE_SCENARIOS:
         assert name in source, name
-    assert len(inventory.dart_registered_tests(source)) == 7  # two templated tests, five literal ones
+    assert len(inventory.dart_registered_tests(source)) == 8  # two templated tests, six literal ones
     assert len(re.findall(r"^\s+Scenario\(\s*'", source, re.M)) == 4
     assert source.count("MalformedMessage('") == 3
 

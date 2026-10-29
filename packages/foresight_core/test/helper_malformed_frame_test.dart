@@ -249,9 +249,10 @@ void main() {
   });
 
   group('known deficiencies (characterized, not endorsed)', () {
-    // Both end only at the call deadline. The Helper's default is 45 s, and
-    // 30 minutes for indexDocument. If grpc starts reporting these promptly,
-    // these tests fail and the inventory should be updated.
+    // Non-HTTP/2 bytes, and a peer that closes before the channel has a
+    // stream, end only at the call deadline. The Helper's default is 45 s, and
+    // 30 minutes for indexDocument. If grpc starts reporting these promptly
+    // with another code, these tests fail and the inventory should be updated.
     test('KNOWN DEFICIENCY: bytes that are not HTTP/2 are reported only at '
         'the deadline', () {
       return _guarded((uncaught) async {
@@ -259,20 +260,71 @@ void main() {
           (client) => client.socket.add('HTTP/1.1 500 nope\r\n\r\n'.codeUnits),
           uncaught,
         );
-        expect((outcome.error as GrpcError).code, StatusCode.deadlineExceeded);
+        expect(
+          (outcome.error as GrpcError).code,
+          StatusCode.deadlineExceeded,
+          reason: '${outcome.error} after ${outcome.elapsed}',
+        );
         expect(outcome.elapsed, greaterThanOrEqualTo(deadline));
       });
     });
 
-    test('KNOWN DEFICIENCY: a peer that closes before any frame is reported '
-        'only at the deadline', () {
+    // Which of two outcomes a peer that closes before any frame produces
+    // depends on the order of two events the client does not control: when the
+    // channel has already seen the close, the call waits for a connection and
+    // ends at its deadline; when the close lands after the call's HTTP/2
+    // stream exists, grpc reports the torn-down connection at once as UNKNOWN.
+    // The first test accepts exactly those two outcomes; the second forces the
+    // second order, by closing only after the peer has read the request, so
+    // that outcome is pinned and not left to the scheduler.
+    test(
+      'KNOWN DEFICIENCY: a peer that closes before any frame is reported at '
+      'the deadline, or at once as UNKNOWN if the close follows the stream',
+      () {
+        return _guarded((uncaught) async {
+          final outcome = await _callAgainst(
+            (client) => client.socket.destroy(),
+            uncaught,
+          );
+          final error = outcome.error as GrpcError;
+          final reason = '$error after ${outcome.elapsed}';
+          if (error.code == StatusCode.deadlineExceeded) {
+            expect(
+              outcome.elapsed,
+              greaterThanOrEqualTo(deadline),
+              reason: reason,
+            );
+          } else {
+            expect(error.code, StatusCode.unknown, reason: reason);
+            expect(
+              error.message,
+              contains('forcefully terminated'),
+              reason: reason,
+            );
+            expect(outcome.elapsed, lessThan(deadline), reason: reason);
+          }
+        });
+      },
+    );
+
+    test('a peer that closes after the request stream exists is reported at '
+        'once as UNKNOWN, not at the deadline', () {
       return _guarded((uncaught) async {
         final outcome = await _callAgainst(
-          (client) => client.socket.destroy(),
+          (client) => unawaited(
+            client.requestSeen.then((_) => client.socket.destroy()),
+          ),
           uncaught,
         );
-        expect((outcome.error as GrpcError).code, StatusCode.deadlineExceeded);
-        expect(outcome.elapsed, greaterThanOrEqualTo(deadline));
+        final error = outcome.error as GrpcError;
+        final reason = '$error after ${outcome.elapsed}';
+        expect(error.code, StatusCode.unknown, reason: reason);
+        expect(
+          error.message,
+          contains('forcefully terminated'),
+          reason: reason,
+        );
+        expect(outcome.elapsed, lessThan(deadline), reason: reason);
       });
     });
   });

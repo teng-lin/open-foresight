@@ -62,14 +62,19 @@ AdmissionLockProbe probeLease(BackupFile lock) {
 /// runs suites as isolates of one process, and it matches this profile's exact
 /// canonical path so other suites' lock files are not counted. Only this
 /// process is inspected. Other processes' descriptors are never read.
-int? ownAdmissionDescriptors(String profilePath) {
+int? ownAdmissionDescriptors(String profilePath) =>
+    ownDescriptorsOn('$profilePath/logs/admission.lock');
+
+/// Descriptors this OS process still has open on [file], read as in
+/// [ownAdmissionDescriptors]; null where `/proc/self/fd` is unavailable. A
+/// fork does not add entries to its parent's table, so unlike a `flock` probe
+/// this count is not affected by another suite's fork copying a descriptor.
+int? ownDescriptorsOn(String file) {
   final directory = Directory('/proc/self/fd');
   if (!directory.existsSync()) return null;
   final String target;
   try {
-    target = File(
-      '$profilePath/logs/admission.lock',
-    ).resolveSymbolicLinksSync();
+    target = File(file).resolveSymbolicLinksSync();
   } on FileSystemException {
     return 0;
   }
