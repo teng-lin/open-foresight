@@ -102,8 +102,9 @@ Ubuntu 24.04 `libatspi2.0-dev` and `libglib2.0-dev`; Arch `at-spi2-core` and `gl
 there is no `at-spi2-core-libs`); Arch `at-spi2-core`; plus GLib/GIO. GTK 3 already pulls
 these in on the supported distributions. The helper links them dynamically from the host and
 is not bundled; its absence must never stop the application or recording. Package metadata,
-ABI audits, the CI tooling image and `FORESIGHT_REQUIRE_ATSPI` do not yet cover it: see
-[the Linux helper notes](../architecture/zoom-observer-linux.md#ci-and-packaging-owner-changes).
+ABI audits, the Ubuntu CI tooling image and `FORESIGHT_REQUIRE_ATSPI` do not yet cover it (the pinned
+Arch native stage already has the libraries and builds the helper): see
+[the Linux helper notes](../architecture/zoom-observer-linux.md#ci-and-packaging).
 
 ## Document import sandbox
 

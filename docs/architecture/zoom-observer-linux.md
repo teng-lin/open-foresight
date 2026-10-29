@@ -172,16 +172,26 @@ milliseconds, which does not count system sleep, so `uptime_ms` is the same valu
 4. Wayland and Xorg sessions independently; Zoom running under Xwayland.
 5. Ground-truth speaker-switch delay (100 transitions, 30-minute run).
 
-## CI and packaging owner changes
+## CI and packaging
 
-Not done in this change (workflows and the CI image are owner-review territory,
-[CI integrity](../platforms/ci-integrity.md)); without them CI silently builds no helper:
+**Linux native stage.** `native-linux` in `.github/workflows/linux-platform-stages.yml` runs in
+`archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1`.
+A provisional gate of this branch in that unmodified image installed nothing: `at-spi2-core`
+2.62.1 and GLib 2.90.1 were already present, so the helper was built and its tests ran
+(including `zoom_observer_bus`, which ran and was not skipped), 69/69 CTests, also with
+`-DFORESIGHT_REQUIRE_ATSPI=ON`, and the `zoom_` tests were clean under ASan/UBSan. Those
+libatspi and GLib versions are rolling Arch (`pacman -Syu` runs in the job), so they float
+with the archive; they are not pinned by the image digest.
 
-1. Add `libatspi2.0-dev` and `libglib2.0-dev` to the packages installed by
-   `packaging/ci-tooling.Dockerfile`.
-2. Configure CI and package builds with `-DFORESIGHT_REQUIRE_ATSPI=ON`, so a missing library
-   is a configure error rather than a skipped helper. Until then a skipped helper shows as
-   CTest `zoom_observer_linux_built` Skipped.
-3. Add the executable and `libatspi.so.0` to package metadata, the ABI audit and
+**Left to the workflow owner** (no workflow, image or packaging file is edited here, see
+[CI integrity](../platforms/ci-integrity.md)):
+
+1. Whether to set `-DFORESIGHT_REQUIRE_ATSPI=ON` in the native stage and in package builds.
+   Without it a missing library silently skips the helper; the CTest
+   `zoom_observer_linux_built` reports Skipped in that case, so the skip is visible but
+   not a failure.
+2. The Ubuntu paths: `packaging/ci-tooling.Dockerfile` installs neither `libatspi2.0-dev` nor
+   `libglib2.0-dev`, and whether the Ubuntu SDK image it extends provides them is not
+   verified here. If it does not, the helper is skipped there.
+3. Packages: the executable and `libatspi.so.0` in package metadata, the ABI audit and
    `packaging/package_linux.py`, with an assertion that the helper is present.
-4. Run `zoom_observer_bus` where `dbus-daemon` exists (the tooling image has `dbus-x11`).
