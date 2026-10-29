@@ -103,9 +103,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   option(FORESIGHT_REQUIRE_ATSPI
     "Fail configuration when libatspi/GIO development files are missing instead of skipping zoom_observer_linux" OFF)
   if(FORESIGHT_ATSPI_FOUND)
+    add_library(foresight_zoom_atspi STATIC zoom_atspi_desktop.cpp)
+    target_compile_options(foresight_zoom_atspi PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(foresight_zoom_atspi PUBLIC foresight_zoom_linux PkgConfig::FORESIGHT_ATSPI)
     add_executable(zoom_observer_linux zoom_observer_linux.cpp)
     target_compile_options(zoom_observer_linux PRIVATE -Wall -Wextra -Wpedantic)
-    target_link_libraries(zoom_observer_linux PRIVATE foresight_zoom_linux PkgConfig::FORESIGHT_ATSPI)
+    target_link_libraries(zoom_observer_linux PRIVATE foresight_zoom_atspi)
     install(TARGETS zoom_observer_linux RUNTIME DESTINATION bin)
   elseif(FORESIGHT_REQUIRE_ATSPI)
     message(FATAL_ERROR "FORESIGHT_REQUIRE_ATSPI is ON but atspi-2 and gio-2.0 development files "
@@ -677,25 +680,24 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_tests_properties(zoom_observer_linux_built PROPERTIES SKIP_RETURN_CODE 77)
   endif()
   if(TARGET zoom_observer_linux)
-    # The same helper, told to look for a process no machine runs, so a Zoom on
-    # the developer's machine cannot change what the bus test observes.
-    add_executable(zoom_observer_linux_absent zoom_observer_linux.cpp)
-    target_compile_definitions(zoom_observer_linux_absent PRIVATE
-      FORESIGHT_ZOOM_OBSERVER_EXECUTABLE="zoom-observer-ctest-absent")
-    target_link_libraries(zoom_observer_linux_absent PRIVATE foresight_zoom_linux PkgConfig::FORESIGHT_ATSPI)
+    # The same desktop and core with two test controls (see the file): which
+    # process counts as Zoom, and synthetic rules. A Zoom on the developer's
+    # machine cannot change what the bus test observes.
+    add_executable(zoom_observer_bus_helper ../tests/native/zoom_observer_bus_helper.cpp)
+    target_link_libraries(zoom_observer_bus_helper PRIVATE foresight_zoom_atspi)
     add_executable(zoom_observer_linux_protocol_test ../tests/native/zoom_observer_protocol.cpp)
     target_compile_features(zoom_observer_linux_protocol_test PRIVATE cxx_std_20)
     target_link_libraries(zoom_observer_linux_protocol_test PRIVATE nlohmann_json::nlohmann_json)
     add_test(NAME zoom_observer_protocol COMMAND zoom_observer_linux_protocol_test
-      "$<TARGET_FILE:zoom_observer_linux>" "${CMAKE_CURRENT_SOURCE_DIR}/zoom_observer_linux.cpp")
+      "$<TARGET_FILE:zoom_observer_linux>" "${CMAKE_CURRENT_SOURCE_DIR}/zoom_atspi_desktop.cpp")
     set_tests_properties(zoom_observer_protocol PROPERTIES TIMEOUT 120)
     # Needs dbus-daemon; exits 77 (reported as skipped) without it.
     add_executable(zoom_observer_bus_test ../tests/native/zoom_observer_bus.cpp)
     target_compile_features(zoom_observer_bus_test PRIVATE cxx_std_20)
-    target_link_libraries(zoom_observer_bus_test PRIVATE nlohmann_json::nlohmann_json
-      PkgConfig::FORESIGHT_ATSPI Threads::Threads)
+    target_link_libraries(zoom_observer_bus_test PRIVATE foresight_zoom_atspi
+      nlohmann_json::nlohmann_json Threads::Threads)
     add_test(NAME zoom_observer_bus COMMAND zoom_observer_bus_test
-      "$<TARGET_FILE:zoom_observer_linux_absent>")
+      "$<TARGET_FILE:zoom_observer_bus_helper>")
     set_tests_properties(zoom_observer_bus PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
   endif()
 endif()

@@ -23,8 +23,6 @@ SnapshotOutcome LinuxSource::snapshot(const std::function<bool()> &cancelled) {
   case BusStatus::Ready:
     seen_ready_ = true;
     break;
-  case BusStatus::AtspiUnreachable:
-    return refused("unavailable", "atspi_unreachable");
   case BusStatus::BusLost:
     return refused("unavailable", "atspi_bus_lost");
   case BusStatus::NoSessionBus:
@@ -89,6 +87,10 @@ SnapshotOutcome LinuxSource::snapshot(const std::function<bool()> &cancelled) {
   case TreeRead::Status::Cancelled:
     outcome.state = "unavailable";
     outcome.reason = "read_cancelled";
+    return outcome;
+  case TreeRead::Status::Unreachable:
+    outcome.state = "unavailable";
+    outcome.reason = "atspi_unreachable";
     return outcome;
   case TreeRead::Status::BusLost:
     outcome.state = "unavailable";

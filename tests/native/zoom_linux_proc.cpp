@@ -33,7 +33,25 @@ void add_process(const std::string &proc, int pid,
 
 } // namespace
 
+void bus_address_filter() {
+  check(safe_session_bus_address("unix:path=/run/user/1000/bus") ==
+            "unix:path=/run/user/1000/bus",
+        "a unix address is kept");
+  check(safe_session_bus_address("autolaunch:") == "", "autolaunch is refused");
+  check(safe_session_bus_address("unixexec:path=/bin/sh,argv1=-c") == "",
+        "unixexec is refused");
+  check(safe_session_bus_address(
+            "autolaunch:;unix:path=/a;unixexec:path=/x;unix:abstract=b") ==
+            "unix:path=/a;unix:abstract=b",
+        "only unix entries survive in a list");
+  check(safe_session_bus_address("") == "" &&
+            safe_session_bus_address("unix:") == "" &&
+            safe_session_bus_address(";;") == "",
+        "empty and bare entries are dropped");
+}
+
 int main() {
+  bus_address_filter();
   const char *root = std::getenv("FORESIGHT_TEST_TEMP_ROOT");
   if (!root || !*root)
     root = std::getenv("TMPDIR");
@@ -87,6 +105,25 @@ int main() {
   for (const auto &p : scan.processes)
     saw_empty = saw_empty || (p.pid == 106 && p.version.empty());
   check(saw_empty, "an over-long version.txt line is unknown");
+
+  // A FIFO named version.txt must not block the scan, and a symlink is not
+  // followed.
+  make_dir(install + "/fifo");
+  mkfifo((install + "/fifo/version.txt").c_str(), 0600);
+  add_process(proc, 108, install + "/fifo/zoom");
+  make_dir(install + "/link");
+  symlink((install + "/zoom/version.txt").c_str(),
+          (install + "/link/version.txt").c_str());
+  add_process(proc, 109, install + "/link/zoom");
+  scan = scan_zoom_processes(proc, "zoom", me);
+  bool fifo_empty = false, link_empty = false;
+  for (const auto &p : scan.processes) {
+    fifo_empty = fifo_empty || (p.pid == 108 && p.version.empty());
+    link_empty = link_empty || (p.pid == 109 && p.version.empty());
+  }
+  check(scan.ok && fifo_empty,
+        "a FIFO version.txt is unknown and does not block");
+  check(link_empty, "a symlinked version.txt is not followed");
 
   // An unreadable directory is an unknown, not an absence.
   check(!scan_zoom_processes(dir + "/missing", "zoom", me).ok,

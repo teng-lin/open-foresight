@@ -153,7 +153,8 @@ void reads() {
   } failures_[] = {{TreeRead::Status::NotExposed, "zoom_not_exposed"},
                    {TreeRead::Status::Failed, "ax_read_failed"},
                    {TreeRead::Status::Cancelled, "read_cancelled"},
-                   {TreeRead::Status::BusLost, "atspi_bus_lost"}};
+                   {TreeRead::Status::BusLost, "atspi_bus_lost"},
+                   {TreeRead::Status::Unreachable, "atspi_unreachable"}};
   for (const auto &f : failures_) {
     desktop.tree.status = f.status;
     expect(source.snapshot(never), false, "unavailable", f.reason, f.reason);

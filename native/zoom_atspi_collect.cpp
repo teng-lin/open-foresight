@@ -30,6 +30,19 @@ struct State {
     stopped = true;
     return true;
   }
+  // Cancellation or a spent budget only (not the node limit): polled between
+  // the remote calls of a single node.
+  bool interrupted() {
+    if (stopped)
+      return true;
+    if (cancelled())
+      was_cancelled = true;
+    else if (!out_of_time())
+      return false;
+    truncated = true;
+    stopped = true;
+    return true;
+  }
   void fail() {
     truncated = true;
     if (++errors >= limits.max_errors)
@@ -47,7 +60,7 @@ bool collect(AccessibleNode &node, int depth, State &state, AxNode &out) {
     return true;
   }
   ++state.nodes;
-  NodeProps props = node.read();
+  NodeProps props = node.read([&state] { return state.interrupted(); });
   if (props.identity.empty()) {
     state.identity_missing = true;
   } else {

@@ -3,21 +3,36 @@
 #include <cerrno>
 #include <cstdlib>
 #include <dirent.h>
-#include <fstream>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 namespace foresight::zoom {
 namespace {
 
+// The first line of a small regular file, or "" when it is missing, not a
+// regular file (a FIFO must not block the scan), unreadable or malformed.
 std::string version_beside(const std::string &executable) {
   const auto slash = executable.rfind('/');
   if (slash == std::string::npos)
     return "";
-  std::ifstream input(executable.substr(0, slash) + "/version.txt");
-  std::string line;
-  std::getline(input, line);
-  if (line.size() > 64 || line.find_first_of("\r\n\t") != std::string::npos)
+  const std::string path = executable.substr(0, slash) + "/version.txt";
+  const int fd =
+      open(path.c_str(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
+  if (fd < 0)
+    return "";
+  struct stat info{};
+  char buffer[66];
+  ssize_t length = -1;
+  if (fstat(fd, &info) == 0 && S_ISREG(info.st_mode) && info.st_size <= 4096)
+    length = read(fd, buffer, sizeof(buffer) - 1);
+  close(fd);
+  if (length <= 0)
+    return "";
+  std::string line(buffer, static_cast<size_t>(length));
+  line.resize(line.find('\n') == std::string::npos ? line.size()
+                                                   : line.find('\n'));
+  if (line.size() > 64 || line.find_first_of("\r\t") != std::string::npos)
     return "";
   return line;
 }
@@ -67,6 +82,24 @@ ProcessScan scan_zoom_processes(const std::string &proc_root,
   }
   closedir(proc);
   return scan;
+}
+
+std::string safe_session_bus_address(const std::string &configured) {
+  std::string kept;
+  size_t start = 0;
+  while (start <= configured.size()) {
+    size_t end = configured.find(';', start);
+    if (end == std::string::npos)
+      end = configured.size();
+    const std::string entry = configured.substr(start, end - start);
+    if (entry.compare(0, 5, "unix:") == 0 && entry.size() > 5) {
+      if (!kept.empty())
+        kept += ';';
+      kept += entry;
+    }
+    start = end + 1;
+  }
+  return kept;
 }
 
 } // namespace foresight::zoom

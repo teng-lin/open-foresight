@@ -32,7 +32,10 @@ struct NodeProps {
 class AccessibleNode {
 public:
   virtual ~AccessibleNode() = default;
-  virtual NodeProps read() = 0;
+  // `interrupted` is polled before every remote call; once it reports true the
+  // read returns what it has with `failed` set, so one node's several calls
+  // cannot run on far past the budget or a cancellation.
+  virtual NodeProps read(const std::function<bool()> &interrupted) = 0;
   // Null when the child cannot be fetched.
   virtual std::unique_ptr<AccessibleNode> child(int index) = 0;
   // Discards client-side cached values so the next read reflects live state.

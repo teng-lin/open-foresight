@@ -20,6 +20,7 @@ void check(bool value, const std::string &what) {
 
 struct Counters {
   int reads = 0, children = 0, cache_drops = 0;
+  int calls_per_read = 1; // remote calls one node's read makes
   int64_t clock_ms = 0;
 };
 
@@ -38,9 +39,18 @@ class FakeNode final : public AccessibleNode {
 public:
   FakeNode(const Spec &spec, Counters &counters, int64_t read_cost_ms)
       : spec_(spec), counters_(counters), cost_(read_cost_ms) {}
-  NodeProps read() override {
+  NodeProps read(const std::function<bool()> &interrupted) override {
     ++counters_.reads;
-    counters_.clock_ms += cost_;
+    // A real node polls this before each of its remote calls.
+    for (int call = 0; call < counters_.calls_per_read; ++call) {
+      if (interrupted()) {
+        NodeProps cut;
+        cut.identity = spec_.identity;
+        cut.failed = true;
+        return cut;
+      }
+      counters_.clock_ms += cost_ / counters_.calls_per_read;
+    }
     NodeProps props;
     props.identity = spec_.identity;
     props.role = spec_.role;
@@ -239,6 +249,38 @@ void deadline() {
         "no child is fetched after the budget is spent");
 }
 
+// One node's read makes several remote calls; the budget is checked before
+// each, so a slow application overruns it by at most one call, not one whole
+// node.
+void budget_between_calls_of_one_node() {
+  Counters counters;
+  counters.calls_per_read = 6;
+  FakeDesktop desktop(counters,
+                      /*read_cost_ms=*/6 * 250); // six 250 ms calls per node
+  Spec window = leaf(":1.1/w");
+  window.children = {leaf(":1.1/a"), leaf(":1.1/b")};
+  desktop.apps = {app_with({window})};
+  ElementRegistry registry;
+  CollectLimits limits = limits_for(counters, /*budget_ms=*/600);
+  const int64_t start = counters.clock_ms;
+  TreeRead read = read_zoom_tree(desktop, 1, limits, registry, never);
+  check(read.snapshot.truncated, "an overrun budget truncates");
+  check(counters.clock_ms - start <= 600 + 250,
+        "the overrun is at most one call");
+  check(counters.reads <= 2,
+        "no second node is started once the budget is spent");
+
+  Counters c2;
+  c2.calls_per_read = 6;
+  FakeDesktop d2(c2, 6 * 10);
+  d2.apps = {app_with({leaf(":1.1/w")})};
+  ElementRegistry r2;
+  int polls = 0;
+  read_zoom_tree(d2, 1, limits_for(c2, 1000), r2, [&] { return ++polls > 3; });
+  check(c2.reads == 1 && polls < 12,
+        "cancellation is polled between the calls of one node too");
+}
+
 void call_errors() {
   Counters counters;
   FakeDesktop desktop(counters);
@@ -309,7 +351,7 @@ void empty_root() {
 
 class UnreadableRoot final : public AccessibleNode {
 public:
-  NodeProps read() override {
+  NodeProps read(const std::function<bool()> &) override {
     NodeProps props;
     props.identity = ":1.1/root";
     props.child_count = -1;
@@ -427,6 +469,7 @@ int main() {
   depth_limit();
   deadline();
   call_errors();
+  budget_between_calls_of_one_node();
   cancellation();
   empty_root();
   root_child_count_failure();

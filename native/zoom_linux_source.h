@@ -29,9 +29,7 @@ enum class BusStatus {
   A11yBusAbsent,
   StatusUnreadable,
   Disabled,
-  // libatspi could not be initialized against the accessibility bus.
-  AtspiUnreachable,
-  // The accessibility bus or registry went away after a successful start.
+  // The accessibility bus or registry went away after libatspi connected.
   BusLost,
 };
 
@@ -52,7 +50,9 @@ struct TreeRead {
     NotExposed,
     Failed,
     Cancelled,
-    BusLost
+    BusLost,
+    // libatspi could not be initialized against the accessibility bus.
+    Unreachable
   } status = Status::Failed;
   AxSnapshot snapshot;
   // An element's identity could not be established.

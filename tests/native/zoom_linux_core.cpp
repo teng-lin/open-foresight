@@ -509,16 +509,18 @@ void check_broken_stdout() {
   ScriptedSource source({meeting({item(1, "Synthetic Alpha")})});
   Harness h(source, rules);
   h.expect("hello");
-  start(h);
+  start(h); // polls every 100 ms
   h.expect("started");
-  h.close_output();
+  h.expect("observation"); // at least one poll has run
+  const int before = source.snapshots;
+  h.close_output(); // the next frame the helper writes fails
   CHECK(h.join() == 3, "a broken stdout exits 3");
   CHECK(h.stderr_text().find("stdout_closed") != std::string::npos,
         "a stable token explains the exit");
-  // join() returned, so run_observer is over: nothing can read any more.
-  const int polled = source.snapshots;
-  CHECK(source.snapshots == polled && polled >= 1,
-        "no reads continue after stdout breaks");
+  // At 100 ms a helper that kept polling would add many reads; a prompt exit
+  // adds at most the poll in flight and the one whose frame failed.
+  const int after = source.snapshots;
+  CHECK(after - before <= 3, "polling stops promptly when stdout breaks");
 }
 
 } // namespace

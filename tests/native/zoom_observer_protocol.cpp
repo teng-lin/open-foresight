@@ -244,10 +244,10 @@ void test_source_is_passive(const char *source_path) {
           std::string("the helper never uses ") + forbidden);
   check(count("\"Set\"") == 1,
         "exactly one D-Bus Set call exists (the explicit setup)");
-  check(count("G_DBUS_CALL_FLAGS_NONE") == 1,
-        "only the explicit setup may auto-start a service");
-  check(count("G_DBUS_CALL_FLAGS_NO_AUTO_START") >= 3,
-        "every other D-Bus call forbids service activation");
+  check(count("G_DBUS_CALL_FLAGS_NONE") == 0,
+        "no D-Bus call may activate a service, setup included");
+  check(count("G_DBUS_CALL_FLAGS_NO_AUTO_START") >= 4,
+        "every D-Bus call forbids service activation");
 }
 
 } // namespace

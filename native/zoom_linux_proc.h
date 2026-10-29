@@ -19,4 +19,10 @@ namespace foresight::zoom {
 ProcessScan scan_zoom_processes(const std::string &proc_root,
                                 const std::string &executable_name, uid_t uid);
 
+// The entries of a D-Bus address list the helper will connect to: `unix:`
+// transports only. `autolaunch:` could start a bus and `unixexec:` runs a
+// program, neither of which a passive reader may do; other entries are dropped.
+// Empty when none remains.
+std::string safe_session_bus_address(const std::string &configured);
+
 } // namespace foresight::zoom
