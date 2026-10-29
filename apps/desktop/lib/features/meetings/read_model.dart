@@ -326,6 +326,11 @@ Object? _fields(Object? value) => switch (value) {
     value.startMs,
     value.endMs,
     value.source,
+    value.participantId,
+    value.participantName,
+    value.attributionState,
+    value.attributionMethod,
+    value.attributionManual,
   ],
   MeetingQuestion() => [
     value.id,

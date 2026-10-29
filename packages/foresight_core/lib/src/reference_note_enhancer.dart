@@ -4,6 +4,7 @@ import 'reference_note_enhancement.dart';
 import 'reference_note_enhancement_context.dart';
 import 'reference_note_enhancement_merge.dart';
 import 'reference_note_enhancement_plan.dart';
+import 'attributed_transcript.dart';
 import 'reference_note_enhancement_prompt.dart';
 import 'reference_note_enhancement_ranking.dart';
 import 'reference_note_transcript_cache.dart';
@@ -36,6 +37,7 @@ class ReferenceNoteEnhancer {
     this.logBatchError,
     this.checkCurrent,
     this.onBatchFailure,
+    this.speakerNotice,
   });
 
   final Future<void> Function() ensureReady;
@@ -50,6 +52,11 @@ class ReferenceNoteEnhancer {
   final void Function(Object error, StackTrace stack)? logBatchError;
   final void Function()? checkCurrent;
   final void Function(List<int> noteIndices, Object error)? onBatchFailure;
+
+  /// Added once to a prompt whose excerpts contain participant-name labels,
+  /// decided from the excerpt text placed in that prompt; null never adds it
+  /// and a prompt without labels stays byte-identical.
+  final String? speakerNotice;
 
   Future<T> _whileCurrent<T>(Future<T> pending) async {
     if (checkCurrent == null) return pending;
@@ -167,6 +174,13 @@ class ReferenceNoteEnhancer {
           uncoveredExcerpts: context.uncoveredExcerpts,
           includeMissedTopics: context.includeMissedTopics,
           concise: concise,
+          speakerNotice:
+              speakerNotice != null &&
+                  AttributedTranscript.containsNames(
+                    '${context.relevantExcerpts}\n${context.uncoveredExcerpts}',
+                  )
+              ? speakerNotice
+              : null,
         );
         final response = StringBuffer();
         try {

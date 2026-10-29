@@ -18,6 +18,7 @@ export 'package:foresight_core/src/graph_clusters.dart';
 export 'package:foresight_core/src/graph_labels.dart';
 export 'package:foresight_core/src/graph_layout.dart';
 export 'package:foresight_core/src/helper.dart';
+export 'package:foresight_core/src/meeting_attribution.dart';
 export 'package:foresight_core/src/native.dart';
 export 'package:foresight_core/src/operations.dart';
 export 'package:foresight_core/src/persistence/sqlite_runtime.dart' hide Row;

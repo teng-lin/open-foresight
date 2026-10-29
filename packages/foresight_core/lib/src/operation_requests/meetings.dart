@@ -41,6 +41,59 @@ class MeetingsRenameRequest extends OperationRequest {
   }
 }
 
+class MeetingsAttributeRequest extends OperationRequest {
+  MeetingsAttributeRequest._(super.context, this.id, this.name);
+  final int id;
+
+  /// Null marks the segment as not a named person.
+  final String? name;
+  @override
+  Operation get operation => Operation.meetingsAttribute;
+  factory MeetingsAttributeRequest.decode(OperationRequestContext context) {
+    final values = Operation.meetingsAttribute.descriptor.arguments.decode(
+      context.rawArguments,
+    );
+    return MeetingsAttributeRequest._(
+      context,
+      values.value<int>('id'),
+      values.value<String?>('name'),
+    );
+  }
+}
+
+class MeetingsResetAttributionRequest extends OperationRequest {
+  MeetingsResetAttributionRequest._(super.context, this.id);
+  final int id;
+  @override
+  Operation get operation => Operation.meetingsResetAttribution;
+  factory MeetingsResetAttributionRequest.decode(
+    OperationRequestContext context,
+  ) {
+    final values = Operation.meetingsResetAttribution.descriptor.arguments
+        .decode(context.rawArguments);
+    return MeetingsResetAttributionRequest._(context, values.value<int>('id'));
+  }
+}
+
+class MeetingsRenameParticipantRequest extends OperationRequest {
+  MeetingsRenameParticipantRequest._(super.context, this.id, this.name);
+  final int id;
+  final String name;
+  @override
+  Operation get operation => Operation.meetingsRenameParticipant;
+  factory MeetingsRenameParticipantRequest.decode(
+    OperationRequestContext context,
+  ) {
+    final values = Operation.meetingsRenameParticipant.descriptor.arguments
+        .decode(context.rawArguments);
+    return MeetingsRenameParticipantRequest._(
+      context,
+      values.value<int>('id'),
+      values.value<String>('name'),
+    );
+  }
+}
+
 class MeetingsGetRequest extends OperationRequest {
   MeetingsGetRequest._(super.context, this.id);
   final int id;

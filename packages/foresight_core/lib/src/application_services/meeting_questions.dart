@@ -8,6 +8,7 @@ import '../persistence/workflow_queries.dart';
 import '../rpc_error.dart';
 import '../store.dart';
 import 'generation_coordinator.dart';
+import '../attributed_transcript.dart';
 
 /// Preserves the internal transcript-window/plain Questions artifact path.
 /// It deliberately uses neither Summary checkpoints nor workflow manifests.
@@ -41,21 +42,38 @@ final class MeetingQuestions {
     final previous = jsonEncode(
       store.contentHistory.meetingArtifacts(id, kind),
     );
-    final text = meetings.finalTranscriptText(id).join('\n');
+    final segments = meetings.transcript(id, finalOnly: true);
+    final text = AttributedTranscript.modelInputText(
+      segments,
+      separator: '\n',
+      verbatim: true,
+    );
     if (text.isEmpty) throw StateError('No final transcript');
     final contextTokens =
         domain.generator?.effectiveState['context_length'] as int? ?? 4096;
     const outputTokens = 1024;
-    final instructions =
-        'Produce $kind from this transcript only. Use ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}. Do not invent details. $meetingSpeakerInstructions\n';
+    final base =
+        'Produce $kind from this transcript only. Use ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}. Do not invent details. $meetingSpeakerInstructions';
+    // The notice is decided from the excerpt actually placed in the prompt;
+    // room is reserved for it whenever the full transcript carries a label.
+    final notice = ' ${AttributedTranscript.modelInputNotice}';
+    final reserved = AttributedTranscript.containsNames(text)
+        ? utf8.encode(notice).length
+        : 0;
     // A byte is an upper bound on byte-tokenizer cost; reserve output and
     // framing tokens as well as the instructions before selecting evidence.
     final transcriptBudget =
-        contextTokens - outputTokens - utf8.encode(instructions).length - 128;
+        contextTokens -
+        outputTokens -
+        utf8.encode('$base\n').length -
+        reserved -
+        128;
     if (transcriptBudget < 256) {
       throw StateError('Model context is too small for meeting generation');
     }
     final selected = balancedTranscriptWindow(text, transcriptBudget);
+    final instructions =
+        '$base${AttributedTranscript.containsNames(selected) ? notice : ''}\n';
     await _generate(
       'meeting',
       '$instructions$selected',

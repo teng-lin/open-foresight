@@ -11,6 +11,7 @@ import '../store.dart';
 import '../summary_generator.dart';
 import '../summary_output.dart';
 import 'generation_coordinator.dart';
+import '../attributed_transcript.dart';
 
 class _SummaryRun {
   _SummaryRun(this.requestId, this.runtime);
@@ -126,13 +127,16 @@ final class SummaryCoordinator {
         'backend': effective['backend'],
       }),
     );
-    final transcript = cleanSummaryTranscript(
-      meetings
-          .finalTranscriptText(id)
-          .map((text) => extractSavedTranscriptText(text).trim())
-          .where((text) => text.isNotEmpty)
-          .join('\n\n'),
+    final segments = meetings.transcript(id, finalOnly: true);
+    // With names, each row's raw text is cleaned before its label is added and
+    // the whole text is left alone; without, the legacy whole-text cleanup.
+    final named = AttributedTranscript.hasNames(segments, modelInput: true);
+    final built = AttributedTranscript.modelInputText(
+      segments,
+      extract: extractSavedTranscriptText,
+      cleanRow: named ? stripChannelLabels : null,
     );
+    final transcript = named ? built.trim() : cleanSummaryTranscript(built);
     if (transcript.isEmpty) throw StateError('No final transcript');
     final checkpointRow = store.summaryCheckpoint(id);
     final checkpoint = checkpointRow == null
@@ -173,6 +177,7 @@ final class SummaryCoordinator {
     try {
       check();
       final producer = SummaryGenerator(
+        speakerNotice: AttributedTranscript.modelInputNotice,
         contextTokens: context,
         outputTokens: outputTokens,
         checkCurrent: check,

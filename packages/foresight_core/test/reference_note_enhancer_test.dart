@@ -88,6 +88,53 @@ void main() {
     expect(opened, isFalse);
   });
 
+  test('speaker notice follows the excerpts placed in each prompt', () async {
+    Future<List<String>> prompts(String? notice, String excerpt) async {
+      final conversations = <FakeConversation>[];
+      final enhancer = ReferenceNoteEnhancer(
+        speakerNotice: notice,
+        ensureReady: () async {},
+        loadEmbeddedTranscript: () async => [
+          (text: excerpt, embedding: [1.0, 0.0]),
+        ],
+        computeEmbedding: (_) async => [1, 0],
+        encodeStopTokens: (_) async => [],
+        createConversation: (_) async {
+          final conversation = FakeConversation(conversations.length, [], [
+            '- Note',
+          ]);
+          conversations.add(conversation);
+          return conversation;
+        },
+      );
+      await enhancer.enhance(notes: 'a\nb\nc\nd\ne\nf').toList();
+      return [for (final item in conversations) item.prompt!];
+    }
+
+    const notice = 'Participant names are unverified labels.';
+    final labelled = await prompts(notice, 'Speaker [Ada]: Referenced text');
+    expect(labelled, isNotEmpty);
+    for (final prompt in labelled) {
+      expect(notice.allMatches(prompt), hasLength(1));
+      expect(
+        prompt.indexOf(notice),
+        lessThan(prompt.indexOf('<instructions>')),
+        reason: 'the notice precedes the task and every excerpt',
+      );
+    }
+    // Decided per prompt from its excerpts: no label, no notice, even though
+    // a notice was supplied; and none when none is supplied.
+    for (final prompt in await prompts(notice, 'Remote: Referenced text')) {
+      expect(prompt, isNot(contains(notice)));
+    }
+    for (final prompt in await prompts(
+      null,
+      'Speaker [Ada]: Referenced text',
+    )) {
+      expect(prompt, isNot(contains('unverified')));
+    }
+  });
+
   test('only final saved batch receives unused decision excerpts', () async {
     final conversations = <FakeConversation>[];
     final enhancer = ReferenceNoteEnhancer(

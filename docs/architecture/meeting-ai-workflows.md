@@ -12,6 +12,10 @@ Tasks have stable keys based on normalized task text and owner. Regeneration mer
 
 Foresight's recovered PP24724 is a Markdown Overview/Action Items/Details brief with high-confidence assignees. Typed task JSON, completion controls, evidence validation, and stable task records are Open Foresight additions. Production instructions live in `meeting_actions.dart`; the exact recovered literal remains in the research catalog and frozen checksum fixture.
 
+### Speaker names and action evidence
+
+Persisted speaker attribution does not change action extraction. Evidence IDs and quotes still come from the raw transcript text; the rendered name prefix used elsewhere is never part of an evidence record. An owner must still appear literally in its quote, so a participant name from attribution cannot supply or confirm an owner, and a quote that includes a name prefix does not match the supplied text. Resolving a first-person commitment ("I will send it") to a participant needs its own structured-evidence policy and is not implemented.
+
 ## Enhanced Notes
 
 The existing note planner, per-note excerpt selection, batch clustering, standard/concise prompts, conversation protocol, stream parser, and merge behavior remain in use. A public Notes request owns its exact active native child (`parent-batch-N`). User cancellation, lease cancellation, raw-note revision changes, or a current-artifact edit prevents late acceptance. Cancellation while a worker is stalled reaches that child. Prior accepted text and manual edits survive failed or cancelled work.

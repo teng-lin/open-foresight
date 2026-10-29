@@ -101,6 +101,11 @@ OperationRequest decodeOperationRequest(
     Operation.meetingsList => MeetingsListRequest.decode(context),
     Operation.meetingsCreate => MeetingsCreateRequest.decode(context),
     Operation.meetingsRename => MeetingsRenameRequest.decode(context),
+    Operation.meetingsAttribute => MeetingsAttributeRequest.decode(context),
+    Operation.meetingsResetAttribution =>
+      MeetingsResetAttributionRequest.decode(context),
+    Operation.meetingsRenameParticipant =>
+      MeetingsRenameParticipantRequest.decode(context),
     Operation.meetingsGet => MeetingsGetRequest.decode(context),
     Operation.meetingsRetryQuestion => MeetingsRetryQuestionRequest.decode(
       context,

@@ -59,6 +59,7 @@ const diagnosticCodeLocations = <String>[
   'src/application_services/summary_coordinator.dart',
   'src/application_services/workspace_admin.dart',
   'src/application_services/workspace_operations.dart',
+  'src/attributed_transcript.dart',
   'src/audio_device.dart',
   'src/audio_device_process.dart',
   'src/audio_devices.dart',

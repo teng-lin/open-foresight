@@ -6,7 +6,6 @@ import 'package:grpc/grpc.dart';
 import 'service_workflow_ports.dart';
 import '../read_models.dart';
 import '../generated/rag_service.pb.dart';
-import '../meeting_speakers.dart';
 import '../meeting_workflow_store.dart';
 import '../native.dart';
 import '../native_note_enhancement.dart';
@@ -25,6 +24,7 @@ import '../rpc_error.dart';
 import '../store.dart';
 import 'capture_activity.dart';
 import 'generation_coordinator.dart';
+import '../attributed_transcript.dart';
 
 /// Owns Notes edits, live/final grounding, timers, drafts and native children.
 /// No capture process or parent Application is retained here.
@@ -209,21 +209,19 @@ final class NoteEnhancementCoordinator {
     return response.embedding.toList();
   }
 
-  String _noteTranscriptText(int id) => meetings
-      .finalTranscriptText(id)
-      .map((text) => extractSavedTranscriptText(text).trim())
-      .where((text) => text.isNotEmpty)
-      .join('\n\n');
+  // Named speakers lead their line; once any row is named, the others read
+  // `(unnamed speaker): text`. The untrusted-name notice is added to the prompt
+  // by the enhancer (see `_producer`), not to this text.
+  String _noteTranscriptText(int id) => AttributedTranscript.modelInputText(
+    meetings.transcript(id, finalOnly: true),
+    extract: extractSavedTranscriptText,
+  );
 
   Iterable<({String speaker, String text})> _liveNoteTranscriptSegments(
     int id,
-  ) => meetings.transcript(id, finalOnly: true).map((row) {
-    final speaker = MeetingSpeaker.fromSource(row.source);
-    return (
-      speaker: speaker == MeetingSpeaker.unknown ? '' : speaker.label,
-      text: row.text,
-    );
-  });
+  ) => AttributedTranscript.liveNoteSegments(
+    meetings.transcript(id, finalOnly: true),
+  );
 
   void scheduleLiveTranscript(int id) {
     if (_closed || capture.meeting != id || !capture.active) return;
@@ -587,6 +585,7 @@ final class NoteEnhancementCoordinator {
     late NativeRuntime generator;
     var batch = 0;
     return ReferenceNoteEnhancer(
+      speakerNotice: AttributedTranscript.modelInputNotice,
       checkCurrent: checkNote,
       onBatchFailure: (indices, error) {
         failedBatches.add(indices);

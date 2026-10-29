@@ -59,6 +59,33 @@ void main() {
         'idempotency_key': false,
         'tools': <Object?>[],
       };
+      expected['meetings.attribute'] = {
+        'requires_helper': false,
+        'approval': true,
+        'approval_web_search': true,
+        'notifies_changes': true,
+        'workspace_epoch': true,
+        'idempotency_key': false,
+        'tools': <Object?>[],
+      };
+      expected['meetings.reset_attribution'] = {
+        'requires_helper': false,
+        'approval': true,
+        'approval_web_search': true,
+        'notifies_changes': true,
+        'workspace_epoch': true,
+        'idempotency_key': false,
+        'tools': <Object?>[],
+      };
+      expected['meetings.rename_participant'] = {
+        'requires_helper': false,
+        'approval': true,
+        'approval_web_search': true,
+        'notifies_changes': true,
+        'workspace_epoch': true,
+        'idempotency_key': false,
+        'tools': <Object?>[],
+      };
       // Explicit new desktop asset contracts; keep every historical policy
       // and exact MCP exposure comparison below, including no new tools.
       expected['models.download_asset'] = {

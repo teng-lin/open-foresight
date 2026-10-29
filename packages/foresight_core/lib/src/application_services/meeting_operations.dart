@@ -1,4 +1,6 @@
 import 'service_workspace_ports.dart';
+import '../attributed_transcript.dart';
+import '../meeting_attribution.dart';
 import '../meeting_speakers.dart';
 import '../operation_registry.dart';
 import '../operation_requests.dart';
@@ -59,6 +61,9 @@ final class MeetingOperations {
         for (final segment in detail.transcript)
           {
             ...segment.toRow(),
+            // Never the raw participant text: only the sanitized one-line form
+            // of a name the row actually carries.
+            'participant_name': AttributedTranscript.personName(segment),
             'speaker_id': MeetingSpeaker.fromSource(segment.source).id,
             'speaker_label': MeetingSpeaker.fromSource(segment.source).label,
             'channel': MeetingSpeaker.fromSource(segment.source).name,
@@ -103,6 +108,55 @@ final class MeetingOperations {
       notes.invalidateTranscript(request.id);
     }
     await indexer.indexMeeting(request.id, current: current);
+  }
+
+  // A correction changes the transcript's rendered text, so cached note input
+  // is dropped and the meeting is reprojected like any other transcript edit.
+  // The correction is already durable (so is its reindex intent); the producer
+  // runs on its own and a helper outage or full backlog never reports a saved
+  // correction as failed.
+  void _attributionChanged(int meeting) {
+    if (recording.recordingMeeting == meeting && recording.recording != null) {
+      notes.scheduleLiveTranscript(meeting);
+    } else {
+      notes.invalidateTranscript(meeting);
+    }
+    try {
+      indexer.scheduleFinalIndex(meeting).ignore();
+    } on RpcError {
+      // The durable intent is retried by recovery.
+    }
+  }
+
+  void attribute(MeetingsAttributeRequest request) {
+    final meeting = queries.transcriptMeeting(request.id);
+    final TranscriptAttribution correction;
+    try {
+      correction = request.name == null
+          ? TranscriptAttribution.manualUnnamed()
+          : TranscriptAttribution.manual(displayName: request.name!);
+    } on ArgumentError {
+      throw RpcError(
+        RpcErrorCode.invalidArgument,
+        'The name must contain a visible character.',
+      );
+    }
+    domain.store.setManualAttribution(request.id, correction);
+    _attributionChanged(meeting);
+  }
+
+  void resetAttribution(MeetingsResetAttributionRequest request) {
+    final meeting = queries.transcriptMeeting(request.id);
+    if (domain.store.resetAttribution(request.id)) {
+      _attributionChanged(meeting);
+    }
+  }
+
+  void renameParticipant(MeetingsRenameParticipantRequest request) {
+    final meeting = queries.participantMeeting(request.id);
+    if (domain.store.renameMeetingParticipant(request.id, request.name) > 0) {
+      _attributionChanged(meeting);
+    }
   }
 
   Future<void> generateMeeting(
@@ -197,6 +251,18 @@ final class MeetingOperations {
       Operation.meetingsRename,
       (request, {current}) =>
           domain.store.meetingStore.renameMeeting(request.id, request.title),
+    ),
+    TypedOperationHandler<MeetingsAttributeRequest>(
+      Operation.meetingsAttribute,
+      (request, {current}) => attribute(request),
+    ),
+    TypedOperationHandler<MeetingsResetAttributionRequest>(
+      Operation.meetingsResetAttribution,
+      (request, {current}) => resetAttribution(request),
+    ),
+    TypedOperationHandler<MeetingsRenameParticipantRequest>(
+      Operation.meetingsRenameParticipant,
+      (request, {current}) => renameParticipant(request),
     ),
     TypedOperationHandler<MeetingsGetRequest>(
       Operation.meetingsGet,

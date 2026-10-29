@@ -1,6 +1,12 @@
 import 'reference_note_transcript_format.dart';
 
-String cleanSummaryTranscript(String text) => extractSavedTranscriptText(text)
+String cleanSummaryTranscript(String text) =>
+    stripChannelLabels(extractSavedTranscriptText(text));
+
+/// Remove leading `Microphone:`/`Remote:` channel labels from every line. Used
+/// on a whole transcript, or on one row's raw text before a participant label
+/// is added so the strip can never reach a name.
+String stripChannelLabels(String text) => text
     .replaceAll(
       RegExp(
         r'^\s*(?:\*{0,2}\[?(?:Microphone|Remote)\]?\*{0,2})\s*[:\-]\s*',

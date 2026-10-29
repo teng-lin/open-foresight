@@ -51,6 +51,12 @@ acceptance runs were performed for publication.
 
 ### Added
 
+- Show participant names persisted for recorded speech beside transcript rows,
+  question rows and copied transcripts (the audio-channel label remains when
+  a row has no supported name), include them in summaries, question generation
+  and note text, and let a person correct, mark as not a named speaker, reset or
+  rename a speaker from the transcript menu. Names are treated as untrusted text
+  and do not change action-item evidence rules.
 - Keep meeting audio on disk alongside transcripts, allowing transcription to
   catch up after capture stops or the app restarts. Add saved-audio playback,
   transcript-linked seeking, MP3/Opus export, background Opus compression,

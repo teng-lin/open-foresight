@@ -51,6 +51,8 @@ export 'src/model_setup_status.dart'
 export 'src/dedicated_query_terms.dart'
     show dedicatedQueryTermsKey, dedicatedQueryTermsUri;
 export 'src/meeting_speakers.dart' show MeetingSpeaker;
+export 'src/attributed_transcript.dart'
+    show AttributedTranscript, FormattedTranscriptLine, TranscriptFormatMode;
 export 'src/output_calendar.dart';
 export 'src/platform_services.dart'
     show

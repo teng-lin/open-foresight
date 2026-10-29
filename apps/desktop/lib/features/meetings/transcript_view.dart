@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:foresight_core/desktop.dart';
+import 'speaker_naming.dart';
 
 /// A transcript snapshot with effects supplied by its meeting owner.
 class MeetingTranscriptPanel extends StatelessWidget {
@@ -17,6 +18,11 @@ class MeetingTranscriptPanel extends StatelessWidget {
     required this.onCopy,
     required this.onQuestion,
     this.onListen,
+    this.naming,
+    this.onCorrectSpeaker,
+    this.onMarkUnnamed,
+    this.onResetSpeaker,
+    this.onRenameParticipant,
   }) : rows = List.unmodifiable(rows),
        provisional = Map.unmodifiable(provisional);
   final int id;
@@ -25,7 +31,43 @@ class MeetingTranscriptPanel extends StatelessWidget {
   final bool questions, showProvisional, hasAttachments, canAnswer;
   final VoidCallback? onImportTranscript, onImportAttachments;
   final ValueChanged<int>? onListen;
+
+  /// Naming availability, shown apart from recording health; null when unknown.
+  final SpeakerNamingStatus? naming;
+
+  /// Speaker corrections for a segment (by transcript id) and for a
+  /// participant (by participant id). Null hides the matching menu item.
+  final ValueChanged<TranscriptSegment>? onCorrectSpeaker,
+      onMarkUnnamed,
+      onResetSpeaker;
+  final ValueChanged<TranscriptSegment>? onRenameParticipant;
   final ValueChanged<String> onCopy, onQuestion;
+
+  List<ContextMenuButtonItem> _speakerItems(
+    TranscriptSegment? segment,
+    bool enabled,
+  ) {
+    if (segment == null || !enabled) return const [];
+    ContextMenuButtonItem item(
+      String label,
+      ValueChanged<TranscriptSegment>? action,
+    ) => ContextMenuButtonItem(
+      label: label,
+      onPressed: () {
+        ContextMenuController.removeAny();
+        action!(segment);
+      },
+    );
+    return [
+      if (onCorrectSpeaker != null) item('Correct speaker…', onCorrectSpeaker),
+      if (onMarkUnnamed != null)
+        item('Mark as not a named speaker', onMarkUnnamed),
+      if (onResetSpeaker != null && segment.attributionState != null)
+        item('Clear speaker name', onResetSpeaker),
+      if (onRenameParticipant != null && segment.participantId != null)
+        item('Rename participant…', onRenameParticipant),
+    ];
+  }
 
   Widget _header(BuildContext context) => Padding(
     padding: const EdgeInsets.all(12),
@@ -37,6 +79,15 @@ class MeetingTranscriptPanel extends StatelessWidget {
             style: Theme.of(context).textTheme.titleLarge,
           ),
         ),
+        if (naming case final status?)
+          Tooltip(
+            message: status.detail,
+            child: Chip(
+              key: const ValueKey('speaker-naming-status'),
+              label: Text(status.label),
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
         IconButton(
           tooltip: 'Import transcript',
           onPressed: onImportTranscript,
@@ -52,7 +103,12 @@ class MeetingTranscriptPanel extends StatelessWidget {
           tooltip: 'Copy full transcript',
           onPressed: rows.isEmpty
               ? null
-              : () => onCopy(rows.map((row) => row.text).join('\n\n')),
+              : () => onCopy(
+                  AttributedTranscript.lines(
+                    rows,
+                    TranscriptFormatMode.export,
+                  ).map((line) => line.text).join('\n\n'),
+                ),
           icon: const Icon(Icons.copy_all),
         ),
       ],
@@ -98,8 +154,7 @@ class MeetingTranscriptPanel extends StatelessWidget {
                               index++
                             ) ...[
                               TextSpan(
-                                text:
-                                    '${MeetingSpeaker.fromSource(rows[index].source).label}\n',
+                                text: '${_speakerLabel(rows[index])}\n',
                                 style: Theme.of(context).textTheme.bodySmall,
                               ),
                               TextSpan(text: rows[index].text),
@@ -115,6 +170,11 @@ class MeetingTranscriptPanel extends StatelessWidget {
                             rows,
                             selection.start,
                           );
+                          final segment = row == null
+                              ? null
+                              : rows.firstWhere((entry) => entry.id == row);
+                          final inRow =
+                              segment != null && !selection.isCollapsed;
                           return AdaptiveTextSelectionToolbar.buttonItems(
                             anchors: state.contextMenuAnchors,
                             buttonItems: [
@@ -129,6 +189,7 @@ class MeetingTranscriptPanel extends StatelessWidget {
                                     onListen!(row);
                                   },
                                 ),
+                              ..._speakerItems(segment, inRow),
                             ],
                           );
                         },
@@ -138,9 +199,7 @@ class MeetingTranscriptPanel extends StatelessWidget {
                         ListTile(
                           contentPadding: EdgeInsets.zero,
                           title: SelectableText(t.text),
-                          subtitle: Text(
-                            MeetingSpeaker.fromSource(t.source).label,
-                          ),
+                          subtitle: Text(_speakerLabel(t)),
                           trailing: questions
                               ? IconButton(
                                   tooltip: 'Answer this question',
@@ -173,13 +232,17 @@ class MeetingTranscriptPanel extends StatelessWidget {
   }
 }
 
+/// A supported participant name, else the legacy audio-channel label.
+String _speakerLabel(TranscriptSegment row) =>
+    AttributedTranscript.line(row, TranscriptFormatMode.display).label;
+
 // The selected text chooses a transcript identity only. The service resolves
 // that identity's immutable audio link; UI text offsets never become timestamps.
 int? _selectedTranscript(List<TranscriptSegment> rows, int offset) {
   if (offset < 0) return null;
   var position = 0;
   for (final row in rows) {
-    position += MeetingSpeaker.fromSource(row.source).label.length + 1;
+    position += _speakerLabel(row).length + 1;
     if (offset < position + row.text.length) return row.id;
     position += row.text.length + 2;
   }

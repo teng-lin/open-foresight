@@ -120,6 +120,18 @@ enum Operation {
   meetingsList('meetings.list', contracts.meetingsListDescriptor),
   meetingsCreate('meetings.create', contracts.meetingsCreateDescriptor),
   meetingsRename('meetings.rename', contracts.meetingsRenameDescriptor),
+  meetingsAttribute(
+    'meetings.attribute',
+    contracts.meetingsAttributeDescriptor,
+  ),
+  meetingsResetAttribution(
+    'meetings.reset_attribution',
+    contracts.meetingsResetAttributionDescriptor,
+  ),
+  meetingsRenameParticipant(
+    'meetings.rename_participant',
+    contracts.meetingsRenameParticipantDescriptor,
+  ),
   meetingsGet('meetings.get', contracts.meetingsGetDescriptor),
   meetingsRetryQuestion(
     'meetings.retry_question',

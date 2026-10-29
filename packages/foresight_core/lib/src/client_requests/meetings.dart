@@ -25,6 +25,50 @@ final class MeetingsRenameInput extends ClientArguments {
   Map<String, dynamic> toWire() => envelope.attach({'id': id, 'title': title});
 }
 
+/// Correct one transcript segment's attribution: [name] names the speaker;
+/// absent, the segment is marked as not a named person. Both survive every
+/// later automatic observation until reset.
+final class MeetingsAttributeInput extends ClientArguments {
+  const MeetingsAttributeInput({
+    super.envelope,
+    required this.id,
+    this.name = const WireField.absent(),
+  });
+
+  /// The transcript segment identity.
+  final int id;
+  final WireField<String?> name;
+  @override
+  Map<String, dynamic> toWire() =>
+      envelope.attach({'id': id, if (name.present) 'name': name.value});
+}
+
+/// Remove a segment's stored attribution, automatic or corrected. The segment
+/// then shows its audio-channel label; the previous automatic name is not
+/// restored, because nothing re-observes a saved segment.
+final class MeetingsResetAttributionInput extends ClientArguments {
+  const MeetingsResetAttributionInput({super.envelope, required this.id});
+
+  /// The transcript segment identity.
+  final int id;
+  @override
+  Map<String, dynamic> toWire() => envelope.attach({'id': id});
+}
+
+final class MeetingsRenameParticipantInput extends ClientArguments {
+  const MeetingsRenameParticipantInput({
+    super.envelope,
+    required this.id,
+    required this.name,
+  });
+
+  /// The meeting-local participant identity.
+  final int id;
+  final String name;
+  @override
+  Map<String, dynamic> toWire() => envelope.attach({'id': id, 'name': name});
+}
+
 final class MeetingsGetInput extends ClientArguments {
   const MeetingsGetInput({super.envelope, required this.id});
   final int id;
