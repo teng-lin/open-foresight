@@ -10,20 +10,12 @@ import 'package:foresight_core/src/operation_requests.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/store.dart';
+import 'package:foresight_test_support/fixture_ownership.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
-Future<void> reached(File marker) async {
-  final elapsed = Stopwatch()..start();
-  while (!marker.existsSync()) {
-    if (elapsed.elapsed > const Duration(seconds: 5)) {
-      throw TestFailure(
-        'Owned transport barrier did not settle: ${marker.path}',
-      );
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 10));
-  }
-}
+/// Wait up to five seconds for a fixture marker; a timeout names the marker.
+Future<void> reached(File marker) => awaitMarker(marker);
 
 Future<File> heldPipeWorker(
   Directory root, {
@@ -97,6 +89,73 @@ Future<void> fixtureDescendantStopped(File worker) async {
   }
 }
 
+/// Worker that publishes `.stdin-closed` once it has closed the inherited
+/// configuration pipe, then idles. With [closesStdin] false it never publishes,
+/// which models a worker that did not reach the barrier. [startupDelay] holds
+/// the worker before it closes stdin, deterministically modeling a cold start.
+Future<File> closedStdinWorker(
+  Directory root, {
+  bool closesStdin = true,
+  Duration startupDelay = Duration.zero,
+}) async {
+  final worker = File('${root.path}/transport-worker');
+  final python = Platform.environment['FORESIGHT_PYTHON'] ?? '/usr/bin/python3';
+  worker.writeAsStringSync('''#!$python
+import os,pathlib,time
+time.sleep(${startupDelay.inMilliseconds / 1000})
+${closesStdin ? 'os.close(0)' : ''}
+${closesStdin ? "pathlib.Path(__file__+'.stdin-closed').write_text('closed')" : ''}
+time.sleep(20)
+''');
+  final mode = await Process.run('/bin/chmod', ['700', worker.path]);
+  expect(mode.exitCode, 0, reason: '${mode.stdout}\n${mode.stderr}');
+  return worker;
+}
+
+/// Start [command] as a child owned by [owned] and hold it until it reports
+/// the closed configuration pipe. The child is registered for termination at
+/// allocation; a failed barrier also reaps it before the failure propagates,
+/// and names the last observed phase rather than only the marker.
+Future<OwnedProcess> launchAtClosedStdin(
+  OwnedProcesses owned,
+  File worker,
+  List<String> command,
+  PhaseTrace trace, {
+  required String name,
+  Duration barrier = const Duration(seconds: 5),
+  void Function()? entered,
+}) async {
+  final marker = File('${worker.path}.stdin-closed');
+  if (marker.existsSync()) marker.deleteSync();
+  trace.enter('launching');
+  final process = await owned.start(
+    command.first,
+    command.skip(1).toList(),
+    name: name,
+    includeParentEnvironment: false,
+  );
+  trace.enter('launched');
+  process.exitCode.then((_) => trace.enter('exited')).ignore();
+  try {
+    await awaitMarker(
+      marker,
+      timeout: barrier,
+      trace: trace,
+      pending: 'worker closing its inherited stdin',
+      owner: process,
+    );
+    trace.enter('stdin-closed');
+    entered?.call();
+    return process;
+  } catch (_) {
+    // Reap before the failure propagates. A failed reap is not raised here, so
+    // it cannot mask the barrier failure: the step registered at allocation
+    // repeats the termination at teardown and reports its failure beside it.
+    await process.terminate().then<void>((_) {}, onError: (Object _) {});
+    rethrow;
+  }
+}
+
 GemmaModel controlModel() => GemmaModel(
   'fixture',
   'fixture/model',
@@ -165,13 +224,15 @@ class HeldReaderAcknowledgement extends ProcessView {
 }
 
 Future<Process> launchAtBarrier(
+  OwnedProcesses owned,
   List<String> command,
   File worker,
   void Function(Process process) atBarrier,
 ) async {
-  final process = await Process.start(
+  final process = await owned.start(
     command.first,
     command.skip(1).toList(),
+    name: 'held-pipe worker',
     includeParentEnvironment: false,
   );
   try {
@@ -180,11 +241,171 @@ Future<Process> launchAtBarrier(
     atBarrier(process);
     return process;
   } catch (_) {
-    // This wrapper still owns the returned Process until both barriers pass.
-    process.kill(ProcessSignal.sigkill);
-    await process.exitCode.timeout(const Duration(seconds: 2));
+    // Reap before the failure propagates; a failed reap is repeated and
+    // reported by the cleanup registered at launch, not raised over this one.
+    await process.terminate().then<void>((_) {}, onError: (Object _) {});
     rethrow;
   }
+}
+
+/// Wait for the worker to report its closed configuration pipe, observing the
+/// download immediately. Launch time is setup, bounded by [budget]; it is not
+/// evidence about retirement.
+Future<void> awaitClosedStdinSetup(
+  Future<Object?> download,
+  Completer<void> entered,
+  PhaseTrace trace,
+  String id, {
+  required Duration budget,
+}) {
+  final outcome = download.then<Object?>(
+    (value) => value,
+    onError: (Object error) => error,
+  );
+  return Future.any<void>([
+    entered.future,
+    outcome.then<void>((value) {
+      if (!entered.isCompleted) {
+        throw TestFailure(
+          'Closed-stdin setup settled early: attempt=$id '
+          'outcome=${value.runtimeType}; '
+          '${trace.describe(pending: 'worker launch or barrier')}',
+        );
+      }
+    }),
+  ]).timeout(
+    budget,
+    onTimeout: () => throw TestFailure(
+      'Closed-stdin setup timed out: attempt=$id; '
+      '${trace.describe(pending: 'worker launch or barrier')}',
+    ),
+  );
+}
+
+/// The measured phase: the owner retires the worker after its pipe closed. The
+/// default is the real five-second deadline; only a control shortens it.
+Future<void> expectBrokenPipeRetirement(
+  Future<Object?> download,
+  PhaseTrace trace,
+  String id, {
+  Object? expectedFailure,
+  Duration budget = const Duration(seconds: 5),
+}) {
+  return download
+      .timeout(
+        budget,
+        onTimeout: () => throw TestFailure(
+          'Broken-pipe retirement timed out: attempt=$id; '
+          '${trace.describe(pending: 'owner retiring the worker after a '
+              'broken configuration pipe')}',
+        ),
+      )
+      .then<void>(
+        (value) => throw TestFailure(
+          'Broken-pipe retirement completed without the expected failure: '
+          'attempt=$id value=$value',
+        ),
+        onError: (Object error) {
+          if (error is TestFailure) throw error;
+          expect(error, expectedFailure ?? anything);
+        },
+      );
+}
+
+/// Drive [attempts] through the owner with a worker that closes its pipe. Setup
+/// (launch to the closed-stdin barrier) and retirement are timed separately.
+Future<({Duration setup, Duration retirement})> brokenConfigPipeScenario(
+  List<String> attempts, {
+  Duration startupDelay = Duration.zero,
+  Duration setupBudget = const Duration(seconds: 5),
+}) async {
+  final root = createTestTempDirectorySync('closed-config-');
+  // Teardown runs newest first. Registration order below makes it: close the
+  // owner, then end the workers, then close the store, then remove the
+  // directory. A hung owner close is reported while its worker is alive.
+  final store = Store('${root.path}/app.db');
+  addTearDown(store.close);
+  final owned = OwnedProcesses.forTest();
+  final ownerCleanups = OwnedCleanups.forTest();
+  final worker = await closedStdinWorker(root, startupDelay: startupDelay);
+  runtimeConfiguration.environment['FORESIGHT_SERVICE'] = worker.path;
+  final trace = PhaseTrace();
+  late Completer<void> entered;
+  var attempt = 'none';
+  Future<Process> startWorker(List<String> command) => launchAtClosedStdin(
+    owned,
+    worker,
+    command,
+    trace,
+    name: 'closed-stdin worker ($attempt)',
+    barrier: setupBudget,
+    entered: () => entered.complete(),
+  );
+
+  final model = controlModel();
+  store.setPreference('modelTerms.fixture/model.revision', 'accepted');
+  final owner = ModelAssetAcquisitionCoordinator(
+    store: store,
+    changed: () {},
+    catalog: (_) => [model],
+    createDownloader: () =>
+        PublicModelFileDownloader(startWorkerForTesting: startWorker),
+    modelRoot: Directory('${root.path}/models'),
+    prepareGemma: (_) async {},
+  );
+  ownerCleanups.add(
+    'close model acquisition owner',
+    () => owner.close().timeout(const Duration(seconds: 2)),
+  );
+  ModelsDownloadAssetRequest request(String id) =>
+      decodeOperationRequest(Operation.modelsDownloadAsset, {
+            'kind': 'generation',
+            'digest': model.digest,
+            'requestId': id,
+          })
+          as ModelsDownloadAssetRequest;
+  final invalid = ModelAssetFailure(ModelAssetFailureCode.invalid).toRpcError();
+  var setup = Duration.zero, retirement = Duration.zero;
+  for (final id in attempts) {
+    entered = Completer<void>();
+    attempt = id;
+    trace.enter('download-requested:$id');
+    final clock = Stopwatch()..start();
+    final download = owner.download(request(id));
+    await awaitClosedStdinSetup(
+      download,
+      entered,
+      trace,
+      id,
+      budget: setupBudget,
+    );
+    setup = clock.elapsed;
+    clock.reset();
+    await expectBrokenPipeRetirement(
+      download,
+      trace,
+      id,
+      expectedFailure: isA<RpcError>().having(
+        (e) => e.message,
+        'ordinary model failure',
+        invalid.message,
+      ),
+    );
+    retirement = clock.elapsed;
+    expect(owner.restartRequired, isFalse);
+    expect(owner.busy, isFalse);
+  }
+  expect(owned.started, hasLength(attempts.length));
+  for (final process in owned.started) {
+    expect(
+      await process.exitCode.timeout(const Duration(seconds: 2)),
+      isNot(0),
+    );
+  }
+  await ownerCleanups.run();
+  await owned.close();
+  owned.expectNoneRunning(reason: 'Closed-stdin workers left running');
+  return (setup: setup, retirement: retirement);
 }
 
 void main() {
@@ -212,6 +433,7 @@ void main() {
       'public cancellation retires owned ${scenario.name} before descendant EOF',
       () async {
         final root = createTestTempDirectorySync('held-transport-');
+        final owned = OwnedProcesses.forTest();
         final worker = await heldPipeWorker(
           root,
           stderrOnly: scenario.stderrOnly,
@@ -221,7 +443,7 @@ void main() {
         late final PublicModelFileDownloader downloader;
         downloader = PublicModelFileDownloader(
           startWorkerForTesting: scenario.duringLaunch
-              ? (command) => launchAtBarrier(command, worker, (_) {
+              ? (command) => launchAtBarrier(owned, command, worker, (_) {
                   downloader.cancel();
                 })
               : null,
@@ -264,11 +486,12 @@ void main() {
 
   test('failed launch barrier joins its still-owned leader', () async {
     final root = createTestTempDirectorySync('launch-cleanup-');
+    final owned = OwnedProcesses.forTest();
     final worker = await heldPipeWorker(root, skipConfiguration: true);
     Process? leader;
     try {
       await expectLater(
-        launchAtBarrier([worker.path], worker, (process) {
+        launchAtBarrier(owned, [worker.path], worker, (process) {
           leader = process;
           throw StateError('fixture barrier failure');
         }),
@@ -289,6 +512,7 @@ void main() {
     'lost reader acknowledgement settles close and forbids replacement',
     () async {
       final root = createTestTempDirectorySync('reader-ack-');
+      final owned = OwnedProcesses.forTest();
       final worker = await heldPipeWorker(root);
       runtimeConfiguration.environment['FORESIGHT_SERVICE'] = worker.path;
       final launched = Completer<HeldReaderAcknowledgement>();
@@ -296,9 +520,10 @@ void main() {
       final downloader = PublicModelFileDownloader(
         startWorkerForTesting: (command) async {
           starts++;
-          final process = await Process.start(
+          final process = await owned.start(
             command.first,
             command.skip(1).toList(),
+            name: 'acknowledgement worker',
             includeParentEnvironment: false,
           );
           final controlled = HeldReaderAcknowledgement(process);
@@ -391,149 +616,114 @@ void main() {
   test(
     'broken config pipe preserves retry admission after confirmed exit',
     () async {
-      final root = createTestTempDirectorySync('closed-config-');
-      final worker = File('${root.path}/transport-worker');
-      final python =
-          Platform.environment['FORESIGHT_PYTHON'] ?? '/usr/bin/python3';
-      worker.writeAsStringSync('''#!$python
-import os,pathlib,time
-os.close(0)
-pathlib.Path(__file__+'.stdin-closed').write_text('closed')
-time.sleep(20)
-''');
-      final mode = await Process.run('/bin/chmod', ['700', worker.path]);
-      expect(mode.exitCode, 0, reason: '${mode.stdout}\n${mode.stderr}');
-      runtimeConfiguration.environment['FORESIGHT_SERVICE'] = worker.path;
-      final processes = <Process>[];
-      final exited = <Process>{};
-      late Completer<void> entered;
-      var phase = 'idle';
-      Future<Process> startWorker(List<String> command) async {
-        final marker = File('${worker.path}.stdin-closed');
-        if (marker.existsSync()) {
-          marker.deleteSync();
-        }
-        phase = 'launching';
-        final process = await Process.start(
-          command.first,
-          command.skip(1).toList(),
-          includeParentEnvironment: false,
-        );
-        phase = 'launched';
-        processes.add(process);
-        process.exitCode.then((_) {
-          phase = 'exited';
-          exited.add(process);
-        }).ignore();
-        try {
-          await reached(File('${worker.path}.stdin-closed'));
-          phase = 'stdin-closed';
-          entered.complete();
-          return process;
-        } catch (_) {
-          if (!exited.contains(process)) {
-            process.kill(ProcessSignal.sigkill);
-          }
-          await process.exitCode.timeout(const Duration(seconds: 2));
-          rethrow;
-        }
-      }
-
-      final store = Store('${root.path}/app.db');
-      addTearDown(store.close);
-      final model = controlModel();
-      store.setPreference('modelTerms.fixture/model.revision', 'accepted');
-      final owner = ModelAssetAcquisitionCoordinator(
-        store: store,
-        changed: () {},
-        catalog: (_) => [model],
-        createDownloader: () =>
-            PublicModelFileDownloader(startWorkerForTesting: startWorker),
-        modelRoot: Directory('${root.path}/models'),
-        prepareGemma: (_) async {},
-      );
-      ModelsDownloadAssetRequest request(String id) =>
-          decodeOperationRequest(Operation.modelsDownloadAsset, {
-                'kind': 'generation',
-                'digest': model.digest,
-                'requestId': id,
-              })
-              as ModelsDownloadAssetRequest;
-      final invalid = ModelAssetFailure(
-        ModelAssetFailureCode.invalid,
-      ).toRpcError();
-      try {
-        for (final id in ['initial', 'replacement']) {
-          entered = Completer<void>();
-          phase = 'not-started';
-          final download = owner.download(request(id));
-          // Observe immediately, including failure before the fixture reaches
-          // its owned closed-stdin phase. A cold launch is setup, not evidence
-          // that broken-pipe retirement exceeded its separate five-second bound.
-          final outcome = download.then<Object?>(
-            (value) => value,
-            onError: (Object error) => error,
-          );
-          await Future.any<void>([
-            entered.future,
-            outcome.then<void>((value) {
-              if (!entered.isCompleted) {
-                throw TestFailure(
-                  'Closed-stdin setup settled early: '
-                  'attempt=$id phase=$phase outcome=${value.runtimeType}',
-                );
-              }
-            }),
-          ]).timeout(
-            const Duration(seconds: 5),
-            onTimeout: () => throw TestFailure(
-              'Closed-stdin setup timed out: attempt=$id phase=$phase',
-            ),
-          );
-          await expectLater(
-            download.timeout(
-              const Duration(seconds: 5),
-              onTimeout: () => throw TestFailure(
-                'Broken-pipe retirement timed out: attempt=$id phase=$phase',
-              ),
-            ),
-            throwsA(
-              isA<RpcError>().having(
-                (e) => e.message,
-                'ordinary model failure',
-                invalid.message,
-              ),
-            ),
-          );
-          expect(owner.restartRequired, isFalse);
-          expect(owner.busy, isFalse);
-        }
-        expect(processes, hasLength(2));
-        for (final process in processes) {
-          expect(
-            await process.exitCode.timeout(const Duration(seconds: 2)),
-            isNot(0),
-          );
-        }
-      } finally {
-        try {
-          await owner.close().timeout(const Duration(seconds: 2));
-        } finally {
-          for (final process in processes) {
-            if (!exited.contains(process)) {
-              process.kill(ProcessSignal.sigkill);
-            }
-            await process.exitCode.timeout(const Duration(seconds: 2));
-          }
-        }
-      }
+      await brokenConfigPipeScenario(['initial', 'replacement']);
     },
   );
+
+  test(
+    'a cold worker launch is setup with its own budget, not retirement time',
+    () async {
+      // Deterministic cold start: the worker holds 5.5 s before closing stdin.
+      // Launch plus retirement would exceed one 5 s bound; launch has its own
+      // 15 s setup budget here, and retirement keeps the real 5 s deadline.
+      const startup = Duration(milliseconds: 5500);
+      final timings = await brokenConfigPipeScenario(
+        ['initial'],
+        startupDelay: startup,
+        setupBudget: const Duration(seconds: 15),
+      );
+      expect(timings.setup, greaterThanOrEqualTo(startup));
+      expect(timings.retirement, lessThan(const Duration(seconds: 5)));
+    },
+    timeout: const Timeout(Duration(seconds: 40)),
+  );
+
+  test('a retirement that never settles fails at its bound with its phase', () {
+    final trace = PhaseTrace()
+      ..enter('launched')
+      ..enter('stdin-closed');
+    return expectLater(
+      expectBrokenPipeRetirement(
+        Completer<void>().future,
+        trace,
+        'stuck',
+        // Only the control shortens the bound; the real tests use five seconds.
+        budget: const Duration(milliseconds: 100),
+      ),
+      throwsA(
+        isA<TestFailure>().having(
+          (e) => e.message,
+          'message',
+          allOf(
+            contains('Broken-pipe retirement timed out: attempt=stuck'),
+            contains('last observed phase: stdin-closed'),
+            contains('inferred pending (not observed): owner retiring'),
+          ),
+        ),
+      ),
+    );
+  });
+
+  test(
+    'closed-stdin barrier failure names its phase and reaps the child',
+    () async {
+      final root = createTestTempDirectorySync('closed-config-barrier-');
+      final owned = OwnedProcesses.forTest();
+      // This worker never closes stdin, so its marker is never published.
+      final worker = await closedStdinWorker(root, closesStdin: false);
+      final trace = PhaseTrace();
+      Object? failure;
+      try {
+        await launchAtClosedStdin(
+          owned,
+          worker,
+          [worker.path],
+          trace,
+          name: 'stalled worker',
+          barrier: const Duration(milliseconds: 200),
+        );
+      } on TestFailure catch (error) {
+        failure = error;
+      }
+      expect(failure, isA<TestFailure>());
+      final message = (failure as TestFailure).message!;
+      expect(message, contains('${worker.path}.stdin-closed'));
+      expect(message, contains('last observed phase: launched'));
+      expect(
+        message,
+        contains('inferred pending (not observed): worker closing its'),
+      );
+      expect(message, contains('stalled worker'));
+      expect(message, contains('still running'));
+      // The failed barrier ended and reaped the child before it propagated.
+      expect(owned.started, hasLength(1));
+      owned.expectNoneRunning(reason: 'Stalled worker survived its barrier');
+      expect(owned.started.single.exitStatus, isNotNull);
+    },
+  );
+
+  test('closed-stdin worker settles cleanup while paused', () async {
+    final root = createTestTempDirectorySync('closed-config-paused-');
+    final owned = OwnedProcesses.forTest();
+    final worker = await closedStdinWorker(root);
+    final process = await launchAtClosedStdin(
+      owned,
+      worker,
+      [worker.path],
+      PhaseTrace(),
+      name: 'paused worker',
+    );
+    // SIGTERM cannot take effect while stopped; bounded escalation must.
+    expect(process.kill(ProcessSignal.sigstop), isTrue);
+    await owned.close();
+    owned.expectNoneRunning(reason: 'Paused worker survived cleanup');
+  });
 
   test(
     'lost exit acknowledgement settles close and forbids replacement',
     () async {
       final root = createTestTempDirectorySync('exit-ack-');
+      final owned = OwnedProcesses.forTest();
       final worker = File('${root.path}/transport-worker');
       final python =
           Platform.environment['FORESIGHT_PYTHON'] ?? '/usr/bin/python3';
@@ -556,9 +746,10 @@ sys.stdout.buffer.flush()
       final downloader = PublicModelFileDownloader(
         startWorkerForTesting: (command) async {
           starts++;
-          final process = await Process.start(
+          final process = await owned.start(
             command.first,
             command.skip(1).toList(),
+            name: 'acknowledgement worker',
             includeParentEnvironment: false,
           );
           final controlled = HeldExitAcknowledgement(process);
