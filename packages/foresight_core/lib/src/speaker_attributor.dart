@@ -137,7 +137,9 @@ final class _Segment {
   /// Per evidence method: when its first read ended and when its last read
   /// began. Each is adjusted by that method's own lag, so a segment that mixes
   /// methods is bounded by the reads that actually support each edge.
-  final Map<SpeakerEvidenceMethod, int> firstEndBy = {}, lastStartBy = {};
+  final Map<SpeakerEvidenceMethod, int> firstEndBy = {},
+      lastStartBy = {},
+      lastEndBy = {};
   final int firstStartUs, firstEndUs;
   int lastStartUs, lastEndUs;
   int reads = 0;
@@ -152,6 +154,7 @@ final class _Segment {
       methods.add(speaker.method);
       firstEndBy.putIfAbsent(speaker.method, () => read.readEndUs);
       lastStartBy[speaker.method] = read.readStartUs;
+      lastEndBy[speaker.method] = read.readEndUs;
       if (!refs.contains(speaker.ref)) continue;
       final participant = read.participant(speaker.ref)!;
       names[speaker.ref] = participant.name;
@@ -454,19 +457,42 @@ final class SpeakerAttributor {
   int _startLatest(_Segment segment) =>
       _edge(segment.firstEndUs, segment.firstEndBy, math.max);
 
-  int _endLatest(_Segment segment) =>
-      _edge(segment.lastStartUs, segment.lastStartBy, math.max);
+  /// The latest instant the segment's speaker is known to have been speaking,
+  /// by the start of each method's last read. [floorLag] raises every method's
+  /// lag: it is the lag of the evidence that would have revealed a different
+  /// speaker, whose absence the same reads must also prove.
+  int _endLatest(_Segment segment, {int floorLag = 0}) => _edge(
+    segment.lastStartUs,
+    segment.lastStartBy,
+    math.max,
+    floorLag: floorLag,
+  );
+
+  /// The latest instant the segment's speaker may still have been speaking:
+  /// its last reads sampled the indicator at some point up to their ends.
+  int _endMaybe(_Segment segment) =>
+      _edge(segment.lastEndUs, segment.lastEndBy, math.max);
+
+  /// The largest lag among the segment's evidence methods.
+  int _maxLag(_Segment segment) => segment.methods.isEmpty
+      ? policy.defaultLagUs
+      : segment.methods.map(policy.lagFor).reduce(math.max);
 
   int _edge(
     int fallbackUs,
     Map<SpeakerEvidenceMethod, int> byMethod,
-    int Function(int, int) pick,
-  ) {
+    int Function(int, int) pick, {
+    int floorLag = 0,
+  }) {
     // A segment without speakers (observed silence) has no method: it uses the
     // default lag.
-    if (byMethod.isEmpty) return fallbackUs - policy.defaultLagUs;
+    if (byMethod.isEmpty) {
+      return fallbackUs - math.max(policy.defaultLagUs, floorLag);
+    }
     return byMethod.entries
-        .map((entry) => entry.value - policy.lagFor(entry.key))
+        .map<int>(
+          (entry) => entry.value - math.max(policy.lagFor(entry.key), floorLag),
+        )
         .reduce(pick);
   }
 
@@ -490,8 +516,8 @@ final class SpeakerAttributor {
     regions.add(_Region(_RegionType.before, _negativeInfinity, cursor));
     for (var i = 0; i < segments.length; i++) {
       final segment = segments[i];
-      final lastRead = _endLatest(segment);
       if (i == segments.length - 1) {
+        final lastRead = _endLatest(segment);
         final certainEnd = math.max(lastRead, cursor);
         regions
           ..add(
@@ -509,16 +535,30 @@ final class SpeakerAttributor {
       }
       final next = segments[i + 1];
       // Certainty ends where the next segment, or any later one, may already
-      // have begun (its earliest adjusted read); the next segment is only
-      // certain once its latest adjusted first read has passed.
+      // have begun (its earliest adjusted read), and no later than the last
+      // read that proves this speaker alone: its absence-of-the-next claim is
+      // only as good as the lag of the evidence that would have shown the next
+      // speaker. The next segment is only certain once its latest adjusted
+      // first read has passed and this speaker is known to have gone: the next
+      // segment's reads show it absent only as far as this speaker's own
+      // indicator lag allows.
       final nextEarliest = _startEarliest(next);
       final nextLatest = _startLatest(next);
       final earliestLater = laterStart[i + 1];
       final certainEnd = math.max(
-        math.min(lastRead, math.min(nextEarliest, earliestLater)),
+        math.min(
+          _endLatest(segment, floorLag: _maxLag(next)),
+          math.min(nextEarliest, earliestLater),
+        ),
         cursor,
       );
-      final windowEnd = math.max(math.max(lastRead, nextLatest), certainEnd);
+      final windowEnd = math.max(
+        math.max(
+          math.max(_endMaybe(segment), nextLatest),
+          next.firstEndUs - _maxLag(segment),
+        ),
+        certainEnd,
+      );
       regions
         ..add(
           _Region(_RegionType.certain, cursor, certainEnd, segment: segment),

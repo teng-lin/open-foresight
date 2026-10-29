@@ -396,8 +396,15 @@ void main() {
         decide(history, audio(1.5, 2.0), policy: policy).participantRef,
         'a',
       );
+      // Ada's lag-0 reads ran to 3.0 s and Bo's first lagged read ended at
+      // 3.53 s: Ada's own indicator would only have dropped by then, so nothing
+      // before 3.53 s is Bo's. (A first version of this test named 3.2 s Bo.)
       expect(
-        decide(history, audio(3.2, 5), policy: policy).participantRef,
+        decide(history, audio(3.2, 3.45), policy: policy).state,
+        isNot(SpeakerDecisionState.named),
+      );
+      expect(
+        decide(history, audio(3.6, 5), policy: policy).participantRef,
         'b',
       );
     });
@@ -430,6 +437,97 @@ void main() {
         SpeakerDecisionState.unknown,
         'capture_discontinuity',
       );
+    });
+  });
+
+  group('handover between methods with different lags', () {
+    const label = SpeakerEvidenceMethod.compactTalkingLabel;
+    SpeakerAttributionPolicy lagged(num seconds) =>
+        SpeakerAttributionPolicy(indicatorLagUs: {label: sec(seconds)});
+
+    test('a later speaker is not certain before the earlier one has gone', () {
+      reads(history, 1, 3, speakers: ['a']);
+      reads(history, 3.5, 6, speakers: ['b'], method: label);
+      final policy = lagged(1);
+      expect(
+        decide(history, audio(3.1, 3.45), policy: policy).state,
+        isNot(SpeakerDecisionState.named),
+      );
+      expect(
+        decide(history, audio(3.6, 5), policy: policy).participantRef,
+        'b',
+      );
+    });
+
+    test('an earlier speaker is not certain where the next could be silent '
+        'only by its own lag', () {
+      reads(history, 1, 10, speakers: ['a']);
+      reads(history, 10.5, 14, speakers: ['b'], method: label);
+      final policy = lagged(1);
+      // Ada's last read (10.0 s) proves Bo silent only to 9.0 s, since Bo's
+      // indicator shows a second late.
+      expect(
+        decide(history, audio(9.1, 9.4), policy: policy).state,
+        isNot(SpeakerDecisionState.named),
+      );
+      expect(
+        decide(history, audio(2, 8.9), policy: policy).participantRef,
+        'a',
+      );
+    });
+
+    test(
+      'slow reads: the earlier speaker may be speaking until a read ends',
+      () {
+        for (var t = 1.0; t <= 10.0; t += .5) {
+          history.addObservation(read(t, speakers: ['a'], duration: .3));
+        }
+        for (var t = 10.5; t <= 15.0; t += .5) {
+          history.addObservation(
+            read(t, speakers: ['b'], method: label, duration: .3),
+          );
+        }
+        final policy = SpeakerAttributionPolicy(
+          indicatorLagUs: {label: sec(.7)},
+        );
+        expect(
+          decide(history, audio(10.15, 10.28), policy: policy).state,
+          isNot(SpeakerDecisionState.named),
+        );
+        expect(
+          decide(history, audio(10.9, 12), policy: policy).participantRef,
+          'b',
+        );
+      },
+    );
+
+    test('equal lags and the default lag behave as before', () {
+      reads(history, 1, 10, speakers: ['a']);
+      reads(history, 10.5, 14, speakers: ['b']);
+      for (final lag in [0, .7]) {
+        final policy = SpeakerAttributionPolicy(
+          indicatorLagUs: {SpeakerEvidenceMethod.participantStatus: sec(lag)},
+        );
+        // Certainty ends at Ada's last read (10.0 s) less the lag, and Bo's
+        // begins at his first read's end (10.53 s) less the lag.
+        expect(
+          decide(
+            history,
+            audio(9.2 - lag, 9.9 - lag),
+            policy: policy,
+          ).participantRef,
+          'a',
+        );
+        expect(
+          decide(history, audio(10.6 - lag, 12), policy: policy).participantRef,
+          'b',
+        );
+        expectState(
+          decide(history, audio(10.1 - lag, 10.4 - lag), policy: policy),
+          SpeakerDecisionState.multiple,
+          'speaker_change',
+        );
+      }
     });
   });
 
@@ -503,9 +601,15 @@ void main() {
           reads(history, 11, 14, speakers: ['a'], method: label);
           final inside = decide(history, audio(8.2, 9.6), policy: policy);
           expectState(inside, SpeakerDecisionState.multiple, 'speaker_change');
+          // Bo is alone only as far as his last read (10.0 s) minus the 3 s lag
+          // of the evidence that would have shown Ada: 7.0 s, not 7.5 s.
           expect(
-            decide(history, audio(2, 7.5), policy: policy).participantRef,
+            decide(history, audio(2, 6.9), policy: policy).participantRef,
             'b',
+          );
+          expect(
+            decide(history, audio(7.2, 7.8), policy: policy).state,
+            isNot(SpeakerDecisionState.named),
           );
           expect(
             decide(history, audio(10.6, 10.9), policy: policy).participantRef,
