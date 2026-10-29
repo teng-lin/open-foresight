@@ -479,6 +479,8 @@ def split_heredocs(text: str) -> tuple[str, list[str]]:
     than it looks, and a body that never terminates is whatever follows: all three
     are returned to be read as may_call, never dropped.
     """
+    if "<<" not in text:
+        return "\n".join(text.splitlines()), []
     kept: list[str] = []
     bodies: list[str] = []
     pending: deque[tuple[bool, str, bool]] = deque()  # (strips tabs, delimiter, keep body)
@@ -512,9 +514,14 @@ def strip_heredocs(text: str) -> str:
 
 
 _PUNCTUATION = ";()<>|&\n"
+_UNQUOTED_TOKENS = re.compile(r"[^ \t\r;()<>|&\n]+|[;()<>|&\n]+")
 
 
 def _tokens(text: str) -> list[str]:
+    # Without quoting or escapes, shlex only separates these exact whitespace
+    # and punctuation characters. Keep Unicode whitespace inside words, too.
+    if not any(char in text for char in "'\"\\"):
+        return _UNQUOTED_TOKENS.findall(text)
     lexer = shlex.shlex(text, posix=True, punctuation_chars=_PUNCTUATION)
     lexer.whitespace_split = True
     lexer.whitespace = " \t\r"
@@ -533,6 +540,8 @@ def strip_comments(text: str) -> str:
     A comment starts at a `#` at the start of a word and runs to the end of the
     line, so an apostrophe inside a comment cannot open a quote.
     """
+    if "#" not in text:
+        return text
     out: list[str] = []
     quote: str | None = None
     word_start = True
