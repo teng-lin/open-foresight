@@ -42,8 +42,9 @@ final class MeetingQuestions {
     final previous = jsonEncode(
       store.contentHistory.meetingArtifacts(id, kind),
     );
+    final segments = meetings.transcript(id, finalOnly: true);
     final text = AttributedTranscript.modelInputText(
-      meetings.transcript(id, finalOnly: true),
+      segments,
       separator: '\n',
       verbatim: true,
     );
@@ -52,7 +53,7 @@ final class MeetingQuestions {
         domain.generator?.effectiveState['context_length'] as int? ?? 4096;
     const outputTokens = 1024;
     final instructions =
-        'Produce $kind from this transcript only. Use ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}. Do not invent details. $meetingSpeakerInstructions\n';
+        'Produce $kind from this transcript only. Use ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}. Do not invent details. $meetingSpeakerInstructions${AttributedTranscript.hasNames(segments) ? ' ${AttributedTranscript.modelInputNotice}' : ''}\n';
     // A byte is an upper bound on byte-tokenizer cost; reserve output and
     // framing tokens as well as the instructions before selecting evidence.
     final transcriptBudget =

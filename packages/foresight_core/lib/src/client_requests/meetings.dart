@@ -43,6 +43,9 @@ final class MeetingsAttributeInput extends ClientArguments {
       envelope.attach({'id': id, if (name.present) 'name': name.value});
 }
 
+/// Remove a segment's stored attribution, automatic or corrected. The segment
+/// then shows its audio-channel label; the previous automatic name is not
+/// restored, because nothing re-observes a saved segment.
 final class MeetingsResetAttributionInput extends ClientArguments {
   const MeetingsResetAttributionInput({super.envelope, required this.id});
 

@@ -36,6 +36,7 @@ class ReferenceNoteEnhancer {
     this.logBatchError,
     this.checkCurrent,
     this.onBatchFailure,
+    this.speakerNotice,
   });
 
   final Future<void> Function() ensureReady;
@@ -50,6 +51,10 @@ class ReferenceNoteEnhancer {
   final void Function(Object error, StackTrace stack)? logBatchError;
   final void Function()? checkCurrent;
   final void Function(List<int> noteIndices, Object error)? onBatchFailure;
+
+  /// Added once to every prompt when the transcript contains participant
+  /// names; null leaves the prompt byte-identical.
+  final String? speakerNotice;
 
   Future<T> _whileCurrent<T>(Future<T> pending) async {
     if (checkCurrent == null) return pending;
@@ -167,6 +172,7 @@ class ReferenceNoteEnhancer {
           uncoveredExcerpts: context.uncoveredExcerpts,
           includeMissedTopics: context.includeMissedTopics,
           concise: concise,
+          speakerNotice: speakerNotice,
         );
         final response = StringBuffer();
         try {

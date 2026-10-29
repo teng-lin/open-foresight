@@ -1,4 +1,5 @@
 import 'service_workspace_ports.dart';
+import '../attributed_transcript.dart';
 import '../meeting_attribution.dart';
 import '../meeting_speakers.dart';
 import '../operation_registry.dart';
@@ -60,6 +61,9 @@ final class MeetingOperations {
         for (final segment in detail.transcript)
           {
             ...segment.toRow(),
+            // Never the raw participant text: only the sanitized one-line form
+            // of a name the row actually carries.
+            'participant_name': AttributedTranscript.personName(segment),
             'speaker_id': MeetingSpeaker.fromSource(segment.source).id,
             'speaker_label': MeetingSpeaker.fromSource(segment.source).label,
             'channel': MeetingSpeaker.fromSource(segment.source).name,

@@ -127,9 +127,10 @@ final class SummaryCoordinator {
         'backend': effective['backend'],
       }),
     );
+    final segments = meetings.transcript(id, finalOnly: true);
     final transcript = cleanSummaryTranscript(
       AttributedTranscript.modelInputText(
-        meetings.transcript(id, finalOnly: true),
+        segments,
         extract: extractSavedTranscriptText,
       ),
     );
@@ -173,6 +174,9 @@ final class SummaryCoordinator {
     try {
       check();
       final producer = SummaryGenerator(
+        speakerNotice: AttributedTranscript.hasNames(segments)
+            ? AttributedTranscript.modelInputNotice
+            : null,
         contextTokens: context,
         outputTokens: outputTokens,
         checkCurrent: check,

@@ -18,6 +18,8 @@ import 'package:foresight_core/src/helper.dart';
 import 'package:foresight_core/src/native.dart';
 import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/store.dart';
+import 'package:foresight_core/src/attributed_transcript.dart';
+import 'package:foresight_core/src/meeting_attribution.dart';
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
 
@@ -287,6 +289,68 @@ void main() {
         );
         expect(runtime.prompts.single, contains('Ada: Ship it'));
         expect(runtime.prompts.single, isNot(contains('segment_title')));
+      });
+    },
+  );
+
+  test(
+    'attributed names reach enhancement with one prompt-level notice',
+    () async {
+      await withTranscriptFixture((
+        directory,
+        embeddings,
+        domain,
+        runtime,
+        app,
+      ) async {
+        final plain = domain.store.meeting('No names');
+        domain.store.saveMeetingNotes(plain, 'Raw note');
+        domain.store.transcript(
+          plain,
+          'Plain evidence',
+          true,
+          0,
+          20,
+          'imported',
+        );
+        await app.enhanceNotes(plain);
+        expect(runtime.prompts.last, isNot(contains('Participant names')));
+        runtime.prompts.clear();
+        embeddings.texts.clear();
+
+        final id = domain.store.meeting('Named speakers');
+        domain.store.saveMeetingNotes(id, 'Raw note');
+        domain.store.transcript(id, 'We ship Friday.', true, 0, 20, 'playback');
+        final spoken = domain.store.db.lastInsertRowId;
+        domain.store.transcript(
+          id,
+          'Plain evidence',
+          true,
+          20,
+          40,
+          'microphone',
+        );
+        domain.store.saveAutomaticAttribution(
+          spoken,
+          TranscriptAttribution(
+            displayName: 'Ada: Chen',
+            state: AttributionState.attributed,
+          ),
+        );
+        await app.enhanceNotes(id);
+        expect(
+          embeddings.texts.first,
+          'Ada- Chen: We ship Friday.\n\n(unnamed speaker): Plain evidence',
+        );
+        final prompt = runtime.prompts.single;
+        expect(
+          AttributedTranscript.modelInputNotice.allMatches(prompt),
+          hasLength(1),
+        );
+        expect(
+          prompt.indexOf(AttributedTranscript.modelInputNotice),
+          lessThan(prompt.indexOf('<instructions>')),
+        );
       });
     },
   );

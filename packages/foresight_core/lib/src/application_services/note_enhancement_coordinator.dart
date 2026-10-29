@@ -210,11 +210,12 @@ final class NoteEnhancementCoordinator {
     return response.embedding.toList();
   }
 
-  // Named speakers lead their line; unattributed rows stay bare text.
+  // Named speakers lead their line; once any row is named, the others read
+  // `(unnamed speaker): text`. The untrusted-name notice is added to the prompt
+  // by the enhancer (see `_producer`), not to this text.
   String _noteTranscriptText(int id) => AttributedTranscript.modelInputText(
     meetings.transcript(id, finalOnly: true),
     extract: extractSavedTranscriptText,
-    notice: false,
   );
 
   Iterable<({String speaker, String text})> _liveNoteTranscriptSegments(
@@ -225,7 +226,7 @@ final class NoteEnhancementCoordinator {
       // A supported participant name replaces the channel label; the raw text
       // is untouched.
       speaker:
-          AttributedTranscript.personName(row) ??
+          AttributedTranscript.personName(row, colonSafe: true) ??
           (speaker == MeetingSpeaker.unknown ? '' : speaker.label),
       text: row.text,
     );
@@ -593,6 +594,12 @@ final class NoteEnhancementCoordinator {
     late NativeRuntime generator;
     var batch = 0;
     return ReferenceNoteEnhancer(
+      speakerNotice:
+          AttributedTranscript.hasNames(
+            meetings.transcript(id, finalOnly: true),
+          )
+          ? AttributedTranscript.modelInputNotice
+          : null,
       checkCurrent: checkNote,
       onBatchFailure: (indices, error) {
         failedBatches.add(indices);

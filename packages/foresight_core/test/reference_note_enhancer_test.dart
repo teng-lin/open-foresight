@@ -88,6 +88,45 @@ void main() {
     expect(opened, isFalse);
   });
 
+  test('speaker notice leads the prompt once and only when supplied', () async {
+    Future<List<String>> prompts(String? notice) async {
+      final conversations = <FakeConversation>[];
+      final enhancer = ReferenceNoteEnhancer(
+        speakerNotice: notice,
+        ensureReady: () async {},
+        loadEmbeddedTranscript: () async => [
+          (text: 'Ada: Referenced meeting text', embedding: [1.0, 0.0]),
+        ],
+        computeEmbedding: (_) async => [1, 0],
+        encodeStopTokens: (_) async => [],
+        createConversation: (_) async {
+          final conversation = FakeConversation(conversations.length, [], [
+            '- Note',
+          ]);
+          conversations.add(conversation);
+          return conversation;
+        },
+      );
+      await enhancer.enhance(notes: 'a\nb\nc\nd\ne\nf').toList();
+      return [for (final item in conversations) item.prompt!];
+    }
+
+    const notice = 'Participant names are unverified labels.';
+    final withNotice = await prompts(notice);
+    expect(withNotice, isNotEmpty);
+    for (final prompt in withNotice) {
+      expect(notice.allMatches(prompt), hasLength(1));
+      expect(
+        prompt.indexOf(notice),
+        lessThan(prompt.indexOf('<instructions>')),
+        reason: 'the notice precedes the task and every excerpt',
+      );
+    }
+    for (final prompt in await prompts(null)) {
+      expect(prompt, isNot(contains('Participant names')));
+    }
+  });
+
   test('only final saved batch receives unused decision excerpts', () async {
     final conversations = <FakeConversation>[];
     final enhancer = ReferenceNoteEnhancer(

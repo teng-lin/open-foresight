@@ -77,6 +77,7 @@ class SummaryGenerator {
     required this.onProgress,
     this.contextTokens = 4096,
     this.outputTokens = 1024,
+    this.speakerNotice,
   });
   final SummaryComplete complete;
   final Future<int> Function(String) countTokens;
@@ -84,11 +85,16 @@ class SummaryGenerator {
   final void Function(SummaryProgress) onProgress;
   final int contextTokens, outputTokens;
 
+  /// Added to the system policy of every request when the transcript contains
+  /// participant names; null leaves the prompts byte-identical.
+  final String? speakerNotice;
+  String get _policy => speakerNotice == null
+      ? summarySourcePolicy
+      : '$summarySourcePolicy$speakerNotice\n\n';
+
   Future<bool> _fits(String prompt, String instructions) async {
     checkCurrent();
-    final count = await countTokens(
-      '$summarySourcePolicy$instructions\n\n$prompt',
-    );
+    final count = await countTokens('$_policy$instructions\n\n$prompt');
     checkCurrent();
     // Include the output and conversation framing, rather than treating a
     // word count or serialized max_input_tokens as an enforced token limit.
@@ -109,9 +115,7 @@ class SummaryGenerator {
       );
     }
     onProgress(SummaryProgress(phase, completed: completed, total: total));
-    final result = await complete(prompt, '$summarySourcePolicy$system', (
-      text,
-    ) {
+    final result = await complete(prompt, '$_policy$system', (text) {
       checkCurrent();
       onProgress(
         SummaryProgress(
