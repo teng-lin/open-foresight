@@ -531,6 +531,43 @@ void main() {
     });
   });
 
+  group('the latest speaker before the next one is seen', () {
+    const label = SpeakerEvidenceMethod.compactTalkingLabel;
+
+    test('is certain no later than the largest configured lag allows', () {
+      reads(history, 0, 5, speakers: ['a']);
+      final policy = SpeakerAttributionPolicy(
+        indicatorLagUs: {
+          SpeakerEvidenceMethod.participantStatus: sec(.2),
+          label: sec(1),
+        },
+      );
+      // The next speaker will be shown by the label, a second late, so Ada's
+      // last read at 5.0 s only proves her alone until 4.0 s.
+      final before = decide(history, audio(4.3, 4.75), policy: policy);
+      expect(before.state, isNot(SpeakerDecisionState.named));
+      // And the answer does not flip when that speaker appears.
+      reads(history, 5.5, 8, speakers: ['b'], method: label);
+      final after = decide(history, audio(4.3, 4.75), policy: policy);
+      expect(after.state, isNot(SpeakerDecisionState.named));
+      expect(
+        decide(history, audio(2, 3.9), policy: policy).participantRef,
+        'a',
+      );
+    });
+
+    test('with a single lag the certainty is unchanged', () {
+      reads(history, 0, 5, speakers: ['a']);
+      final policy = SpeakerAttributionPolicy(
+        indicatorLagUs: {SpeakerEvidenceMethod.participantStatus: sec(.2)},
+      );
+      expect(
+        decide(history, audio(4.3, 4.75), policy: policy).participantRef,
+        'a',
+      );
+    });
+  });
+
   group('retracting reads timed with a wrong clock offset', () {
     test('forgets reads from the cut, accepts earlier corrected ones', () {
       reads(history, 1, 4, speakers: ['a']);

@@ -609,6 +609,161 @@ void main() {
         );
       });
 
+      test('a sleep longer than the stall timeout is not a stall', () async {
+        // Timers keep counting while the machine sleeps; the capture clock does
+        // not. Stall timeout here: 100 + 100 + 200 = 400 ms.
+        h = Harness(
+          config: fastConfig(stallSlack: const Duration(milliseconds: 200)),
+        );
+        await h.observer.start('s1');
+        h.captureNow = 7000000;
+        h.helpers.single.send(
+          'observation',
+          observationFields('s1', startMs: 3000),
+        );
+        await eventually(() => h.observations.length == 1);
+        h.captureNow = 7100000;
+        // The "sleep": the isolate is blocked for far more than the timeout,
+        // the capture clock stands still, and the helper's clock jumps 30 s.
+        h.behaviors.first.clockMs = 4000 + 30000;
+        sleep(const Duration(milliseconds: 1000));
+        h.helpers.single.send(
+          'observation',
+          observationFields('s1', startMs: 3500 + 30000),
+        );
+        await eventually(
+          () => h.diagnosticCodes.contains(
+            SpeakerObserverDiagnosticCode.clockShifted,
+          ),
+        );
+        await settle();
+        expect(h.observer.stats.stalls, 0);
+        expect(h.observer.stats.restarts, 0);
+        expect(h.helpers, hasLength(1));
+        // And it still notices a helper that really stops talking.
+        await eventually(() => h.helpers.length == 2);
+        expect(
+          h.states.any((s) => s.failure == SpeakerObserverFailure.stalled),
+          true,
+        );
+      });
+
+      for (final sleepMs in [3000, 30000]) {
+        test('a $sleepMs ms sleep keeps the reads made before it', () async {
+          h = Harness();
+          final session = SpeakerAttributionSession(session: 's1');
+          final events = <SpeakerObserverEvent>[];
+          h.observer.events.listen(events.add);
+          h.observer.events.listen(session.apply);
+          await h.observer.start('s1');
+          // Helper 1000 ms is capture 5 s; good reads every 500 ms up to 7 s.
+          for (var ms = 1500; ms <= 3000; ms += 500) {
+            h.captureNow = (ms + 4000) * 1000 + 20000;
+            h.helpers.single.send(
+              'observation',
+              observationFields('s1', startMs: ms),
+            );
+            await eventually(() => h.observations.length == (ms - 1000) ~/ 500);
+          }
+          h.captureNow = 7600000;
+          h.behaviors.first.clockMs = 3600 + sleepMs;
+          h.helpers.single.send(
+            'observation',
+            observationFields('s1', startMs: 3500 + sleepMs),
+          );
+          await eventually(
+            () => events.whereType<UnavailableEvent>().isNotEmpty,
+          );
+          await settle();
+          final retract = events.whereType<UnavailableEvent>().single;
+          // Only what came after the last read the old offset fitted (about
+          // 7.0 s) is retracted, whatever the length of the sleep.
+          expect(retract.sinceUs, closeTo(7000000, 100000));
+          final decision = session.attributor.attribute(
+            session.history,
+            source: AudioSource.playback,
+            mapped: MappedAudioRange(
+              source: AudioSource.playback,
+              sampleStart: 0,
+              sampleEnd: 1,
+              pieces: [
+                MappedAudioPiece(
+                  sampleStart: 0,
+                  sampleEnd: 1,
+                  startUs: 5600000,
+                  endUs: 6800000,
+                ),
+              ],
+              uncertaintyUs: 0,
+              gapUs: 0,
+              hasDiscontinuity: false,
+              crossesRateChange: false,
+            ),
+          );
+          expect(decision.state, SpeakerDecisionState.named);
+          expect(h.helpers, hasLength(1));
+        });
+      }
+
+      test('a blind period that began before a sleep keeps its start', () async {
+        h = Harness(
+          config: fastConfig(clockRecheck: const Duration(milliseconds: 150)),
+        );
+        final events = <SpeakerObserverEvent>[];
+        h.observer.events.listen(events.add);
+        await h.observer.start('s1');
+        h.captureNow = 5300000;
+        h.helpers.single.send('unavailable', {
+          'session': 's1',
+          'reason': 'no_meeting_window',
+          'since_ms': 1200,
+        });
+        await eventually(() => events.whereType<UnavailableEvent>().isNotEmpty);
+        // A 60 s sleep, found by the periodic recheck.
+        h.captureNow = 5400000;
+        h.behaviors.first.clockMs = 1400 + 60000;
+        await eventually(
+          () => h.diagnosticCodes.contains(
+            SpeakerObserverDiagnosticCode.clockShifted,
+          ),
+        );
+        // The same interval, its reason changed; since_ms still names its start.
+        h.helpers.single.send('unavailable', {
+          'session': 's1',
+          'reason': 'zoom_not_running',
+          'since_ms': 1200,
+        });
+        await eventually(
+          () => events.whereType<UnavailableEvent>().any(
+            (e) => e.reason == 'zoom_not_running',
+          ),
+        );
+        final changed = events.whereType<UnavailableEvent>().firstWhere(
+          (e) => e.reason == 'zoom_not_running',
+        );
+        expect(changed.sinceUs, closeTo(5200000, 5000));
+        expect(h.helpers, hasLength(1));
+        expect(h.observer.stats.restarts, 0);
+      });
+
+      test(
+        'an implausible read during stop does not spoil a clean stop',
+        () async {
+          h = Harness();
+          await h.observer.start('s1');
+          final stopping = h.observer.stop();
+          h.helpers.single.send(
+            'observation',
+            observationFields('s1', startMs: 1 << 49),
+          );
+          await stopping;
+          await settle();
+          expect(h.observer.stats.protocolErrors, 0);
+          expect(h.states.last.status, ObserverStatus.stopped);
+          expect(h.states.last.failure, isNull);
+        },
+      );
+
       test('a read that is implausible with an unchanged offset still '
           'restarts the helper', () async {
         h = Harness();

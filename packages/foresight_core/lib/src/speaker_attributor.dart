@@ -45,6 +45,10 @@ final class SpeakerAttributionPolicy {
   int lagFor(SpeakerEvidenceMethod method) =>
       indicatorLagUs[method] ?? defaultLagUs;
 
+  /// The largest lag of any method this policy configures.
+  int get maxConfiguredLagUs =>
+      [defaultLagUs, ...indicatorLagUs.values].reduce((a, b) => a > b ? a : b);
+
   void validate() {
     if (defaultLagUs < 0 ||
         boundaryMarginUs < 0 ||
@@ -548,7 +552,12 @@ final class SpeakerAttributor {
     for (var i = 0; i < segments.length; i++) {
       final segment = segments[i];
       if (i == segments.length - 1) {
-        final lastRead = _endLatest(segment);
+        // The speaker after this one has not been seen yet, so the lag of the
+        // evidence that will show it is not known: allow the largest.
+        final lastRead = _endLatest(
+          segment,
+          floorLag: policy.maxConfiguredLagUs,
+        );
         final certainEnd = math.max(lastRead, cursor);
         regions
           ..add(
@@ -925,7 +934,9 @@ final class SpeakerAttributionSession {
     }
   }
 
-  /// Latest observed time. Speech ending later than this cannot be decided yet.
+  /// Latest observed time. Speech ending later than this cannot be decided yet,
+  /// and the latest speaker is only certain up to this less the largest
+  /// configured indicator lag.
   int? get observationWatermarkUs => history.latestReadEndUs;
 
   /// The counter generation to record with a sample range when it is queued

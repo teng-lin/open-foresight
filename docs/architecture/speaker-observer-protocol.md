@@ -290,8 +290,17 @@ when stdin closes.
   from the one in use by more than both uncertainties plus 250 ms is a shift: the
   new offset is used, and an `UnavailableEvent` with `retractsReads` and the
   reason `clock_shift` tells the consumer to forget every read after the last
-  one the old offset was known to fit (a consumer that ignores the flag keeps
-  reads timed up to the sleep's length too late). Attributions already made
+  one the old offset was known to fit (for a helper clock that moved ahead, as
+  across a sleep, that is the end of the last read that was not ahead of the
+  capture clock, whatever the length of the sleep; otherwise the last
+  confirmation). A consumer that ignores the flag keeps reads timed up to the
+  sleep's length too late. A time the helper reports about the past (the start
+  of an unavailable interval) is mapped with the offset that was in force then.
+  Timers count time asleep and the capture clock does not, so a stall timeout
+  that fires after the capture clock moved less than the timeout is re-armed for
+  the rest of it, and a frame the helper sent (even one dropped as implausible)
+  proves it alive. Reads that arrive while the session is stopping or
+  restarting are not judged. Attributions already made
   from such reads are not revisited. A shift smaller than the tolerance, or one
   that happened since the last recheck and shows in no read, is not seen until
   the next periodic measurement; the error until then is the shift.
