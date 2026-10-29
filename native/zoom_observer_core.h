@@ -51,8 +51,9 @@ struct SnapshotOutcome {
   // libatspi lost its registry and cannot reconnect in-process). The core then
   // writes one terminal `error` frame whose `code` is `reason` (with the id of
   // the request that caused the read, if any) and exits with `fatal_exit`. A
-  // shutdown that began first wins: the request is answered `cancelled` and the
-  // exit is clean.
+  // shutdown that began first wins and the request is answered `cancelled`:
+  // after a stop `stopped` is written and the exit is 0; end of input writes no
+  // further frame and exits 0; a broken stdout writes nothing and exits 3.
   bool fatal = false;
   int fatal_exit = 0;
   AxSnapshot snapshot;

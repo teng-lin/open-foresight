@@ -76,17 +76,22 @@ public:
     failure_ = std::move(callback);
   }
 
-  Result emit(const char *type, json frame, bool terminal = false) {
-    return write_frame(type, std::move(frame), terminal, false);
+  // A terminal frame also records the exit status its writer intends, so the
+  // shutdown guard leaves with that status whoever asked it to shut down.
+  Result emit(const char *type, json frame, bool terminal = false,
+              int exit_code = 0) {
+    return write_frame(type, std::move(frame), terminal, false, exit_code);
   }
 
-  Result emit_bounded(const char *type, json frame, bool terminal = false) {
+  Result emit_bounded(const char *type, json frame, bool terminal = false,
+                      int exit_code = 0) {
     // After one bounded wait times out the consumer is wedged: further bounded
     // frames give up at once for a while, so a burst of replies ahead of a
     // `stop` cannot add a wait each.
     if (bounded_blocked_until_.load() > Clock::now().time_since_epoch().count())
       return Result::Busy;
-    Result result = write_frame(type, std::move(frame), terminal, true);
+    Result result =
+        write_frame(type, std::move(frame), terminal, true, exit_code);
     if (result == Result::Busy)
       bounded_blocked_until_ = (Clock::now() + std::chrono::milliseconds(250))
                                    .time_since_epoch()
@@ -100,6 +105,11 @@ public:
   // finish".
   bool terminal_written() const {
     return terminal_written_.load();
+  }
+  // The exit status recorded with the terminal frame (valid once it is
+  // written).
+  int terminal_exit() const {
+    return terminal_exit_.load();
   }
 
   // The reader polls stdout for a hang-up while idle.
@@ -118,8 +128,8 @@ private:
   static constexpr size_t kAtomicWrite = 512; // PIPE_BUF on macOS
   static constexpr int kBoundMs = 100;
 
-  Result write_frame(const char *type, json frame, bool terminal,
-                     bool bounded) {
+  Result write_frame(const char *type, json frame, bool terminal, bool bounded,
+                     int exit_code) {
     frame["v"] = kProtocolVersion;
     frame["type"] = type;
     Result result;
@@ -156,8 +166,11 @@ private:
       }
       if (terminal) {
         closed_ = true;
-        if (result == Result::Written)
+        if (result == Result::Written) {
+          terminal_exit_ =
+              exit_code; // before the flag, so a reader of the flag sees it
           terminal_written_ = true;
+        }
       }
     }
     if (first_failure && failure_)
@@ -190,6 +203,7 @@ private:
 
   std::atomic<Clock::rep> bounded_blocked_until_{0};
   std::atomic<bool> terminal_written_{false};
+  std::atomic<int> terminal_exit_{0};
   std::timed_mutex mutex_;
   int fd_;
   uint64_t seq_ = 0;
@@ -423,24 +437,27 @@ private:
     // If the main loop already wrote the closing frame and was merely slow to
     // mark itself done, nothing was lost: leave with the code it intends.
     const int intended = kind == Request::Kind::Fatal ? kExitProtocol : 0;
+    // The status comes from the frame that was actually written, not from what
+    // this request would have written: a fatal source error the main loop wrote
+    // first keeps its status when a stop arrives during its shutdown.
     if (writer_.terminal_written())
-      return leave(intended);
+      return leave(writer_.terminal_exit());
     Writer::Result written = Writer::Result::Written;
     if (kind == Request::Kind::Stop)
       written = writer_.emit_bounded(
           "stopped",
           {{"id", request.id},
            {"session", session.empty() ? json(nullptr) : json(session)}},
-          true);
+          true, 0);
     else if (kind == Request::Kind::Fatal)
       written = writer_.emit_bounded(
           "error", {{"code", request.code}, {"message", "protocol error"}},
-          true);
+          true, kExitProtocol);
     // The lock wait can end while the main loop is finishing its own closing
     // write, so check again before calling the frame lost.
     if (written != Writer::Result::Written && !writer_.terminal_written())
       return leave(kExitOutput);
-    leave(intended);
+    leave(writer_.terminal_written() ? writer_.terminal_exit() : intended);
   }
 
   // Ends the whole process (the stall guard). `exit_process` is a test seam so
@@ -892,10 +909,10 @@ int run_observer(Source &source, const ObserverConfig &config) {
     json frame = {{"code", outcome.reason}, {"message", "fatal source error"}};
     if (!id.is_null())
       frame["id"] = id;
-    exit_code =
-        writer.emit("error", std::move(frame), true) == Writer::Result::Failed
-            ? kExitOutput
-            : outcome.fatal_exit;
+    exit_code = writer.emit("error", std::move(frame), true,
+                            outcome.fatal_exit) == Writer::Result::Failed
+                    ? kExitOutput
+                    : outcome.fatal_exit;
     if (config.after_closing_frame)
       config.after_closing_frame();
     running = false;
@@ -955,7 +972,7 @@ int run_observer(Source &source, const ObserverConfig &config) {
       case Request::Kind::Stop:
         if (writer.emit("stopped",
                         {{"id", request.id}, {"session", accepted_session()}},
-                        true) == Writer::Result::Failed)
+                        true, 0) == Writer::Result::Failed)
           exit_code = kExitOutput;
         if (config.after_closing_frame)
           config.after_closing_frame();
@@ -967,7 +984,7 @@ int run_observer(Source &source, const ObserverConfig &config) {
       case Request::Kind::Fatal:
         writer.emit("error",
                     {{"code", request.code}, {"message", "protocol error"}},
-                    true);
+                    true, kExitProtocol);
         exit_code = kExitProtocol;
         if (config.after_closing_frame)
           config.after_closing_frame();
