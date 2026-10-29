@@ -30,6 +30,12 @@ class HelperBehavior {
   bool answerClock = true;
   bool answerCapabilities = true;
 
+  /// Answers a `capabilities` request with a terminal `error` carrying this
+  /// code and the request id, then exits with [fatalExitStatus]: a source that
+  /// ended the session while serving the request.
+  String? capabilitiesFatalCode;
+  int fatalExitStatus = 4;
+
   /// Exits without a hello, as a helper killed by dyld or code signing would.
   bool exitBeforeHello = false;
   int exitBeforeHelloStatus = 127;
@@ -213,6 +219,12 @@ class FakeHelper implements Process {
     switch (request['type']) {
       case 'capabilities' || 'setup':
         if (!behavior.answerCapabilities) return;
+        final fatal = behavior.capabilitiesFatalCode;
+        if (fatal != null) {
+          send('error', {'id': id, 'code': fatal, 'message': 'x'});
+          exit(behavior.fatalExitStatus);
+          return;
+        }
         send('capabilities', {
           'id': id,
           'state': behavior.capabilityState,

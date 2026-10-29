@@ -1851,6 +1851,102 @@ void main() {
       expect(h.states.last.helperCode, 'ax_failed');
     });
 
+    group('source-ended sessions (terminal error, exit status 4)', () {
+      Future<void> startQuiet(Harness h) async {
+        await h.observer.start('s1');
+        h.helpers.single.send('unavailable', {
+          'session': 's1',
+          'reason': 'atspi_bus_lost',
+          'since_ms': 1500,
+        });
+        await settle();
+      }
+
+      test(
+        'a request-found loss restarts within the budget and names the reason',
+        () async {
+          h = Harness(
+            config: fastConfig(stallSlack: const Duration(milliseconds: 100)),
+          );
+          await startQuiet(h);
+          // The probe is answered by the terminal error, then the helper leaves.
+          h.helpers.single.behavior.capabilitiesFatalCode = 'atspi_bus_lost';
+          await eventually(
+            () =>
+                h.helpers.length == 2 &&
+                h.states.last.status == ObserverStatus.running,
+          );
+          expect(h.states[1].status, ObserverStatus.restarting);
+          expect(h.states[1].failure, SpeakerObserverFailure.helperExited);
+          expect(h.states[1].helperCode, 'atspi_bus_lost');
+          expect(h.observer.stats.restarts, 1);
+          expect(
+            h.diagnostics
+                .where(
+                  (d) => d.code == SpeakerObserverDiagnosticCode.helperExited,
+                )
+                .first
+                .value,
+            4,
+          );
+          expect(h.helpers.first.exited, true);
+        },
+      );
+
+      test('a poll-found loss restarts and names the reason', () async {
+        h = Harness();
+        await h.observer.start('s1');
+        final helper = h.helpers.single;
+        helper.send('error', {'code': 'atspi_bus_lost', 'message': 'x'});
+        helper.exit(4);
+        await eventually(
+          () =>
+              h.helpers.length == 2 &&
+              h.states.last.status == ObserverStatus.running,
+        );
+        expect(h.states[1].failure, SpeakerObserverFailure.helperError);
+        expect(h.states[1].helperCode, 'atspi_bus_lost');
+        expect(h.observer.stats.restarts, 1);
+      });
+
+      test('exit status 4 with no reason is an ordinary restart', () async {
+        h = Harness();
+        await h.observer.start('s1');
+        h.helpers.single.exit(4);
+        await eventually(
+          () =>
+              h.helpers.length == 2 &&
+              h.states.last.status == ObserverStatus.running,
+        );
+        expect(h.states[1].failure, SpeakerObserverFailure.helperExited);
+        expect(h.states[1].helperCode, isNull);
+        expect(h.observer.stats.restarts, 1);
+      });
+
+      test('repeated losses exhaust the restart budget and fail with the '
+          'reason', () async {
+        h = Harness(config: fastConfig(maxRestarts: 1));
+        h.behaviors.add(HelperBehavior());
+        await h.observer.start('s1');
+        void lose(FakeHelper helper) {
+          helper.send('error', {'code': 'atspi_bus_lost', 'message': 'x'});
+          helper.exit(4);
+        }
+
+        lose(h.helpers.single);
+        await eventually(() => h.helpers.length == 2);
+        await eventually(() => h.states.last.status == ObserverStatus.running);
+        lose(h.helpers.last);
+        await eventually(
+          () => h.states.any((s) => s.status == ObserverStatus.failed),
+        );
+        expect(h.states.last.failure, SpeakerObserverFailure.helperError);
+        expect(h.states.last.helperCode, 'atspi_bus_lost');
+        expect(h.helpers, hasLength(2));
+        expect(h.allReaped, true);
+      });
+    });
+
     test(
       'an unexpected error while restarting is reported, not swallowed',
       () async {

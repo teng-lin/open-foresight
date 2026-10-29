@@ -305,6 +305,18 @@ final class _Connection {
   Future<_ReapResult>? _terminating;
   bool _closing = false, _exited = false, _helloSeen = false;
   int _windowFrames = 0;
+
+  /// The latest `error` code other than `busy`, and how long ago it arrived. A
+  /// helper that ends its own session (a source that only a restart can fix)
+  /// writes such an error and then exits, so the code names the exit.
+  String? _lastErrorCode;
+  final Stopwatch _lastErrorAge = Stopwatch();
+
+  /// Stdout reached its end (or failed); the exit handler waits for it so that
+  /// frames written just before the exit are not lost to the exit event.
+  final Completer<void> _stdoutDone = Completer();
+  Timer? _drainTimer;
+  static const Duration _exitDrain = Duration(milliseconds: 250);
   int stderrBytes = 0;
 
   /// Set by the owner.
@@ -424,6 +436,7 @@ final class _Connection {
         ).listen(
           _onFrame,
           onError: (Object error, StackTrace _) {
+            if (!_stdoutDone.isCompleted) _stdoutDone.complete();
             protocolFailure(
               error is ObserverProtocolException
                   ? error.code
@@ -431,14 +444,9 @@ final class _Connection {
             );
           },
           onDone: () {
+            if (!_stdoutDone.isCompleted) _stdoutDone.complete();
             // Stdout closing without an orderly stop means the helper went away.
-            if (!_closing && !_exited) {
-              fail(
-                const SpeakerObserverException(
-                  SpeakerObserverFailure.helperExited,
-                ),
-              );
-            }
+            if (!_closing && !_exited) fail(_exitFailure());
           },
           cancelOnError: true,
         );
@@ -473,7 +481,7 @@ final class _Connection {
       ),
     );
     unawaited(
-      _process.exitCode.then<void>((status) {
+      _process.exitCode.then<void>((status) async {
         _exited = true;
         _diagnostic(
           SpeakerObserverDiagnostic(
@@ -481,12 +489,33 @@ final class _Connection {
             status,
           ),
         );
-        if (!_closing) {
-          fail(
-            const SpeakerObserverException(SpeakerObserverFailure.helperExited),
-          );
-        }
+        if (_closing) return;
+        await _drainStdout();
+        if (!_closing) fail(_exitFailure());
       }),
+    );
+  }
+
+  /// Gives frames the helper wrote just before it exited a bounded chance to
+  /// arrive: the exit event and the data in the pipe are not ordered.
+  Future<void> _drainStdout() async {
+    if (_stdoutDone.isCompleted) return;
+    _drainTimer = Timer(_exitDrain, () {
+      if (!_stdoutDone.isCompleted) _stdoutDone.complete();
+    });
+    await _stdoutDone.future;
+    _drainTimer?.cancel();
+    _drainTimer = null;
+  }
+
+  /// An unexpected exit. A helper that reported why just before leaving (the
+  /// terminal `error` of a source-ended session) has that reason attached.
+  SpeakerObserverException _exitFailure() {
+    final code = _lastErrorCode;
+    final recent = code != null && _lastErrorAge.elapsed <= _config.exitGrace;
+    return SpeakerObserverException(
+      SpeakerObserverFailure.helperExited,
+      helperCode: recent ? code : null,
     );
   }
 
@@ -511,6 +540,12 @@ final class _Connection {
         started = true;
         _reply(id, frame);
       case ErrorFrame(:final id):
+        if (frame.code != 'busy') {
+          _lastErrorCode = frame.code;
+          _lastErrorAge
+            ..reset()
+            ..start();
+        }
         if (id == null) {
           _diagnostic(
             const SpeakerObserverDiagnostic(
@@ -665,6 +700,9 @@ final class _Connection {
 
   Future<_ReapResult> _terminate() async {
     _closing = true;
+    _drainTimer?.cancel();
+    _drainTimer = null;
+    if (!_stdoutDone.isCompleted) _stdoutDone.complete();
     if (!_ended.isCompleted) _ended.complete();
     final cancelled =
         failure ??
