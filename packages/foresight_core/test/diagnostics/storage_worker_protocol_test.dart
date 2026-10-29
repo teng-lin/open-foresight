@@ -909,6 +909,13 @@ void main() {
         // this process copies the descriptor table: until that child execs, its
         // copy keeps the closed lease held. Poll for release (a worker that
         // never releases still fails at the deadline) instead of probing once.
+        // The release itself is pinned synchronously, where /proc allows, by
+        // this process's own descriptor table, which a fork cannot change.
+        expect(
+          ownDescriptorsOn('$path/logs/slot-${admitted.slot}/lease'),
+          anyOf(isNull, 0),
+          reason: 'the worker still holds a descriptor on its slot lease',
+        );
         final slot = BackupDirectory('$path/logs/slot-${admitted.slot}');
         final lease = slot.open('lease');
         try {

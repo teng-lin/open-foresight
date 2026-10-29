@@ -275,7 +275,8 @@ void main() {
     // ends at its deadline; when the close lands after the call's HTTP/2
     // stream exists, grpc reports the torn-down connection at once as UNKNOWN.
     // The first test accepts exactly those two outcomes; the second forces the
-    // second order, so that outcome is pinned and not left to the scheduler.
+    // second order, by closing only after the peer has read the request, so
+    // that outcome is pinned and not left to the scheduler.
     test(
       'KNOWN DEFICIENCY: a peer that closes before any frame is reported at '
       'the deadline, or at once as UNKNOWN if the close follows the stream',
@@ -310,9 +311,8 @@ void main() {
         'once as UNKNOWN, not at the deadline', () {
       return _guarded((uncaught) async {
         final outcome = await _callAgainst(
-          (client) => Future<void>.delayed(
-            const Duration(milliseconds: 300),
-            client.socket.destroy,
+          (client) => unawaited(
+            client.requestSeen.then((_) => client.socket.destroy()),
           ),
           uncaught,
         );
