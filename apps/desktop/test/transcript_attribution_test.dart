@@ -142,7 +142,7 @@ void main() {
         await tester.tap(find.byTooltip('Copy full transcript'));
         expect(
           copied,
-          'Ada Lovelace: We should ship Friday?\n\n'
+          'Ada Lovelace [Remote]: We should ship Friday?\n\n'
           'Microphone: Agreed.\n\n'
           'Remote: Candidate only',
         );

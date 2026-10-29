@@ -6,7 +6,6 @@ import 'package:grpc/grpc.dart';
 import 'service_workflow_ports.dart';
 import '../read_models.dart';
 import '../generated/rag_service.pb.dart';
-import '../meeting_speakers.dart';
 import '../meeting_workflow_store.dart';
 import '../native.dart';
 import '../native_note_enhancement.dart';
@@ -220,17 +219,9 @@ final class NoteEnhancementCoordinator {
 
   Iterable<({String speaker, String text})> _liveNoteTranscriptSegments(
     int id,
-  ) => meetings.transcript(id, finalOnly: true).map((row) {
-    final speaker = MeetingSpeaker.fromSource(row.source);
-    return (
-      // A supported participant name replaces the channel label; the raw text
-      // is untouched.
-      speaker:
-          AttributedTranscript.personName(row, colonSafe: true) ??
-          (speaker == MeetingSpeaker.unknown ? '' : speaker.label),
-      text: row.text,
-    );
-  });
+  ) => AttributedTranscript.liveNoteSegments(
+    meetings.transcript(id, finalOnly: true),
+  );
 
   void scheduleLiveTranscript(int id) {
     if (_closed || capture.meeting != id || !capture.active) return;
@@ -594,12 +585,7 @@ final class NoteEnhancementCoordinator {
     late NativeRuntime generator;
     var batch = 0;
     return ReferenceNoteEnhancer(
-      speakerNotice:
-          AttributedTranscript.hasNames(
-            meetings.transcript(id, finalOnly: true),
-          )
-          ? AttributedTranscript.modelInputNotice
-          : null,
+      speakerNotice: AttributedTranscript.modelInputNotice,
       checkCurrent: checkNote,
       onBatchFailure: (indices, error) {
         failedBatches.add(indices);

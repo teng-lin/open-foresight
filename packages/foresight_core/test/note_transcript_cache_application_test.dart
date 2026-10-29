@@ -340,7 +340,7 @@ void main() {
         await app.enhanceNotes(id);
         expect(
           embeddings.texts.first,
-          'Ada- Chen: We ship Friday.\n\n(unnamed speaker): Plain evidence',
+          'Speaker [Ada: Chen]: We ship Friday.\n\n(unnamed speaker): Plain evidence',
         );
         final prompt = runtime.prompts.single;
         expect(

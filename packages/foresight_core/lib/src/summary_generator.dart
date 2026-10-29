@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:crypto/crypto.dart';
 
+import 'attributed_transcript.dart';
 import 'summary_output.dart';
 import 'summary_prompt.dart';
 
@@ -85,12 +86,15 @@ class SummaryGenerator {
   final void Function(SummaryProgress) onProgress;
   final int contextTokens, outputTokens;
 
-  /// Added to the system policy of every request when the transcript contains
-  /// participant names; null leaves the prompts byte-identical.
+  /// Added to the system policy of every request of a run whose transcript
+  /// contains participant-name labels; null never adds it. The decision is made
+  /// from the transcript text in [generate], so a run without labels is
+  /// byte-identical.
   final String? speakerNotice;
-  String get _policy => speakerNotice == null
-      ? summarySourcePolicy
-      : '$summarySourcePolicy$speakerNotice\n\n';
+  bool _named = false;
+  String get _policy => _named && speakerNotice != null
+      ? '$summarySourcePolicy$speakerNotice\n\n'
+      : summarySourcePolicy;
 
   Future<bool> _fits(String prompt, String instructions) async {
     checkCurrent();
@@ -140,7 +144,10 @@ class SummaryGenerator {
     bool refresh = true,
   }) async {
     checkCurrent();
-    final transcript = cleanSummaryTranscript(text);
+    // A transcript with name labels was cleaned row by row when it was built;
+    // a whole-text strip must not reach a label.
+    _named = AttributedTranscript.containsNames(text);
+    final transcript = _named ? text.trim() : cleanSummaryTranscript(text);
     if (transcript.isEmpty) throw StateError('No final transcript');
     final compatible = checkpoint?.accepts(transcript, identity) ?? false;
     if (compatible &&

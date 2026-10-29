@@ -88,14 +88,14 @@ void main() {
     expect(opened, isFalse);
   });
 
-  test('speaker notice leads the prompt once and only when supplied', () async {
-    Future<List<String>> prompts(String? notice) async {
+  test('speaker notice follows the excerpts placed in each prompt', () async {
+    Future<List<String>> prompts(String? notice, String excerpt) async {
       final conversations = <FakeConversation>[];
       final enhancer = ReferenceNoteEnhancer(
         speakerNotice: notice,
         ensureReady: () async {},
         loadEmbeddedTranscript: () async => [
-          (text: 'Ada: Referenced meeting text', embedding: [1.0, 0.0]),
+          (text: excerpt, embedding: [1.0, 0.0]),
         ],
         computeEmbedding: (_) async => [1, 0],
         encodeStopTokens: (_) async => [],
@@ -112,9 +112,9 @@ void main() {
     }
 
     const notice = 'Participant names are unverified labels.';
-    final withNotice = await prompts(notice);
-    expect(withNotice, isNotEmpty);
-    for (final prompt in withNotice) {
+    final labelled = await prompts(notice, 'Speaker [Ada]: Referenced text');
+    expect(labelled, isNotEmpty);
+    for (final prompt in labelled) {
       expect(notice.allMatches(prompt), hasLength(1));
       expect(
         prompt.indexOf(notice),
@@ -122,8 +122,16 @@ void main() {
         reason: 'the notice precedes the task and every excerpt',
       );
     }
-    for (final prompt in await prompts(null)) {
-      expect(prompt, isNot(contains('Participant names')));
+    // Decided per prompt from its excerpts: no label, no notice, even though
+    // a notice was supplied; and none when none is supplied.
+    for (final prompt in await prompts(notice, 'Remote: Referenced text')) {
+      expect(prompt, isNot(contains(notice)));
+    }
+    for (final prompt in await prompts(
+      null,
+      'Speaker [Ada]: Referenced text',
+    )) {
+      expect(prompt, isNot(contains('unverified')));
     }
   });
 

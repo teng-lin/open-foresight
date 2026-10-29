@@ -128,12 +128,15 @@ final class SummaryCoordinator {
       }),
     );
     final segments = meetings.transcript(id, finalOnly: true);
-    final transcript = cleanSummaryTranscript(
-      AttributedTranscript.modelInputText(
-        segments,
-        extract: extractSavedTranscriptText,
-      ),
+    // With names, each row's raw text is cleaned before its label is added and
+    // the whole text is left alone; without, the legacy whole-text cleanup.
+    final named = AttributedTranscript.hasNames(segments, modelInput: true);
+    final built = AttributedTranscript.modelInputText(
+      segments,
+      extract: extractSavedTranscriptText,
+      cleanRow: named ? stripChannelLabels : null,
     );
+    final transcript = named ? built.trim() : cleanSummaryTranscript(built);
     if (transcript.isEmpty) throw StateError('No final transcript');
     final checkpointRow = store.summaryCheckpoint(id);
     final checkpoint = checkpointRow == null
@@ -174,9 +177,7 @@ final class SummaryCoordinator {
     try {
       check();
       final producer = SummaryGenerator(
-        speakerNotice: AttributedTranscript.hasNames(segments)
-            ? AttributedTranscript.modelInputNotice
-            : null,
+        speakerNotice: AttributedTranscript.modelInputNotice,
         contextTokens: context,
         outputTokens: outputTokens,
         checkCurrent: check,
