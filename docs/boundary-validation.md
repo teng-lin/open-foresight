@@ -107,14 +107,296 @@ groups, full Python coverage) are listed as deferred until `--include-long`.
 
 ## Evidence and exit status
 
-`evidence.json` is versioned (`schema` 1, `kind` `foresight-validation-evidence`).
-It records revision and change identity, entrypoint, arguments and working
-directory, OS and architecture, tool versions, per-check status and reason,
-JUnit counts written during the run, raw-log paths, real and effective UID/GID,
-supplementary groups, the NSS account and whether `HOME` agrees with it, the
-temp-root policy (canonical, private, owned, short), allowlisted environment and
-unexecuted platforms. The environment is read through an allowlist of exact
-names. Credentials, profiles, transcripts and model assets are never collected.
+`evidence.json` is versioned (`schema` 2, `kind` `foresight-validation-evidence`;
+schema 1 packets stay readable). It records revision and change identity,
+entrypoint, arguments and working directory, OS and architecture, tool versions,
+per-check status and reason, JUnit counts written during the run, raw-log paths,
+real and effective UID/GID, supplementary groups, the NSS account and whether
+`HOME` agrees with it, the temp-root policy (canonical, private, owned, short),
+allowlisted environment and unexecuted platforms. The environment is read through
+an allowlist of exact names. Credentials, profiles, transcripts and model assets
+are never collected.
+
+Schema 2 adds, all derived from what the run observed and never from the full
+environment:
+
+- `tool_pins`: each pinned tool (Flutter, Dart, protoc from `tools/pins.json`;
+  actionlint and ShellCheck from the shared guards) beside what was observed and
+  whether the pinned version is a whole token of the version line of its output
+  (ShellCheck prints a banner first; the line that names a version is kept). An
+  unobserved tool matches nothing and, in a run that probed tools, is the gap
+  `pin-unobserved:<tool>`; a failed probe never matches and records only its exit
+  status, never its output.
+- `phases` per check: setup (could the entrypoint start here: `ok`, `unavailable`
+  or `failed` when it never started or was interrupted before it did), body (the
+  entrypoint's own outcome from its exit: `passed`, `failed`, `timed-out`,
+  `interrupted`; unsupported JUnit evidence fails the check, not the body) and
+  teardown. Teardown is observed, not assumed: after the entrypoint exits the tool
+  lists the members of its process group before killing the group. `clean` means
+  none remained; `group-survivors-killed` means some did and were killed;
+  `leaked-descendants` and `killed-after-timeout` are the tool's own findings;
+  `unknown` means it could not tell (an interrupted run, a process that survived
+  SIGKILL or was never reaped, a failed probe). Only structured flags decide, never
+  the wording of a reason. `clean` says nothing about descendants that left the
+  group (a double fork with its own session). A phase the tool did not run is
+  `not-run`, never inferred.
+- `concurrency` (CPU count and the allowlisted parallelism settings), `cache`
+  (reused outputs and whether each was present at planning and at execution) and
+  `artifacts` (digests of reused products); paths under the account home are
+  written with `~`, and a parallelism setting that is not a small integer is
+  recorded as `invalid`. The producer of an artifact is `null`: only the
+  entrypoint verifies provenance, and the gaps say so.
+- `image`: the runner image variables (`ImageOS`, `ImageVersion`, when set) and
+  the operating-system identity (os-release `ID` and `VERSION_ID`, or the macOS
+  version). A field that cannot be observed is `null`.
+- `reproduction_gaps`: what stands between a reader and an exact reproduction,
+  derived from the packet (a plan that executed nothing, pin mismatches and
+  unobserved pins, a non-compliant temp root, `HOME` differing from the NSS home,
+  a dirty or unknown dirty state, a declared and unverified revision, unexecuted
+  platforms, checks that did not pass, checks subsumed by another rather than run, an
+  unidentified image, an unrecorded revision, unrecorded artifact provenance).
+  Redaction has a deliberately narrow scope. Gap prose, a check's recorded
+  `reason` and the `cache`/`artifacts` paths are redacted: absolute paths (bare,
+  after a colon, quoted, or under an account directory containing spaces) become
+  `<path>` (an account or volume path under `/Users`, `/home` or `/Volumes` is
+  replaced up to the next sentence boundary, so a name with spaces leaves no
+  fragment, at the price of swallowing a few following words), and cache/artifact paths under the account home start with `~`. A
+  packet is **not anonymized**: it still carries the account name and home, the
+  working directory, checkout root, interpreter path and retained log paths,
+  because a replay needs them. Treat it as a local diagnostic, not as something to
+  publish. An explicit file list records no revision (`revision-unrecorded`); only
+  the change identity names its content. The environment allowlist concerns
+  environment variables only; reasons and notes are bounded text written by the tool.
+
+`python -m tools.validation_replay PACKET [--check] [--json]` reads a packet and
+prints the recorded invocation, each failed check, the packet's gaps and the
+differences between the recorded host and this one (operating system and
+release, image identity, architecture, Python, tool versions, root versus
+non-root, NSS account name, temp roots, and whether this checkout is at the
+recorded revision and clean). A packet is untrusted input and the report says so:
+everything printed is labelled "recorded, unverified", and every string from the
+packet is reduced to printable ASCII (a backslash and every other character is
+escaped, so invisible characters, look-alikes and literal `\x1b` text cannot pass
+as plain text) with its length bounded. That includes the validation errors, which
+quote packet strings. A packet cannot forge report lines or terminal sequences. A reproduction
+command is offered only for `tools.validate_change`, the one entrypoint that
+records packets, and a failed check's entrypoint only when it matches that gate's
+definition in the boundary inventory (`{python}` must be an interpreter named
+python or python3.N given as an absolute path (no `~`, no spaces or shell
+metacharacters) or exactly `.venv/bin/python`, never a relative path or a bare
+name, and outside the temporary directories (including `/var/folders` and the packet's own recorded `TMPDIR` and
+test temp root); `{platform}` linux or macos; other placeholders printable paths of
+bounded length without whitespace, shell metacharacters, `..` or a leading
+`/tmp`); otherwise the report says "unrecorded". The packet must be a regular file under 8 MiB with correctly typed
+fields; a FIFO, an oversized, deeply nested or wrongly typed packet is refused.
+The replay never runs a recorded command and reads only `TMPDIR`, `FORESIGHT_TEST_TEMP_ROOT` (to judge this shell's temp roots) and `PATH` (to find tools) from its environment; on this host
+it runs only `git status` and `git rev-parse` (without optional locks) and the
+tools' `--version` probes (`flutter --version` may touch the Flutter SDK cache),
+each with a 10 second limit. A failed probe on either side, an unreadable
+revision or dirty state here, and an unidentified image are gaps, never matches. The
+recorded arguments must parse as `tools.validate_change`'s own (no abbreviations,
+unknown flags or parse errors: those print "unrecorded"), `--skip-inventory-check`
+is never offered, and each path-valued flag (`--bundle`, `--models`, `--output`,
+`--files-from`) is called out with a warning, because it points the run at a
+location the packet's author chose. A packet cannot hide a gap by omitting it: the gaps its contents imply are
+added to the ones it recorded. A replay that lists no gap still does not prove a
+hosted failure reproduces; the recorded conditions are the ones this tool could
+observe. `--check` exits 1 while any gap remains and 2 for an unreadable or
+corrupt packet.
+
+`python -m tools.check_entrypoint_parity` (part of the shared guards) reads the
+workflows without changing them and checks that every command gate's script is
+reached by some workflow step, or that the gate declares `local_only` with a
+reason, and that a `local_only` claim no workflow contradicts. The `run:` text
+is split into commands the way a shell would (comments stripped, quotes honored,
+`;`, `&&`, `||`, pipes and newlines separate commands). A script is called when it
+is a whole token in an executing position: the command itself (after keywords,
+assignments and wrappers such as `env`, `time`, `timeout`, `xvfb-run`,
+`dbus-run-session`), or the argument of `bash`, `sh`, `source`, `.`, `exec` or a
+`python` interpreter that has no flag stopping it from running the script (`-n`,
+`-c`). The segment must also *start* with something that executes: an interpreter,
+a wrapper, a container launcher (`docker run`, `podman run`) or a repository script
+that passes its tail on (`tools/run_ci_user.py ... -- bash tools/build.sh`), so
+`echo use bash tools/build.sh`, `grep`, `git commit -m x ...` and `command -v`
+never count. Anything else is not a call: `shellcheck tools/build.sh`, `bash -n`,
+`python -m py_compile`, `ruff check`, `xargs`, `find -exec`, `cat`, `cp`, `chmod`,
+`git add`, a quoted string, a comment, or a here-document body. A path with `..`
+is never a script. A workflow job or step whose YAML `if:` is literally false
+never runs and calls nothing; a workflow counts only if something can trigger it
+(a `workflow_call`-only workflow counts only when a triggered workflow calls it),
+and a composite action only if a reachable workflow or action `uses:` it. A gate
+with a `--stage` or `--suite` is satisfied by a call with that value (`build.sh`
+defaults to `--stage all`, so a call without `--stage` satisfies every stage); a
+`--build-only` call builds and runs no tests, so it satisfies no gate that does
+not ask for it. A gate that passes `--platform {platform}` needs a call for each
+platform it lists. A call is exact for platform P only when its literal
+`--platform` is P and its job's `runs-on` (`macos-*`, `ubuntu-*`) is P or unknown
+(an expression or a label list stays unknown); with no flag the runner decides.
+When the flag and a known runner disagree (`--platform macos` on an Ubuntu job)
+the call is evidence for neither platform and is `may_call`. Removing the Linux
+build step therefore cannot hide a missing macOS stage, or the reverse, and
+switching a macOS job to an Ubuntu runner fails the guard.
+
+**Two tiers; nothing is dropped by shell reasoning.** `called_by` lists steps that
+make the call as a *top-level unconditional simple command* of the step's own
+text: not inside an `if`, `case`, loop, function, subshell or conditional group,
+not part of an and-or list (`a && b`, `a || b`), and not after a top-level `exit`
+(an unconditional `{ ...; }` group, a pipeline and a closed block do not count
+against it). An operator ending the previous line (`a &&` then a newline) joins
+the two commands. Block nesting counts `if`, `while`, `for`, `case` and `until` at
+every command position, including after `then`, `else`, `do` and `!`; if it ever
+cannot be trusted (a `fi`, `done` or `esac` that nothing opened) everything after
+that point is `may_call`. A top-level `exit` or `exec` makes later commands
+`may_call`. After a wrapper (`env`, `timeout`, `xvfb-run`) the next word must itself
+be an interpreter, a wrapper or a repository script, and a container launcher
+(`docker run`, whose options and image have unknown arity) always gives `may_call`;
+a token beyond the 512th of one command is `may_call` without a walk. Classification is linear in the text: separator runs are scanned once, and groups nested deeper than 64 make the whole text `may_call`. **Everything else that mentions the script in an executing position
+is `may_call`**: conditional or chained calls, calls after an `exit`, calls made
+by a repository shell script (shown as `via <script>`), a here-document fed to a
+shell (`via <heredoc>`), and a call whose stage or suite comes from a variable
+the guard cannot resolve. The guard never evaluates `if false`, `true || x`,
+`exit` or a test, because each such shortcut dropped a call that bash really runs;
+a call is exact or `may_call`, never absent. Script-mediated calls are
+over-approximated, not evaluated: every command in a called script counts
+whatever branch it sits in, so a dispatcher script credits every branch to every
+step that calls it, and each script is read once per step. The one thing the guard
+resolves is a GitHub matrix: a variable the step or job binds to
+`${{ matrix.key }}` (or that expression written in the text) is replaced by each
+value of a literal scalar list, when no `include` or `exclude` touches that key,
+and the call becomes exact once per listed value. The size of the product is
+computed first: more than 64 combinations for one step, or more than 2000
+expanded steps in a run, is not expanded at all (a problem line, and the call
+stays `may_call`). A step's `if:` of the form `matrix.key == 'v'` or `!= 'v'`
+(optionally wrapped in `${{ }}`) is read against each expanded value, or against
+every listed value for a step the matrix does not bind: a value that fails it
+produces no call, so excluding `service` from the condition makes `service-stage`
+unverified on macOS. Any other `if:` that mentions `matrix.` makes the calls under
+it `may_call`; an `if:` that does not mention the matrix is not evaluated.
+
+A gate (on a platform) with only `may_call` evidence is **wiring unverified**: it
+is listed in the default output and in `--json` as `wiring_unverified`, it is
+never counted as a pass, and it must be acknowledged with a
+`wiring_unverified_reason` on the gate in the inventory, together with
+`wiring_unverified_relies_on`: the `workflow:job` entries the acknowledgement rests
+on. The guard fails if one of them no longer reaches the gate. A new unverified gate
+therefore fails the guard, and an acknowledged gate that gains an exact caller is
+a stale declaration. On the current tree that is `integration-virtual-audio`
+alone (a test pins the set): it runs only through `bash tools/linux_acceptance.sh
+audio` (the `acceptance-audio` job and the weekly audit), inside a container and
+only when the audio selection variable allows it, and the guard cannot confirm
+which branch runs. The four stage gates are verified on both platforms: Linux by
+the `arch-drift.yml` build (`build.sh --platform linux`, whose missing `--stage`
+is `all`) and macOS by the literal matrix in `macos.yml`. Gates that also have a
+direct caller print their `may_call` entries as "May also run (not verified)".
+
+**Stop rule.** This guard is a drift detector for a repository whose workflow
+authors are trusted, not a defense against a hostile one. What blocks a change to
+it is a fail-open verdict reachable in the current workflows, a denial of service
+(time, memory or a crash), or a security finding in the replay or the evidence. A
+contrived shell shape that merely over-credits an `exact` call is a documented
+static limit, as are `if:` expressions that do not mention the matrix, the
+contents of `case` arms and functions that are never called.
+
+Hard limits (256 KiB and 5000 lines per script, 200 scripts and 5000 calls per
+step, 1 MiB per workflow, 4 MiB of text lexed in total) are problems when hit,
+never silent truncation. Each text is tokenized once, a script is lexed once per
+run however many steps reach it, and only the first 64 arguments of a call are
+kept: a longer call is marked so that its stage, suite and platform count as
+unknown. A here-document is skipped only when it is plain and terminated (`<<EOF`,
+`<<'EOF'`, `<<\EOF`, `<<END-OF`, several on one line); a body fed to a shell, with
+a delimiter mixing quotes, or never terminated is read as `may_call`. A gate that
+states a literal `--platform` is satisfied only by a call for that platform. A
+workflow file that cannot be read (a broken symlink, binary or unreadable file) or
+an unhashable key is a problem line, never a traceback.
+
+The check also rejects a workflow that calls a repository script that no longer
+exists and fails on any workflow shape it does not understand. It reads only
+`.yml` and `.yaml` files, and refuses YAML anchors, aliases and duplicate keys (a
+pull request controls these files; an alias expansion could exhaust the guard,
+and a repeated `steps:` key would let the last one silently win). It is
+script-level: it does not tell whether a conditional call runs, does not compare
+arguments other than `--stage`, `--suite`, `--platform` and `--build-only`, and
+lists inline `dart test`, `flutter test`, `ctest` or `pytest` invocations in its
+`--json` output for information only.
+
+## Reliability report
+
+`python -m tools.reliability_report DIRECTORY [--minimum-sample N] [--json]
+[--write-baseline FILE [--replace]]` aggregates the `evidence.json` packets in a
+directory (local runs, or artifacts downloaded from CI) into a descriptive report:
+outcomes per check, platform, hosted or local origin, selection (conservative or
+narrowed), cache state (reused, fresh, none) and attempt, plus a rollup per
+boundary. It reuses `ci_stats.failure_rate` and `ci_stats.percentile`.
+
+What it refuses to do is the point:
+
+- **Inputs are unauthenticated.** The report cannot tell a real packet from a forged
+  one: it describes the packets it was given and is only as trustworthy as the
+  directory. Do not point it at artifacts from pull requests you did not collect
+  yourself. The report says so in its header and `trust` field, and counts (never
+  shows) the distinct hosted runs and local origins behind its window. A
+  `created_utc` before 2026-01-01 or more than a day in the future is rejected as
+  implausible, so a back-dated forgery cannot take a real failure's first-run slot;
+  that is a cheap check, not authentication, and a plausibly dated forgery still
+  counts. Packet provenance (`created_utc`, `identity_sha256`, the revision) is
+  self-reported and not authenticated. A change identity is used only if it is a
+  lowercase SHA-256 hex digest. A check id listed twice in one packet counts once
+  (the first listing; the excess is the `duplicate-check` rejection), so a packet
+  cannot inflate its own denominator. A change identity seen at more than one
+  revision on the same platform and origin is reported as an anomaly and its runs
+  are labelled `contested`, carry the marker "identity collision: first-run attribution unreliable" and are shown as their own scope instead of in the first-run totals, so they cannot decide which run is first; the same
+  identity on two platforms is normal and is keyed apart. A duration beyond the
+  gate's own `timeout_seconds` plus 60 seconds (6 hours for a gate with none) is
+  left out of the percentiles and counted as `seconds_excluded`.
+- **Packets are untrusted.** Only regular files (never symlinks) up to 8 MiB are
+  read, to a depth of 6 directories (a `gh run download` layout nests an artifact
+  four deep), with caps of 5000 files, 500 directories and 256 MiB in total. Each
+  packet must pass the evidence validation. Rejections are counted by class (not a
+  regular file, too large, unreadable, not JSON, not an evidence summary, invalid,
+  bad or implausible timestamp, duplicate, depth cap, file cap, byte budget, too many
+  checks, observation cap) and never shown. Data
+  that exists but was not read makes the report incomplete: a directory deeper than
+  the cap, an unlistable directory, an unreadable or oversized file, a hit file,
+  directory or byte cap, a packet with more than 256 checks, and more than 200,000
+  observations in all. Each packet is reduced to its observations at once and
+  dropped, so memory is bounded by the observation cap, not by the bytes read. An
+  incomplete report is printed with that marked, the exit
+  status is 3, and no baseline is written from it. A baseline is written without
+  clobbering: a fresh file is hard-linked into place (it fails if the destination
+  exists at that moment), and only `--replace` renames over an existing one. Packet
+  files are opened without following a final symbolic link, so a link swapped in
+  after the scan is refused. Content that is invalid, a
+  duplicate, a symlink or a pipe loses nothing and leaves it complete.
+- **Nothing a packet wrote is printed.** Groups use gate ids (of any kind, so manual
+  and CI-only gates are attributed and excluded from rates) and boundary ids from
+  this checkout's inventory and closed vocabularies; an unknown check id is
+  counted as `unknown-check`. No path, user name, host, revision or reason can
+  appear.
+- **No invented rates.** A rate is shown only at or above the minimum sample of
+  eligible (passed or failed) runs, default 20; below it the report says
+  `insufficient sample (n eligible, m needed)` and shows counts alone. The
+  denominator, excluded outcomes and cancellations sit beside every rate.
+  Cancelled checks, checks that never started (setup failed), checks failed
+  because their subsuming check failed, and unavailable, not-run, manual, CI-only,
+  subsumed and planned checks are excluded and counted.
+- **A rerun is not a sample.** Only the first *executed* run (passed or failed) of
+  a change identity (per check, platform and origin) is an independent sample;
+  later executed runs are reported separately as qualification repeats, so a green
+  rerun never offsets a failed first run. An attempt that never executed (not run,
+  unavailable, cancelled, never started, planned, manual, subsumed) is its own
+  `excluded` row and consumes no slot, so a failure after a skipped attempt is
+  still the first run. A packet with no change identity is labelled `unidentified`.
+  Packets created in the same second are ordered by their recorded start time
+  (`invocation.started_epoch`) when present, else by content digest.
+- **Descriptive, with a fresh baseline.** Plan-only packets execute nothing and are
+  not counted. Local and hosted runs are never mixed: the overall totals are
+  keyed by origin and platform. The report states its own
+  window, is a fresh baseline and is never compared with an earlier or frozen
+  window; it makes no improvement, regression or flakiness claim. A check counts
+  toward every boundary it serves, so boundary rows overlap, and boundary names
+  come from the current inventory. The execution mode (source or compiled) is not
+  recorded in a packet, so it is not a dimension. Recurring first-run failures
+  list a check that failed on at least two distinct change identities.
 
 | Overall status | Meaning |
 | --- | --- |
@@ -137,7 +419,9 @@ inspects the tree. A source
 export inside another Git checkout is refused; pass `--files`.
 
 Exit status is 0 only for a full pass (or a plan), 1 for a failure, 2 for invalid
-input, an inconsistent inventory or unwritable evidence, 3 for a partial run and
+input, an inconsistent inventory, or evidence that cannot be built or written (a
+completed run still prints every result first and says the evidence failed on
+stderr; a failed check still exits 1), 3 for a partial run and
 128 plus the signal number after an interruption (130 for Ctrl-C, 143 for SIGTERM,
 129 for SIGHUP). SIGTERM and SIGHUP are routed like Ctrl-C: the entrypoint's
 process group is killed, the results so far and the evidence are written, and

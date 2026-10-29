@@ -522,6 +522,34 @@ def test_class_and_module_level_skips_in_cited_files_must_declare_a_skip_gate(ex
     }
 
 
+def test_local_only_must_carry_a_reason(export, editable):
+    def blank(data):
+        data["gates"]["shared-guards"]["local_only"] = "  "
+
+    editable("tools/boundary_inventory.json", blank)
+    failing(export, "gate shared-guards: local_only needs a reason")
+    assert inventory.load(ROOT)["gates"]["python-coverage"]["local_only"].strip()
+
+
+def test_wiring_unverified_must_carry_a_reason(export, editable):
+    def blank(data):
+        data["gates"]["integration-virtual-audio"]["wiring_unverified_reason"] = " "
+
+    editable("tools/boundary_inventory.json", blank)
+    failing(export, "gate integration-virtual-audio: wiring_unverified_reason needs a reason")
+    assert inventory.load(ROOT)["gates"]["integration-virtual-audio"]["wiring_unverified_reason"].strip()
+
+
+@pytest.mark.parametrize("value", [[], "macos.yml:job", ["no-colon"], [3], {"a": "b:c"}])
+def test_wiring_unverified_relies_on_must_name_file_job_entries(export, editable, value):
+    def damage(data):
+        data["gates"]["integration-virtual-audio"]["wiring_unverified_relies_on"] = value
+
+    editable("tools/boundary_inventory.json", damage)
+    failing(export, "gate integration-virtual-audio: wiring_unverified_relies_on must list file:job strings")
+    assert inventory.load(ROOT)["gates"]["integration-virtual-audio"]["wiring_unverified_relies_on"]
+
+
 def test_a_closed_cells_note_cannot_hide_a_gap(export, editable):
     for phrase in (
         "Not covered: several requests in flight",

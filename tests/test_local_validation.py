@@ -20,6 +20,7 @@ def test_shared_guards_include_inventory_without_language_selection():
     tasks = dict(validation.shared_tasks(sys.executable))
     assert tasks["skip-inventory"] == [sys.executable, "tools/check_integration_inventory.py"]
     assert tasks["boundary-inventory"] == [sys.executable, "-m", "tools.boundary_inventory"]
+    assert tasks["entrypoint-parity"] == [sys.executable, "-m", "tools.check_entrypoint_parity"]
     assert {"workflow-lint", "mypy", "ruff", "document-links", "subprocess-timeouts"} <= tasks.keys()
 
 

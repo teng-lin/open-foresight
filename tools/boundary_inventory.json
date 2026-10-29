@@ -42,7 +42,8 @@
       "timeout_seconds": 1800,
       "long": false,
       "doc": "CONTRIBUTING.md#quality-checks",
-      "certifies": "Cross-language metadata, lint/type, workflow and inventory guards. Does not certify native, Dart, compiled-service or installed behavior."
+      "certifies": "Cross-language metadata, lint/type, workflow and inventory guards. Does not certify native, Dart, compiled-service or installed behavior.",
+      "local_only": "Hosted CI runs the guards as separate quality-job steps (ruff, mypy, subprocess timeouts, document links) and workflow lint in macos.yml instead of this aggregator, which exists to run them together before a push."
     },
     "python-coverage": {
       "scope": "neutral",
@@ -90,7 +91,8 @@
       "timeout_seconds": 5400,
       "long": true,
       "doc": "CONTRIBUTING.md#build-and-test",
-      "certifies": "The offline Python tooling suite under the unchanged combined coverage floor."
+      "certifies": "The offline Python tooling suite under the unchanged combined coverage floor.",
+      "local_only": "Hosted CI runs the same suite through tools/pytest_parallel.py with coverage in the quality job, which tools/coverage.sh wraps; this gate is the local aggregator that runs the shared guards and then that script."
     },
     "platform-contracts": {
       "title": "Host platform Python contracts",
@@ -509,6 +511,8 @@
     "integration-virtual-audio": {
       "title": "Virtual-audio acceptance group (integration_gates --suite virtual-audio)",
       "kind": "command",
+      "wiring_unverified_reason": "No workflow step calls it directly: `bash tools/linux_acceptance.sh audio` (the acceptance-audio job and the weekly audit) runs it inside a container when the virtual-audio selection allows it. The parity guard reads that script without evaluating it, so it cannot confirm which branch runs.",
+      "wiring_unverified_relies_on": [".github/workflows/macos.yml:acceptance-audio", ".github/workflows/preview-packages.yml:weekly-external-audit"],
       "argv": [
         "dbus-run-session",
         "--",
@@ -2141,6 +2145,9 @@
         "tools/platform_python_tests.py",
         "tools/check_local_validation.py",
         "tools/validate_change.py",
+        "tools/validation_replay.py",
+        "tools/reliability_report.py",
+        "tools/check_entrypoint_parity.py",
         "tools/validation_evidence.py",
         "tools/boundary_inventory.py",
         "tools/boundary_inventory.json",
