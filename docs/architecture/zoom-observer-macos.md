@@ -23,7 +23,7 @@ at the end passes on a real Zoom 7.2.2 (88465) call.
 | `native/zoom_mac_source.{h,cpp}` | The macOS `Source`: the gate order and trust transitions, over an `Environment` and an `AxReader`. Tested with fakes. |
 | `native/zoom_observer_macos.mm` | Only the OS bindings (`NSRunningApplication`, Info.plist, `AXUIElement`) and `main`. |
 | `native/zoom_observer_macos_info.plist` | Embedded `__info_plist` giving the helper the stable identifier `org.openforesight.zoom-observer`. |
-| `tests/fixtures/zoom_ax/` | Synthetic scenarios (81) and the 17-locale phrase set; controlled names only. |
+| `tests/fixtures/zoom_ax/` | Synthetic scenarios (84) and the 17-locale phrase set; controlled names only. |
 | `tests/native/zoom_ax_parser.cpp`, `zoom_ax_convert.cpp`, `zoom_observer_core.cpp`, `zoom_mac_source.cpp`, `zoom_observer_protocol.py` | CTest `zoom_ax_parser`, `zoom_ax_convert`, `zoom_observer_core`, `zoom_mac_source`, `zoom_observer_protocol`. The core test links the real parser for realistic observations rather than a fake. |
 
 The helper is built only on macOS and installed to `bin/` like `foresight-audio`
@@ -56,7 +56,11 @@ optional collector-assigned element id.
   a comma, so `Alice, Computer audio unmuted, Not Active speaker` is not active
   (the research rule matched it by suffix alone) and neither is
   `Mallory, Active speaker, Computer audio muted`. An unmuted microphone alone is
-  not a speaker. Several marked tiles are all reported.
+  not a speaker. Several marked tiles are all reported. A marker that is a
+  separated item but not the last one (`..., Active speaker, Video on`) is a
+  structure not seen before: the tile stays inactive but the read is
+  `complete: false`, so it never asserts an observed absence of a speaker. Other
+  trailing details (`..., Video on` with no marker) leave the read complete.
 - **Names.** Display spelling is kept (only edge whitespace, including no-break
   spaces, is trimmed; commas, punctuation, right-to-left text, emoji and ZWJ
   sequences survive). The comparison key folds case and whitespace and
@@ -177,7 +181,9 @@ optional collector-assigned element id.
   the pipe to be writable, then 250 ms of immediate give-up), so a wedged
   consumer delays a `stop` by about 200 ms in total, not per queued reply; only
   the polling thread's ordinary writes may block. If the guard's closing frame
-  cannot be written it exits 3 and may leave a torn last line. `stopped` echoes
+  cannot be written it exits 3 and may leave a torn last line. If the main loop
+  already wrote the closing frame and was only late to finish, the guard leaves
+  with the main loop's own code (0 for `stop`, 2 for a fatal error) instead. `stopped` echoes
   the accepted `start`'s session even before its first read ran.
 - Hang-up detection watches stdout only when it is a FIFO (a regular file is
   always readable, `/dev/null` is invalid for `POLLIN`, and a socket's half-close

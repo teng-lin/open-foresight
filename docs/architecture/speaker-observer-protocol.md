@@ -82,7 +82,8 @@ writable. After one such wait times out, further reader/guard writes give up at
 once for 250 ms, so a burst of replies ahead of a `stop` adds at most one wait
 (about 200 ms) to the exit, not one per reply. If the guard's closing frame
 cannot be written (wedged or closed stdout, or an oversize frame) it exits 3
-rather than 0, and it may leave a torn last line on stdout when it exits during
+rather than 0 (but if the main loop had already written it, the guard leaves with
+the main loop's code: 0 after `stopped`, 2 after a fatal `error`), and it may leave a torn last line on stdout when it exits during
 a write; a consumer must treat a truncated final line as an unclean stop.
 `capabilities`, `setup` and `start` are answered by the polling
 thread (between reads); `clock` is answered immediately.
@@ -143,7 +144,8 @@ be derived from a steady clock that does not count system sleep.
   display-name key): an element that shows a different name gets a new ref.
   Equal display names with different `ref`s stay separate participants.
 - `complete` is false when a bound or failed read cut the tree short, when an
-  unnamed or unreadable tile was dropped, or when references could not be kept
+  unnamed or unreadable tile was dropped, when a tile's active marker is not the
+  last item (inactive but unsure), or when references could not be kept
   trustworthy (element identity missing, the reference table at capacity, or
   refs that may have swapped between people who share a display name: the
   elements behind a duplicated name changed in this poll, or, without element
