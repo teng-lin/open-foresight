@@ -903,18 +903,18 @@ void main() {
         expect(worker.handle(8, empty).result, DiagnosticWorkerResult.ok);
         expect(worker.retired, isTrue);
         expect(() => worker.handle(7, empty), throwsFormatException);
-        // Actual scoped lease is available again after RETIRED is acknowledged.
+        // The actual scoped lease is available once RETIRED is acknowledged.
+        // The worker closes its descriptor synchronously, but flock belongs to
+        // the open file description, and a fork started by any other isolate in
+        // this process copies the descriptor table: until that child execs, its
+        // copy keeps the closed lease held. Poll for release (a worker that
+        // never releases still fails at the deadline) instead of probing once.
         final slot = BackupDirectory('$path/logs/slot-${admitted.slot}');
         final lease = slot.open('lease');
         try {
-          final acquired = lease.tryExclusiveLease();
-          expect(
-            acquired,
-            isTrue,
-            reason: acquired
-                ? null
-                : 'slot lease not released after RETIRED; a second checked '
-                      'attempt on it observed ${probeLease(lease).name}',
+          await eventually(
+            lease.tryExclusiveLeaseChecked,
+            label: 'slot lease released after RETIRED',
           );
         } finally {
           lease.close();
