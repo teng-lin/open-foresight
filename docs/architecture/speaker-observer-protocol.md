@@ -220,15 +220,20 @@ be derived from a steady clock that does not count system sleep.
   U+202E, U+2060 to U+2064, U+2066 to U+206F, U+FE00 to U+FE0F, U+FEFF, U+E0000
   to U+E007F and U+E0100 to U+E01EF. Line breaks become spaces and the name is
   trimmed. The joiners U+200C and U+200D stay inside names but are never visible
-  by themselves. A name with no visible character left, or longer than 256
-  characters, is a protocol error.
+  by themselves. A roster entry with no visible character left is dropped by the
+  receiver, and one longer than 256 characters is clamped to 256; either makes
+  that read `complete: false`, and an entry so treated is never an active
+  speaker (its `speakers` entry is dropped). The native filters do not remove
+  every such name (variation selectors and tag characters pass them), so this is
+  not a protocol error: a name on screen must not restart the helper.
   Known gap, shared with persistence: characters that render blank but are not
   in that set (U+180E, U+034F, the Hangul fillers U+115F, U+1160, U+3164 and
   U+FFA0, and U+2800) still count as visible, so a participant named only with
   them is accepted. Changing that needs a joint change to both.
 - Every `speakers[].ref` must name a distinct entry of the same observation's
   `participants`, and `participants[].ref` values are distinct. Violations are
-  protocol errors, so a speaker can never lack a roster entry.
+  protocol errors, so a speaker can never lack a roster entry (the receiver may
+  still drop a speaker whose name it cannot use, as above).
 - An `error` frame's `message` is untrusted diagnostic text; the receiver
   bounds it to 256 characters and does not log it by default.
 

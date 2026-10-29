@@ -447,6 +447,45 @@ void main() {
       },
     );
 
+    test('a roster name the helper allowed but Dart refuses never burns the '
+        'restart budget', () async {
+      h = Harness();
+      await h.observer.start('s1');
+      final helper = h.helpers.single;
+      // The same hostile-but-legal roster on every poll, far more polls than
+      // the restart budget, with the invisible-named entry also "speaking".
+      for (var i = 0; i < 12; i++) {
+        helper.send(
+          'observation',
+          observationFields(
+            's1',
+            startMs: 2000 + i * 100,
+            participants: [
+              participant('p1', 'Ada'),
+              participant('p2', '\u{FE0F}'),
+              participant('p3', 'y' * 300),
+            ],
+            speakers: [
+              {'ref': 'p2', 'method': 'participant_status'},
+              {'ref': 'p3', 'method': 'participant_status'},
+            ],
+          ),
+        );
+      }
+      await eventually(() => h.observations.length == 12);
+      expect(h.helpers, hasLength(1));
+      expect(h.observer.stats.restarts, 0);
+      expect(h.states.where((s) => s.failure != null), isEmpty);
+      for (final event in h.observations) {
+        expect(event.observation.complete, false);
+        expect(event.observation.speakers, isEmpty);
+        expect(
+          [for (final p in event.observation.participants) p.name],
+          ['Ada', 'y' * 256],
+        );
+      }
+    });
+
     test('keeps the lowest-latency clock probe', () async {
       h = Harness();
       // Probe round trips of 400, 10 and 800 us: the fake advances the

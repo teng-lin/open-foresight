@@ -844,11 +844,11 @@ void main() {
           'Ada',
           reason: reason,
         );
-        expect(
-          () => withName(character),
-          throwsA(isA<ObserverProtocolException>()),
-          reason: reason,
-        );
+        // The native filters let these through, so a roster entry that is only
+        // invisible is a dropped entry and an incomplete read, not a violation.
+        final dropped = withName(character).observation;
+        expect(dropped.participants, isEmpty, reason: reason);
+        expect(dropped.complete, false, reason: reason);
       }
     });
 
@@ -864,16 +864,126 @@ void main() {
         '\u00a0',
         '\u200d\u00ad\u00a0',
       ]) {
-        expect(
-          () => withName(name),
-          throwsA(isA<ObserverProtocolException>()),
-          reason: name.runes.map((r) => r.toRadixString(16)).join(' '),
-        );
+        final dropped = withName(name).observation;
+        final reason = name.runes.map((r) => r.toRadixString(16)).join(' ');
+        expect(dropped.participants, isEmpty, reason: reason);
+        expect(dropped.complete, false, reason: reason);
       }
       expect(
         withName('\u{1F600}').observation.participants.single.name,
         '\u{1F600}',
       );
+    });
+
+    group('a roster name the native filters allowed but Dart cannot use', () {
+      ObservationFrame decodeRoster(
+        List<Map<String, Object?>> participants,
+        List<Map<String, Object?>> speakers,
+      ) =>
+          ObserverFrameDecoder()
+                  .add(
+                    utf8.encode(
+                      line(
+                        observation(
+                          0,
+                          overrides: {
+                            'participants': participants,
+                            'speakers': speakers,
+                          },
+                        ),
+                      ),
+                    ),
+                  )
+                  .single
+              as ObservationFrame;
+
+      test('is dropped locally; the rest of the roster survives', () {
+        final read = decodeRoster(
+          [
+            {'ref': 'p1', 'name': 'Ada', 'self': false},
+            {'ref': 'p2', 'name': '\u{FE0F}', 'self': false},
+            {'ref': 'p3', 'name': '\u{E0041}\u{E0042}', 'self': false},
+          ],
+          [
+            {'ref': 'p1', 'method': 'participant_status'},
+          ],
+        ).observation;
+        expect([for (final p in read.participants) p.name], ['Ada']);
+        expect(read.speakers.single.ref, 'p1');
+        expect(read.complete, false);
+      });
+
+      test('never makes its owner an active speaker', () {
+        final read = decodeRoster(
+          [
+            {'ref': 'p1', 'name': 'Ada', 'self': false},
+            {'ref': 'p2', 'name': '\u{FE0F}', 'self': false},
+          ],
+          [
+            {'ref': 'p2', 'method': 'participant_status'},
+          ],
+        ).observation;
+        expect(read.speakers, isEmpty);
+        expect(read.complete, false);
+        expect(read.observedNoSpeaker, false);
+      });
+
+      test(
+        'a name over the bound is clamped, and not trusted as a speaker',
+        () {
+          final long = 'x' * 300;
+          final read = decodeRoster(
+            [
+              {'ref': 'p1', 'name': long, 'self': false},
+              {'ref': 'p2', 'name': 'Bo', 'self': false},
+            ],
+            [
+              {'ref': 'p1', 'method': 'participant_status'},
+              {'ref': 'p2', 'method': 'participant_status'},
+            ],
+          ).observation;
+          expect(read.participants.first.name.runes.length, 256);
+          expect(read.participants.last.name, 'Bo');
+          expect([for (final s in read.speakers) s.ref], ['p2']);
+          expect(read.complete, false);
+        },
+      );
+
+      test('a complete roster stays complete', () {
+        final read = decodeRoster(
+          [
+            {'ref': 'p1', 'name': 'x' * 256, 'self': false},
+          ],
+          [
+            {'ref': 'p1', 'method': 'participant_status'},
+          ],
+        ).observation;
+        expect(read.complete, true);
+        expect(read.speakers, hasLength(1));
+      });
+
+      test('structural violations still fail the frame', () {
+        expect(
+          reject({
+            'participants': [
+              {'ref': 'p1', 'name': null, 'self': false},
+            ],
+            'speakers': [],
+          }).code,
+          ObserverProtocolErrorCode.malformed,
+        );
+        expect(
+          reject({
+            'participants': [
+              {'ref': 'p1', 'name': 'A', 'self': false},
+            ],
+            'speakers': [
+              {'ref': 'unknown', 'method': 'participant_status'},
+            ],
+          }).code,
+          ObserverProtocolErrorCode.malformed,
+        );
+      });
     });
 
     test('rejects malformed roster entries', () {
@@ -937,15 +1047,24 @@ void main() {
             .name,
         'Ada Lovelace Jr',
       );
-      expect(
-        reject({
-          'participants': [
-            {'ref': 'p1', 'name': '\u{1F600}' * 600, 'self': false},
-          ],
-          'speakers': [],
-        }).code,
-        ObserverProtocolErrorCode.limit,
+      final huge = ObserverFrameDecoder().add(
+        utf8.encode(
+          line(
+            observation(
+              0,
+              overrides: {
+                'participants': [
+                  {'ref': 'p1', 'name': '\u{1F600}' * 600, 'self': false},
+                ],
+                'speakers': [],
+              },
+            ),
+          ),
+        ),
       );
+      final clamped = (huge.single as ObservationFrame).observation;
+      expect(clamped.participants.single.name.runes.length, 256);
+      expect(clamped.complete, false);
     });
 
     test('treats names as untrusted: sanitizes controls and bounds length', () {
@@ -977,24 +1096,15 @@ void main() {
             .name,
         'Ada Lovelace',
       );
+      // A name with nothing left after sanitizing is dropped, a long one
+      // clamped; both make the read incomplete rather than a violation.
+      expect(withName('\u0000\u0001').observation.participants, isEmpty);
+      expect(withName('\u0000\u0001').observation.complete, false);
       expect(
-        reject({
-          'participants': [
-            {'ref': 'p1', 'name': '\u0000\u0001', 'self': false},
-          ],
-          'speakers': [],
-        }).code,
-        ObserverProtocolErrorCode.malformed,
+        withName('a' * 257).observation.participants.single.name,
+        'a' * 256,
       );
-      expect(
-        reject({
-          'participants': [
-            {'ref': 'p1', 'name': 'a' * 257, 'self': false},
-          ],
-          'speakers': [],
-        }).code,
-        ObserverProtocolErrorCode.limit,
-      );
+      expect(withName('a' * 257).observation.complete, false);
       expect(
         reject({
           'participants': [

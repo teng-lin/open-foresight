@@ -460,6 +460,11 @@ final class _FrameReader {
     }
     final participants = <ObservedParticipant>[];
     final refs = <String>{};
+    // Roster entries whose name cannot be trusted as shown: dropped when
+    // nothing visible is left, clamped when too long. Either way the read is
+    // no longer a complete picture, and nobody is named from such an entry.
+    final distrusted = <String>{};
+    var degraded = false;
     for (final entry in rawParticipants) {
       if (entry is! Map<String, dynamic>) {
         throw _malformed('Participant is not an object');
@@ -470,12 +475,14 @@ final class _FrameReader {
       if (self != null && self is! bool) {
         throw _malformed('Participant self marker invalid');
       }
+      final name = _rosterName(entry['name']);
+      if (name.text == null || name.clamped) {
+        distrusted.add(ref);
+        degraded = true;
+      }
+      if (name.text == null) continue;
       participants.add(
-        ObservedParticipant(
-          ref: ref,
-          name: _name(entry['name']),
-          isSelf: self == true,
-        ),
+        ObservedParticipant(ref: ref, name: name.text!, isSelf: self == true),
       );
     }
     final speakers = <SpeakerCandidate>[];
@@ -488,21 +495,20 @@ final class _FrameReader {
       if (!refs.contains(ref) || !speakerRefs.add(ref)) {
         throw _malformed('Speaker reference is not a unique roster entry');
       }
-      speakers.add(
-        SpeakerCandidate(
-          ref: ref,
-          method:
-              SpeakerEvidenceMethod.fromWire(entry['method']) ??
-              (throw _malformed('Unknown speaker evidence method')),
-        ),
-      );
+      final method =
+          SpeakerEvidenceMethod.fromWire(entry['method']) ??
+          (throw _malformed('Unknown speaker evidence method'));
+      // An active speaker whose name is not what the screen shows is not
+      // evidence for anyone.
+      if (distrusted.contains(ref)) continue;
+      speakers.add(SpeakerCandidate(ref: ref, method: method));
     }
     return SpeakerObservation(
       session: _opaqueField(json, 'session'),
       readStartUs: startMs * 1000,
       readEndUs: endMs * 1000,
       target: _target(json['target']),
-      complete: complete,
+      complete: complete && !degraded,
       parserVersion: _tokenField(json, 'parser_version'),
       participants: participants,
       speakers: speakers,
@@ -585,21 +591,23 @@ int _msField(Map<String, dynamic> json, String key) {
 
 /// Display names keep their spelling, including commas and punctuation. Control
 /// and bidirectional-override characters are removed, line breaks become
-/// spaces, and the result must be non-empty and bounded.
-String _name(Object? value) {
+/// spaces. A name that is not text is a protocol violation; one with nothing
+/// visible left (`text` null) or longer than the bound (`clamped`) is a
+/// property of what the screen showed, which the native filters do not rule
+/// out, so the caller decides what to do with that entry.
+({String? text, bool clamped}) _rosterName(Object? value) {
   if (value is! String) throw _malformed('Participant name invalid');
-  if (value.runes.length > speakerObserverMaxNameRunes * 2) {
-    throw _limit('Participant name exceeds the length bound');
-  }
-  final text = _sanitize(value).trim();
-  // Joiners survive inside names but are not a name by themselves.
-  if (!hasVisibleNameCharacter(text)) {
-    throw _malformed('Participant name empty');
-  }
+  var text = _sanitize(value).trim();
+  var clamped = false;
   if (text.runes.length > speakerObserverMaxNameRunes) {
-    throw _limit('Participant name exceeds the length bound');
+    text = String.fromCharCodes(
+      text.runes.take(speakerObserverMaxNameRunes),
+    ).trim();
+    clamped = true;
   }
-  return text;
+  // Joiners survive inside names but are not a name by themselves.
+  if (!hasVisibleNameCharacter(text)) return (text: null, clamped: clamped);
+  return (text: text, clamped: clamped);
 }
 
 String _boundedMessage(Object? value) {
