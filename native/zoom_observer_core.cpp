@@ -602,6 +602,18 @@ Verdict classify(const SnapshotOutcome &outcome, const ParseFn &parse) {
   return verdict;
 }
 
+const char *method_token(Method method) {
+  switch (method) {
+  case Method::ParticipantStatus:
+    return "participant_status";
+  case Method::CompactTalkingLabel:
+    return "compact_talking_label";
+  case Method::AtspiState:
+    return "atspi_state";
+  }
+  return "participant_status";
+}
+
 json nullable(const std::string &text) {
   return text.empty() ? json(nullptr) : json(text);
 }
@@ -703,9 +715,7 @@ private:
         continue;
       }
       speakers.push_back({{"ref", refs.refs[speaker.participant]},
-                          {"method", speaker.method == Method::ParticipantStatus
-                                         ? "participant_status"
-                                         : "compact_talking_label"}});
+                          {"method", method_token(speaker.method)}});
     }
     bool complete = parsed.complete && !outcome.identity_incomplete &&
                     !refs.uncertain && !speaker_withheld;
