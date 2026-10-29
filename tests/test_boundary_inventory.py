@@ -1,6 +1,7 @@
 """The boundary inventory is reconciled against the inventories and tests it cites."""
 
 import json
+import re
 
 import pytest
 
@@ -45,7 +46,7 @@ def failing(export, *fragments):
 def test_checked_in_inventory_is_reconciled_with_every_source():
     counts = inventory.verify(ROOT)
     data = inventory.load(ROOT)
-    assert counts["boundaries"] == len(data["boundaries"]) == 12 and counts["lifecycle_cells"] == len(data["lifecycle_reconciliation"]) == 14
+    assert counts["boundaries"] == len(data["boundaries"]) == 12 and counts["lifecycle_cells"] == len(data["lifecycle_reconciliation"]) == len(EXPECTED_VERDICTS)
     assert counts["gates"] == len(data["gates"]) and counts["impact_rules"] == len(data["impact_rules"])
     assert counts["probes_mapped"] == len(json.loads((ROOT / "tools/integration_probes.json").read_text())["entries"])
     assert counts["exclusions_mapped"] == len(json.loads((ROOT / "pytest-exclusions.json").read_text()))
@@ -398,12 +399,12 @@ def test_a_closed_cell_needs_evidence_that_says_production_on_both_sides(export,
     editable("tools/boundary_inventory.json", lambda data: close(data, "production client, fixture service"))
     failing(export, "a closed cell needs evidence whose sides say production both")
     editable("tools/boundary_inventory.json", lambda data: close(data, "production both; adopted helper"))
-    assert inventory.verify(export)["lifecycle_cells"] == 14
+    assert inventory.verify(export)["lifecycle_cells"] == len(inventory.load(export)["lifecycle_reconciliation"])
 
 
 EXPECTED_VERDICTS = {
-    ("Desktop to service", "Crash"): "fixture-only",
-    ("Desktop to service", "EOF before reply"): "fixture-only",
+    ("Desktop to service", "Crash"): "partial",
+    ("Desktop to service", "EOF before reply"): "partial",
     ("Desktop to service", "Slow reply (non-attach)"): "fixture-only",
     ("Desktop to service", "Duplicate launch"): "partial",
     ("Desktop to service", "Reconnect"): "partial",
@@ -413,28 +414,72 @@ EXPECTED_VERDICTS = {
     ("Service to helper", "Reconnect"): "partial",
     ("Service to helper", "EOF before reply"): "fixture-only",
     ("Service to helper", "Slow reply"): "fixture-only",
-    ("Service to helper", "Malformed or partial frame"): "open",
+    ("Service to helper", "Malformed or partial frame"): "fixture-only",
     ("Service to helper", "Duplicate launch"): "partial",
     ("Lock and record handoff", "Duplicate launch"): "partial",
 }
 
 
-def test_every_lifecycle_verdict_is_pinned_and_none_is_closed():
+def test_every_lifecycle_verdict_is_pinned():
     cells = {(item["boundary"], item["transition"]): item["status"] for item in inventory.load(ROOT)["lifecycle_reconciliation"]}
     # A verdict changes only together with the test that justifies it.
     assert cells == EXPECTED_VERDICTS
 
 
-def test_downgraded_cells_say_why_and_cite_what_the_tests_prove():
+def test_a_closed_cell_has_no_missing_coverage_and_no_gap_language_in_its_note():
+    for item in inventory.load(ROOT)["lifecycle_reconciliation"]:
+        if str(item["status"]).startswith("closed"):
+            assert not item.get("missing"), item
+            assert not inventory.GAP_LANGUAGE.search(str(item.get("note", ""))), item
+        elif item["status"] != "open":
+            assert item["missing"], item  # a non-closed cell says what is missing
+
+
+def test_a_closed_claim_must_agree_with_the_boundary_evidence_kind(export, editable):
+    def close(data):
+        target = cell(data, "Desktop to service", "Crash")
+        target.update(status="closed-production", missing=None)
+
+    editable("tools/boundary_inventory.json", close)
+    assert inventory.verify(export)["lifecycle_cells"] == len(inventory.load(export)["lifecycle_reconciliation"])  # the boundary lists these tests as production both
+
+    def relabel(data):
+        close(data)
+        for boundary in data["boundaries"]:
+            for entry in boundary["evidence"]:
+                if entry["path"].endswith("service_crash_contract_test.dart"):
+                    entry["kind"] = "fixture"
+
+    editable("tools/boundary_inventory.json", relabel)
+    failing(export, "is not listed as production-both-sides evidence by boundary")
+
+    def gap_remains(data):
+        close(data)
+        cell(data, "Desktop to service", "Crash")["missing"] = "several requests in flight"
+
+    editable("tools/boundary_inventory.json", gap_remains)
+    failing(export, "a closed cell cannot list missing coverage")
+
+
+def test_cells_say_why_and_cite_what_the_tests_prove():
     data = inventory.load(ROOT)
     eof = cell(data, "Desktop to service", "EOF before reply")
-    assert [(e["path"].rsplit("/", 1)[1], e["test"]) for e in eof["evidence"][:2]] == [
-        ("remote_domain_test.dart", "abrupt service loss reconnects and refreshes snapshots without replaying a write"),
+    assert [(e["path"].rsplit("/", 1)[1], e["test"].split(":")[0]) for e in eof["evidence"]] == [
+        ("service_crash_contract_test.dart", "a service killed after committing a mutation and before its reply"),
         ("remote_domain_test.dart", "a command whose outcome is unknown is never resent"),
     ]
-    assert "already closed" in eof["missing"] and "no reply pending" in eof["missing"]
+    for key in ("a kill before the commit", "several requests pending", "a read-only request", "startup", "helper or a recording", "/usr/bin/open", "/bin/sh launcher"):
+        assert key in eof["missing"], key
+    crash = cell(data, "Desktop to service", "Crash")
+    assert "SIGKILL" in crash["evidence"][0]["sides"] and "several requests in flight" in crash["missing"]
+    assert "no command issued" in crash["evidence"][0]["sides"] and "next command" not in json.dumps(data)
     reconnect = cell(data, "Desktop to service", "Reconnect")
-    assert "literal true" in reconnect["evidence"][1]["sides"] and "fixture service" in reconnect["missing"]
+    assert reconnect["status"] == "partial" and "literal true" in reconnect["missing"]
+    assert [e["path"].rsplit("/", 1)[1] for e in reconnect["evidence"][:2]] == ["service_crash_contract_test.dart"] * 2
+    malformed = cell(data, "Service to helper", "Malformed or partial frame")
+    assert malformed["status"] == "fixture-only" and "not the ForesightHelper" in malformed["evidence"][0]["sides"]
+    assert "real ForesightHelper" in malformed["missing"] and "Known deficiencies" in malformed["missing"]
+    assert "Cannot add event after closing" in malformed["missing"] and "helper_channel_test.dart" in malformed["missing"]
     closing = cell(data, "Service to helper", "Closing")
     assert closing["status"] == "partial" and "SIGKILL fallback passes" in closing["missing"]
     assert any("helper.released" in item["sides"] for item in closing["evidence"])
@@ -475,3 +520,159 @@ def test_class_and_module_level_skips_in_cited_files_must_declare_a_skip_gate(ex
         "tests/test_macos_bundle.py": "platform-contracts",
         "tests/test_dmg_contract.py": "dmg-contracts",
     }
+
+
+def test_a_closed_cells_note_cannot_hide_a_gap(export, editable):
+    for phrase in (
+        "Not covered: several requests in flight",
+        "this was never exercised",
+        "still untested",
+        "NOT PROVEN for startup",
+        "Several requests in flight are not tested.",
+        "Does not cover a crash during startup.",
+        "There is no test for a kill before the commit.",
+        "A crash during startup is uncovered.",
+        "Not yet exercised with a recording active.",
+        "No coverage for a crash during startup",
+        "There is NO COVERAGE of the recording case.",
+        "Lacks coverage of a kill before the commit.",
+        "Lacking any coverage for startup.",
+        "Without coverage for the helper being active.",
+        "Currently without any coverage of reconnect.",
+    ):
+        def hide(data, phrase=phrase):
+            target = cell(data, "Desktop to service", "Crash")
+            target.update(status="closed-production", missing=None, note=phrase)
+
+        editable("tools/boundary_inventory.json", hide)
+        failing(export, "a closed cell's note names a gap")
+
+    def honest(data):
+        target = cell(data, "Desktop to service", "Crash")
+        target.update(status="closed-production", missing=None, note="Verified by the SIGKILL contract test.")
+
+    editable("tools/boundary_inventory.json", honest)
+    assert inventory.verify(export)["lifecycle_cells"] == len(inventory.load(export)["lifecycle_reconciliation"])
+
+
+def test_gap_language_accepts_ordinary_prose_that_merely_contains_similar_words():
+    for fine in (
+        "A request not yet dispatched is resent once.",
+        "Verified by the SIGKILL contract test.",
+        "The test covers the kill; a covered case is listed in evidence.",
+        "Nothing was untouched.",
+        "Coverage is listed in the evidence.",
+        "The coverage gate passes with the contract test.",
+        "Covered by the SIGKILL contract test; a request not yet dispatched is resent once.",
+        "Nobody lacked a covered case.",
+        "This note has coverage of the kill and no gap.",
+    ):
+        assert inventory.GAP_LANGUAGE.search(fine) is None, fine
+
+
+HOSTILE_SCENARIOS = [
+    "a handshake, then EOF once the request has arrived",
+    "a handshake, half a frame header, then EOF once the request has arrived",
+    "a handshake followed by half a frame header, then silence",
+    "a handshake followed by a frame header that announces a huge payload",
+    "a message shorter than its length prefix",
+    "a message that is not valid protobuf",
+    "a compressed message without a negotiated codec",
+    "a peer that sends its handshake and closes at once, then calls made after the channel observed the closure",
+    "EOF once the request arrived: the handshake, then nothing",
+    "half a frame header then EOF: the handshake plus the five header bytes reach the client before the close",
+    "KNOWN DEFICIENCY: bytes that are not HTTP/2 are reported only at the deadline",
+    "KNOWN DEFICIENCY: a peer that closes before any frame is reported only at the deadline",
+]
+
+
+def test_the_hostile_peer_scenarios_cited_by_one_template_name_all_still_exist():
+    """The cited test name is an interpolated template, so one scenario would keep it green."""
+    source = (ROOT / "packages/foresight_core/test/helper_malformed_frame_test.dart").read_text()
+    source = re.sub(r"'\s*\n\s*'", "", source)  # adjacent literals the formatter wrapped
+    for name in HOSTILE_SCENARIOS:
+        assert name in source, name
+    assert len(inventory.dart_registered_tests(source)) == 7  # two templated tests, five literal ones
+    assert len(re.findall(r"^\s+Scenario\(\s*'", source, re.M)) == 4
+    assert source.count("MalformedMessage('") == 3
+
+
+def test_a_closed_claim_needs_the_exact_test_name_not_just_a_names_less_entry(export, editable):
+    def close(data):
+        cell(data, "Desktop to service", "Crash").update(status="closed-production", missing=None)
+
+    def drop_names(data):
+        close(data)
+        for boundary in data["boundaries"]:
+            for entry in boundary["evidence"]:
+                if entry["path"].endswith("service_crash_contract_test.dart"):
+                    entry.pop("names", None)
+
+    editable("tools/boundary_inventory.json", drop_names)
+    failing(export, "is not listed as production-both-sides evidence by boundary")
+
+    def wrong_name(data):
+        close(data)
+        for boundary in data["boundaries"]:
+            for entry in boundary["evidence"]:
+                if entry["path"].endswith("service_crash_contract_test.dart"):
+                    entry["names"] = ["control: a request issued after the loss was seen was never sent, so the reconnect sends it once and it succeeds (not every loss is outcomeUnknown)"]
+
+    editable("tools/boundary_inventory.json", wrong_name)
+    failing(export, "is not listed as production-both-sides evidence by boundary")
+
+
+def test_every_lifecycle_cell_names_the_boundary_it_belongs_to(export, editable):
+    assert {(item["boundary"], item["boundary_id"]) for item in inventory.load(ROOT)["lifecycle_reconciliation"]} == {
+        ("Desktop to service", "desktop-service"),
+        ("MCP/CLI to service", "mcp-service"),
+        ("Frontend isolate to worker isolate", "frontend-worker-isolate"),
+        ("Service to helper", "service-helper"),
+        ("Lock and record handoff", "launcher-service-handoff"),
+    }
+
+    def unknown(data):
+        cell(data, "Desktop to service", "Crash")["boundary_id"] = "not-a-boundary"
+
+    editable("tools/boundary_inventory.json", unknown)
+    failing(export, "boundary_id 'not-a-boundary' is not an inventory boundary")
+
+    def missing(data):
+        cell(data, "Desktop to service", "Crash").pop("boundary_id")
+
+    editable("tools/boundary_inventory.json", missing)
+    failing(export, "boundary_id None is not an inventory boundary")
+
+    def closed_and_unknown(data):
+        target = cell(data, "Desktop to service", "Crash")
+        target.update(status="closed-production", missing=None, boundary_id="not-a-boundary")
+
+    editable("tools/boundary_inventory.json", closed_and_unknown)
+    failing(export, "boundary_id 'not-a-boundary' is not an inventory boundary")  # reported, not an exception from the lookup
+
+
+def test_a_closed_cell_cannot_lean_on_a_test_that_only_an_unrelated_boundary_lists(export, editable):
+    def close(data):
+        cell(data, "Desktop to service", "Crash").update(status="closed-production", missing=None)
+
+    editable("tools/boundary_inventory.json", close)
+    assert inventory.verify(export)["lifecycle_cells"] == len(inventory.load(export)["lifecycle_reconciliation"])  # its own boundary lists the tests
+
+    def move_evidence(data):
+        close(data)
+        by_id = {boundary["id"]: boundary for boundary in data["boundaries"]}
+        moved = [entry for entry in by_id["desktop-service"]["evidence"] if entry["path"].endswith("service_crash_contract_test.dart")]
+        assert moved
+        for entry in moved:
+            by_id["desktop-service"]["evidence"].remove(entry)
+            by_id["service-helper"]["evidence"].append(entry)  # still registered, still production both sides, but under another boundary
+
+    editable("tools/boundary_inventory.json", move_evidence)
+    failing(export, "is not listed as production-both-sides evidence by boundary desktop-service")
+
+    def repoint(data):
+        close(data)
+        cell(data, "Desktop to service", "Crash")["boundary_id"] = "service-helper"
+
+    editable("tools/boundary_inventory.json", repoint)
+    failing(export, "is not listed as production-both-sides evidence by boundary service-helper")
