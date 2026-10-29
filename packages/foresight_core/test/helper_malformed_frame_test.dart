@@ -259,7 +259,11 @@ void main() {
           (client) => client.socket.add('HTTP/1.1 500 nope\r\n\r\n'.codeUnits),
           uncaught,
         );
-        expect((outcome.error as GrpcError).code, StatusCode.deadlineExceeded);
+        expect(
+          (outcome.error as GrpcError).code,
+          StatusCode.deadlineExceeded,
+          reason: '${outcome.error} after ${outcome.elapsed}',
+        );
         expect(outcome.elapsed, greaterThanOrEqualTo(deadline));
       });
     });
@@ -271,7 +275,11 @@ void main() {
           (client) => client.socket.destroy(),
           uncaught,
         );
-        expect((outcome.error as GrpcError).code, StatusCode.deadlineExceeded);
+        expect(
+          (outcome.error as GrpcError).code,
+          StatusCode.deadlineExceeded,
+          reason: '${outcome.error} after ${outcome.elapsed}',
+        );
         expect(outcome.elapsed, greaterThanOrEqualTo(deadline));
       });
     });
