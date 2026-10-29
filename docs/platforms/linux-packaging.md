@@ -90,8 +90,8 @@ its raw FIFO cannot supply the acquisition timing required by saved recordings.
 See [native capture](../../native/README.md) and [audio codecs](../architecture/audio-codecs.md).
 
 The optional Zoom speaker observer, `zoom_observer_linux`, reads Zoom's accessibility
-tree through libatspi. A host build includes it only when pkg-config finds `atspi-2`
-and `gio-2.0`; otherwise CMake prints a status line, skips the helper and its tests that
+tree through libatspi. A host build includes it only when pkg-config finds `atspi-2`,
+`gio-2.0` and `dbus-1`; otherwise CMake prints a status line, skips the helper and its tests that
 need it (the CTest `zoom_observer_linux_built` then reports Skipped), and everything else
 builds. Configure with `-DFORESIGHT_REQUIRE_ATSPI=ON` to make a missing library a configure
 error instead. Development packages (checked against the package index): Debian 13 and

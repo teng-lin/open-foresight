@@ -23,17 +23,20 @@ active speaker. See [Linux live feasibility](zoom-speaker-attribution.md#linux-l
 | `tests/fixtures/zoom_observer_linux/` | Synthetic fixtures with made-up roles and names. Never real trees or names. |
 | `native/zoom_atspi_collect.{h,cpp}` | The bounded traversal behind a thin node interface, so limits, failures and cancellation run against a fake tree. |
 | `tests/native/zoom_atspi_parser.cpp`, `zoom_atspi_collect.cpp`, `zoom_linux_source.cpp`, `zoom_linux_core.cpp`, `zoom_observer_core.cpp` (shared, with the Linux-only stand-in parser `zoom_core_test_parser.cpp`) | CTests `zoom_atspi_parser`, `zoom_atspi_collect`, `zoom_linux_source`, `zoom_linux_core`, `zoom_observer_core`. |
-| `tests/native/zoom_observer_protocol.cpp`, `zoom_observer_bus.cpp`, `zoom_helper_harness.h` | CTests that drive the built helper: `zoom_observer_protocol` (scrubbed environment) and `zoom_observer_bus` (a private `dbus-daemon --session` with a fake `org.a11y.Bus` and a fake registry, driving `zoom_observer_bus_helper`, a test-only `main` with synthetic rules and a controllable process name; skipped without dbus-daemon). `zoom_observer_linux_built` reports Skipped when the helper was not built. |
+| `tests/native/zoom_observer_protocol.cpp`, `zoom_observer_bus.cpp`, `zoom_helper_harness.h` | CTests that drive the built helper: `zoom_observer_protocol` (scrubbed environment) and `zoom_observer_bus` (a private `dbus-daemon --session` with a fake `org.a11y.Bus`, a second daemon as the accessibility bus with a fake registry, and an `org.a11y.Bus` service file whose activation leaves a marker, driving `zoom_observer_bus_helper`, a test-only `main` with synthetic rules and a controllable process name; skipped without dbus-daemon). `zoom_observer_linux_built` reports Skipped when the helper was not built. |
 
-The AT-SPI reader builds only on Linux and only when pkg-config finds `atspi-2`
-and `gio-2.0`; otherwise CMake skips it and its protocol test, and the parser,
+The AT-SPI reader builds only on Linux and only when pkg-config finds `atspi-2`,
+`gio-2.0` and `dbus-1`; otherwise CMake skips it and its protocol test, and the parser,
 `Source` and core tests still run. No Python is used at runtime.
 
 ## Gate order (`LinuxSource`)
 
-Capability inspection and every poll walk the same gates, read-only. No D-Bus call
-activates a service (`NO_AUTO_START`), `setup` included. libatspi is not initialized by
-the first six gates, only by gate 7, and only when a validated rule needs a read.
+Capability inspection and every poll walk the same gates, read-only. None of the
+helper's own D-Bus calls activates a service (`NO_AUTO_START`), `setup` included.
+libatspi's own calls are different: those to `org.a11y.atspi.Registry` do not set
+`NO_AUTO_START` and can activate `at-spi2-registryd` through the accessibility bus.
+libatspi is not initialized by the first five gates, only by gate 6, and only when a
+validated rule needs a read.
 
 1. Session bus: `DBUS_SESSION_BUS_ADDRESS` restricted to `unix:` transports (`autolaunch:`
    and `unixexec:` entries are dropped), else `$XDG_RUNTIME_DIR/bus`. Missing is
@@ -41,14 +44,17 @@ the first six gates, only by gate 7, and only when a validated rule needs a read
    `session_bus_unreachable`. The helper never lets D-Bus autolaunch a bus.
 2. Accessibility bus: `GetNameOwner("org.a11y.Bus")`. A failure other than "no owner" is
    `session_bus_unreachable`; no owner is `needs_setup`/`atspi_bus_absent`. If libatspi was
-   already connected, no owner, or an owner different from the one it connected to, is
-   `atspi_bus_lost` (see below).
+   already connected, no owner, or an owner different from the one it connected to, or a
+   dropped libatspi connection, is `atspi_bus_lost` (see below).
 3. `org.a11y.Status.IsEnabled`. Unreadable or not a boolean is `atspi_status_unreadable`;
    false is `needs_setup`/`accessibility_disabled`, `permission_denied`/`setup_not_effective`
    after a `setup` that did not turn it on, and `permission_denied`/`accessibility_lost`
-   after a grant that was seen and then lost. An absent accessibility bus stays
-   `needs_setup`/`atspi_bus_absent` even after `setup` (the helper cannot start it, so the
-   contract's "permission_denied after setup" sentence does not apply to this state).
+   after a grant that was seen and then lost. Deviation from the contract's
+   "permission_denied after setup" sentence: an absent accessibility bus stays
+   `needs_setup`/`atspi_bus_absent` after `setup`, because the helper cannot start it; and a
+   `setup` whose `Set` call got no reply (no bus, no session bus) is not counted as an
+   attempt, so a bus that appears later, disabled, is `needs_setup`/`accessibility_disabled`.
+   The contract documents this.
 4. Zoom: processes of the same user whose executable is named `zoom`
    (`/proc/<pid>/exe`, a ` (deleted)` suffix removed); none is `zoom_not_running`,
    several `ambiguous_processes`, an unreadable `/proc` (or an unexpected error reading an
@@ -85,21 +91,30 @@ the first six gates, only by gate 7, and only when a validated rule needs a read
    cancellation is `read_cancelled`.
 8. Signals and cache: `atspi_init` subscribes to the registry's cache and event signals on
    the default GLib context. The helper registers no event listener of its own, but it
-   drains that context (bounded) once per poll and around every read, because nothing else
-   iterates it and the signals would otherwise pile up until calls time out. Names, states
+   drains that context (bounded to 256 iterations) once per poll and around every read.
+   libatspi dispatches libdbus after each blocking call, so undrained signals do not make
+   calls time out; they queue as deferred work that grows in memory for as long as the
+   process lives, and the per-application tables never see their removals. Names, states
    and children are cached per application and kept current only by those signals; each
    read sets the cache mask of the desktop and of every application to none and clears it,
    so every read is live. Whether Zoom's Qt bridge behaves with that is part of the live
    validation below.
 
-A registry that goes away after libatspi connected cannot be recovered in-process: libatspi
-keeps a static table of applications that `atspi_exit()` does not clear, so a later
-`atspi_init()` cannot reach a new registry. The helper reports `unavailable`/`atspi_bus_lost`
-once and exits with status 4 (`kExitRegistryLost`) at the next poll or request, leaving the
-supervisor to restart it within its bounded budget. The contract's exit codes (2 protocol,
-3 stdout, 64 usage) do not list 4; a Linux-only addition for the contract owner to record.
+Two different failures are kept apart. A registry that stalls or restarts on a bus that
+is still there (`NoReply`, `ServiceUnknown` on the desktop's child count) is an ordinary
+`ax_read_failed`: libatspi re-registers the registry when its well-known name returns, and
+the helper recovers on a later poll. What cannot be recovered in-process is the loss of
+libatspi's connection to the accessibility bus itself, or a restart of that bus (a
+different owner of `org.a11y.Bus`): libatspi keeps a static table of applications that
+`atspi_exit()` does not clear, so a later `atspi_init()` cannot reach the new registry. That
+is fatal and goes through the core as a source outcome: the helper reports
+`unavailable`/`atspi_bus_lost` (a terminal `error` frame with that code, carrying the id of
+the request that found it) and exits with status 4 (`kLinuxExitRegistryLost`), leaving the
+supervisor to restart it within its bounded budget. A stop that arrived first wins and
+exits 0.
 
-Reason tokens the Linux helper adds to the contract's list: `no_session_bus`,
+Reason tokens and the exit status 4 are recorded in the
+[protocol](speaker-observer-protocol.md); the Linux-only tokens are `no_session_bus`,
 `session_bus_unreachable`, `atspi_bus_absent`, `atspi_status_unreadable`,
 `accessibility_disabled`, `setup_not_effective`, `accessibility_lost`, `atspi_unreachable`,
 `atspi_bus_lost`, `process_scan_failed`, `no_validated_rules`, `zoom_not_exposed`,

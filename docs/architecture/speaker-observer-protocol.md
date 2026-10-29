@@ -31,6 +31,14 @@ platform helpers (`zoom_observer_macos`, `zoom_observer_linux`). Design context:
 - If stdout can no longer be written (a failed write, or a hang-up noticed while
   idle) the helper stops reading Zoom, writes the token `stdout_closed` to stderr
   and exits 3. An invalid helper configuration exits 64 before any frame.
+- A platform source may also end the session itself when only a restart can fix
+  it (the Linux helper does when libatspi loses its accessibility registry for
+  good). The helper then writes one terminal `error` frame whose `code` is the
+  source's reason token (`atspi_bus_lost`), with the `id` of the request whose read
+  found it (none when a poll did; that poll first reports the `unavailable`
+  interval), and exits with the source's status (4 for the Linux registry loss). A
+  stop, end of input or broken stdout that began first wins: the request is
+  answered `cancelled`, `stopped` is written, and the exit is the clean one.
 - The helper is launched as `<helper> --protocol 1`; any other arguments exit 64
   with a usage line on stderr.
 - All observed strings (names, window titles) are untrusted source data.
@@ -113,13 +121,19 @@ reason tokens include `zoom_not_running`, `accessibility_not_trusted`,
 `unsupported_locale`, `ax_read_failed`, `ax_timeout_unavailable`,
 `version_unreadable`, `incomplete_read`, `frame_too_large`. The Linux helper also
 reports `no_session_bus`, `session_bus_unreachable`, `atspi_bus_absent`,
-`atspi_status_unreadable`, `accessibility_disabled`, `setup_not_effective`,
+`atspi_status_unreadable`, `accessibility_disabled`, `accessibility_lost`,
+`setup_not_effective`, `atspi_unreachable`, `atspi_bus_lost`, `process_scan_failed`,
 `no_validated_rules`, `zoom_not_exposed` and `read_cancelled`. `incomplete_read`
 means a bound, timeout or failed attribute cut the read short and no evidence
 was found, so a meeting is neither confirmed nor ruled out; only a complete read
 with no evidence reports `no_meeting`. `needs_setup` means
 accessibility was never granted to this helper; after an explicit `setup` that
 is still not granted, or after a grant is lost, the state is `permission_denied`.
+On Linux this holds when the accessibility bus is there but stays disabled
+(`permission_denied`/`setup_not_effective`, or `accessibility_lost` after a grant
+was seen) and not when the bus is absent: the helper cannot start it, so that
+state stays `needs_setup`/`atspi_bus_absent` after `setup`, and a `setup` that
+reached no bus is not counted as an attempt.
 `clock.uptime_ms` is the same instant on the sleep-excluding uptime clock
 (`mach_absolute_time` on macOS; on Linux `CLOCK_MONOTONIC` already excludes sleep, so
 it equals `monotonic_ms`), provided because native capture timestamps may
