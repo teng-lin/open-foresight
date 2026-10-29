@@ -16,6 +16,12 @@ view. Historical sources without capture rows keep their existing committed body
 An explicit manual source edit keeps ordinary source ownership and history.
 Deleted sources are never recreated by replay.
 
+Application migration 25 lets a final row carry a person attribution. The
+projection and `source_contents` render its sanitized name in place of the
+channel label; the piece's speaker channel and key are unchanged. An attribution
+change journals and reprojects only its own row (see
+[schema migrations](schema-migrations.md)).
+
 A row-change journal projects only new or edited rows. Current derived pieces have
 stable, non-reused local IDs, a speaker channel and at most 64 KiB of UTF-8 text.
 Large imported rows split at UTF-8 boundaries; one authoritative row is limited to

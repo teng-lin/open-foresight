@@ -105,6 +105,8 @@ class ApplicationMigrations {
         _migratePreferenceEntities();
       case 24:
         _createRecordingAudio();
+      case 25:
+        _createMeetingAttribution();
       default:
         throw StateError('Missing application database migration $version');
     }
@@ -231,6 +233,117 @@ CREATE TRIGGER audio_session_erasure BEFORE DELETE ON recording_sessions BEGIN
  INSERT OR IGNORE INTO audio_erasure_intents VALUES(OLD.id,OLD.storage_generation,unixepoch()*1000);
  INSERT OR IGNORE INTO preferences(key,value) VALUES('internal.backupErasurePending','1'); END;
 ''');
+  }
+
+  // Ordered25 owns this complete helper closure; do not modify older steps.
+  void _createMeetingAttribution() {
+    db.execute('''
+CREATE TABLE meeting_participants(
+ id INTEGER PRIMARY KEY,
+ meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+ scope TEXT NOT NULL CHECK(length(scope) BETWEEN 1 AND 512),
+ identity_key TEXT NOT NULL CHECK(length(identity_key) BETWEEN 1 AND 512),
+ display_name TEXT NOT NULL CHECK(length(display_name) BETWEEN 1 AND 500),
+ is_self INTEGER NOT NULL DEFAULT 0 CHECK(is_self IN (0,1)),
+ first_seen_ms INTEGER NOT NULL CHECK(first_seen_ms>=0),
+ last_seen_ms INTEGER NOT NULL CHECK(last_seen_ms>=first_seen_ms),
+ previous_display_name TEXT CHECK(previous_display_name IS NULL OR length(previous_display_name)<=500),
+ rename_count INTEGER NOT NULL DEFAULT 0 CHECK(rename_count>=0),
+ name_changed_ms INTEGER,
+ name_manual INTEGER NOT NULL DEFAULT 0 CHECK(name_manual IN (0,1)),
+ UNIQUE(meeting_id,scope,identity_key));
+CREATE TABLE transcript_attributions(
+ transcript_id INTEGER PRIMARY KEY REFERENCES transcript(id) ON DELETE CASCADE,
+ participant_id INTEGER REFERENCES meeting_participants(id) ON DELETE SET NULL,
+ display_name TEXT NOT NULL DEFAULT '' CHECK(length(display_name)<=500),
+ rendered_name TEXT NOT NULL DEFAULT '' CHECK(length(rendered_name)<=120),
+ state TEXT NOT NULL CHECK(state IN ('attributed','unknown','multiple','stale','unavailable')),
+ method TEXT NOT NULL DEFAULT '' CHECK(length(method)<=64),
+ parser_version TEXT NOT NULL DEFAULT '' CHECK(length(parser_version)<=64),
+ policy_version TEXT NOT NULL DEFAULT '' CHECK(length(policy_version)<=64),
+ evidence TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(evidence) AND length(CAST(evidence AS BLOB))<=4096),
+ manual INTEGER NOT NULL DEFAULT 0 CHECK(manual IN (0,1)),
+ revision INTEGER NOT NULL DEFAULT 1,
+ updated_ms INTEGER NOT NULL,
+ CHECK((state='attributed')=(rendered_name!='')));
+CREATE INDEX transcript_attributions_participant ON transcript_attributions(participant_id) WHERE participant_id IS NOT NULL;
+CREATE TRIGGER transcript_attribution_participant_insert BEFORE INSERT ON transcript_attributions
+ WHEN NEW.participant_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM meeting_participants p JOIN transcript t ON t.meeting_id=p.meeting_id WHERE p.id=NEW.participant_id AND t.id=NEW.transcript_id) BEGIN
+ SELECT RAISE(ABORT,'Participant belongs to another meeting'); END;
+CREATE TRIGGER transcript_attribution_participant_update BEFORE UPDATE OF transcript_id,participant_id ON transcript_attributions
+ WHEN NEW.participant_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM meeting_participants p JOIN transcript t ON t.meeting_id=p.meeting_id WHERE p.id=NEW.participant_id AND t.id=NEW.transcript_id) BEGIN
+ SELECT RAISE(ABORT,'Participant belongs to another meeting'); END;
+CREATE TRIGGER transcript_attribution_manual_guard BEFORE UPDATE ON transcript_attributions
+ WHEN OLD.manual=1 AND NEW.manual=0 BEGIN
+ SELECT RAISE(ABORT,'Manual transcript attribution is protected'); END;
+CREATE TRIGGER transcript_attribution_manual_replace_guard BEFORE INSERT ON transcript_attributions
+ WHEN NEW.manual=0 AND EXISTS(SELECT 1 FROM transcript_attributions WHERE transcript_id=NEW.transcript_id AND manual=1) BEGIN
+ SELECT RAISE(ABORT,'Manual transcript attribution is protected'); END;
+CREATE TRIGGER transcript_attribution_insert AFTER INSERT ON transcript_attributions
+ WHEN NEW.rendered_name!='' AND EXISTS(SELECT 1 FROM transcript WHERE id=NEW.transcript_id AND final=1) BEGIN
+ ${_attributionInvalidation('NEW.transcript_id')} END;
+CREATE TRIGGER transcript_attribution_replace BEFORE INSERT ON transcript_attributions
+ WHEN NEW.rendered_name='' AND EXISTS(SELECT 1 FROM transcript_attributions WHERE transcript_id=NEW.transcript_id AND rendered_name!='') AND EXISTS(SELECT 1 FROM transcript WHERE id=NEW.transcript_id AND final=1) BEGIN
+ ${_attributionInvalidation('NEW.transcript_id')} END;
+CREATE TRIGGER transcript_attribution_update AFTER UPDATE ON transcript_attributions
+ WHEN OLD.rendered_name IS NOT NEW.rendered_name AND EXISTS(SELECT 1 FROM transcript WHERE id=NEW.transcript_id AND final=1) BEGIN
+ ${_attributionInvalidation('NEW.transcript_id')} END;
+CREATE TRIGGER transcript_attribution_delete AFTER DELETE ON transcript_attributions
+ WHEN OLD.rendered_name!='' AND EXISTS(SELECT 1 FROM transcript WHERE id=OLD.transcript_id AND final=1) BEGIN
+ ${_attributionInvalidation('OLD.transcript_id')} END;
+CREATE TRIGGER transcript_attribution_erase_replaced AFTER UPDATE OF display_name ON transcript_attributions
+ WHEN OLD.display_name!='' AND OLD.display_name IS NOT NEW.display_name AND (OLD.manual=1 OR NEW.manual=1) BEGIN
+ ${_attributionMarker()} END;
+CREATE TRIGGER transcript_attribution_erase_replace BEFORE INSERT ON transcript_attributions
+ WHEN EXISTS(SELECT 1 FROM transcript_attributions WHERE transcript_id=NEW.transcript_id AND display_name!='' AND (manual=1 OR NEW.manual=1)) BEGIN
+ ${_attributionMarker()} END;
+CREATE TRIGGER transcript_attribution_erase AFTER DELETE ON transcript_attributions
+ WHEN OLD.display_name!='' BEGIN
+ ${_attributionMarker()} END;
+CREATE TRIGGER meeting_participant_erase_renamed AFTER UPDATE OF display_name ON meeting_participants
+ WHEN NEW.name_manual=1 AND OLD.display_name IS NOT NEW.display_name BEGIN
+ ${_attributionMarker()} END;
+CREATE TRIGGER meeting_participant_erase AFTER DELETE ON meeting_participants BEGIN
+ ${_attributionMarker()} END;
+DROP VIEW source_contents;
+CREATE VIEW source_contents AS SELECT s.id,CASE WHEN s.generated=1 AND m.meeting_id IS NOT NULL
+ THEN COALESCE((SELECT group_concat(body,char(10)) FROM (
+  SELECT '['||COALESCE(NULLIF(a.rendered_name,''),CASE trim(substr(t.source,1,instr(t.source||';',';')-1),char(9,10,11,12,13,32,133,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279))
+  WHEN 'microphone' THEN 'Microphone' WHEN 'microphone-capture-interruption' THEN 'Microphone'
+  WHEN 'playback' THEN 'Remote' WHEN 'playback-capture-interruption' THEN 'Remote' ELSE 'Unknown' END)||' '||
+  CAST(COALESCE(t.start_ms,0) AS INTEGER)||'–'||CAST(COALESCE(t.end_ms,0) AS INTEGER)||' ms] '||COALESCE(t.text,'') AS body
+  FROM transcript t LEFT JOIN transcript_attributions a ON a.transcript_id=t.id
+  WHERE t.meeting_id=m.meeting_id AND t.final=1 ORDER BY t.id)), '')
+ ELSE s.content END AS content FROM sources s LEFT JOIN meeting_transcript_sources m ON m.source_id=s.id;
+''');
+  }
+
+  // An erasure marker is inserted with ON CONFLICT DO NOTHING: an OR IGNORE
+  // here would be overridden by the conflict policy of the statement that
+  // fired the trigger (for example an upsert) and fail on an existing marker.
+  String _attributionMarker() =>
+      "INSERT INTO preferences(key,value) VALUES('internal.backupErasurePending','1') ON CONFLICT(key) DO NOTHING;";
+
+  // A changed rendered name is an edit of the row's indexed text: one revision
+  // bump, plus reprojection of only this row when its meeting is mapped and no
+  // projection of the row is already pending (that projection reads the new
+  // name itself). The journal insert comes last because it creates that pending
+  // state.
+  String _attributionInvalidation(String transcript) {
+    final meeting = '(SELECT meeting_id FROM transcript WHERE id=$transcript)';
+    final reproject =
+        'EXISTS(SELECT 1 FROM meeting_transcript_sources WHERE meeting_id=$meeting) '
+        'AND NOT EXISTS(SELECT 1 FROM meeting_transcript_changes WHERE transcript_id=$transcript AND projected=0)';
+    return '''
+ UPDATE meetings SET revision=revision+1 WHERE id=$meeting;
+ UPDATE sources SET revision=revision+1,state='pending',error='' WHERE generated=1 AND deleted=0 AND
+  id IN(SELECT source_id FROM meeting_transcript_sources WHERE meeting_id=$meeting);
+ UPDATE source_details SET changed=CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) WHERE source_id IN
+  (SELECT m.source_id FROM meeting_transcript_sources m JOIN sources s ON s.id=m.source_id WHERE m.meeting_id=$meeting AND s.generated=1 AND s.deleted=0);
+ DELETE FROM meeting_index_segments WHERE transcript_id=$transcript AND $reproject;
+ INSERT INTO meeting_transcript_changes(meeting_id,transcript_id,changed) SELECT $meeting,$transcript,unixepoch()*1000 WHERE $reproject
+  ON CONFLICT(meeting_id,transcript_id) DO UPDATE SET version=version+1,projected=0,changed=excluded.changed;
+''';
   }
 
   // Ordered23 owns its complete helper closure. Earlier definitions stay frozen.

@@ -44,6 +44,9 @@ const workspaceContentTables = [
   'document_summary_cache',
   'artifacts',
   'transcript',
+  // Cascaded away with their rows; listed so the clear is explicit and total.
+  'transcript_attributions',
+  'meeting_participants',
   'meeting_details',
   'meetings',
   'answers',

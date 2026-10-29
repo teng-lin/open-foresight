@@ -85,9 +85,10 @@ Map<String, Object?> meetingNoteResult(Object? value) => projectionResult(
 Map<String, Object?> transcriptResult(Object? value) => projectionResult(
   value,
   identities: const {'id': int, 'meeting_id': int},
-  strings: 'text source speaker_label',
-  integers: 'start_ms end_ms speaker_id',
-  flags: 'final',
+  strings:
+      'text source speaker_label channel participant_name attribution_state attribution_method',
+  integers: 'start_ms end_ms speaker_id participant_id',
+  flags: 'final attribution_manual',
 );
 
 Map<String, Object?> artifactResult(Object? value) => projectionResult(

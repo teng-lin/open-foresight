@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'package:sqlite3/sqlite3.dart';
 import '../meeting_actions.dart';
+import '../meeting_attribution.dart';
 import '../rpc_error.dart';
+import 'meeting_index_jobs.dart';
 import 'read_schema_guard.dart';
 
 typedef DerivedSourceWriter =
@@ -18,11 +20,14 @@ class MeetingStore {
   final Database db;
   final int supportedVersion;
   final DerivedSourceWriter _writeSource;
+  final String Function()? _workspaceEpoch;
   MeetingStore(
     this.db, {
     required this.supportedVersion,
     required DerivedSourceWriter writeSource,
-  }) : _writeSource = writeSource;
+    String Function()? workspaceEpoch,
+  }) : _writeSource = writeSource,
+       _workspaceEpoch = workspaceEpoch;
   List<Map<String, Object?>> _rows(
     String sql, [
     List<Object?> args = const [],
@@ -160,6 +165,361 @@ class MeetingStore {
         meeting,
       ]);
     }
+  }
+
+  /// Save a transcript row and, when supplied, its attribution in one
+  /// transaction. Attribution is optional metadata and is checked before it is
+  /// written: an unknown participant, or one from another meeting, is reported
+  /// as [TranscriptWrite.attributionErrorCode] and the text is kept. Any
+  /// exception from the write itself, whether a busy, I/O or full-disk error
+  /// or a failure in a downstream invalidation trigger, is not an attribution
+  /// problem: it propagates with nothing committed so the caller's bounded
+  /// retry boundary reruns the whole row. A failure while writing the
+  /// attribution itself surfaces as [AttributionWriteFailure] (codes only); a
+  /// constraint-class one cannot be fixed by retrying, so the retry boundary
+  /// saves the text without the attribution. The attribution and the text bump the
+  /// meeting revision once between them. This atomic pairing holds for this
+  /// path (used by `RecordingTranscriptPersistence`); rows committed by other
+  /// writers, such as the durable-audio ASR commit, are attributed afterwards
+  /// with [saveAutomaticAttribution].
+  TranscriptWrite transcriptWithAttribution(
+    int meeting,
+    String text,
+    bool finalText,
+    int start,
+    int end,
+    String source, {
+    TranscriptAttribution? attribution,
+  }) => _savepoint('save_transcript_attribution', () {
+    transcript(meeting, text, finalText, start, end, source);
+    final id = db.lastInsertRowId;
+    if (attribution == null) return TranscriptWrite(id);
+    final rejection = _attributionRejection(meeting, attribution);
+    if (rejection != null) {
+      return TranscriptWrite(id, attributionErrorCode: rejection);
+    }
+    final afterText = _meetingRevision(meeting);
+    try {
+      _writeAttribution(id, attribution, overwriteManual: attribution.manual);
+    } on SqliteException catch (error) {
+      // Re-thrown as codes only: the exception prints bound parameters, which
+      // include participant names. The enclosing savepoint rolls the row back.
+      throw AttributionWriteFailure(error.resultCode, error.extendedResultCode);
+    }
+    // Nobody can observe this transaction's middle, so one bump covers the
+    // text and its attribution together.
+    if (_meetingRevision(meeting) > afterText) {
+      db.execute('UPDATE meetings SET revision=? WHERE id=?', [
+        afterText,
+        meeting,
+      ]);
+    }
+    return TranscriptWrite(id, attributionSaved: true);
+  });
+
+  int _meetingRevision(int meeting) =>
+      _rows('SELECT revision FROM meetings WHERE id=?', [
+            meeting,
+          ]).single['revision']
+          as int;
+
+  /// The extended result code the database would report for an attribution
+  /// that cannot be stored, or null when it can.
+  int? _attributionRejection(int meeting, TranscriptAttribution attribution) {
+    final participant = attribution.participantId;
+    if (participant == null) return null;
+    final owner = _rows(
+      'SELECT meeting_id FROM meeting_participants WHERE id=?',
+      [participant],
+    ).firstOrNull;
+    if (owner == null) return sqliteConstraintForeignKey;
+    return owner['meeting_id'] == meeting ? null : sqliteConstraintTrigger;
+  }
+
+  T _savepoint<T>(String name, T Function() write) {
+    db.execute('SAVEPOINT $name');
+    try {
+      final result = write();
+      db.execute('RELEASE $name');
+      return result;
+    } catch (_) {
+      if (!db.autocommit) {
+        db.execute('ROLLBACK TO $name');
+        db.execute('RELEASE $name');
+      }
+      rethrow;
+    }
+  }
+
+  /// Upsert a meeting's observed roster in one transaction (at most
+  /// [maxParticipantBatch]; larger rosters use [saveParticipantsInBatches]) and
+  /// return the saved participants in input order. Observations never merge by
+  /// display name. A name change applies only when it is at least as recent as
+  /// the participant's latest observation, so a delayed or retried batch cannot
+  /// regress a name; an observed rename is recorded on the participant but never
+  /// rewrites the name snapshots already attached to transcript rows, and
+  /// cannot replace a name the user assigned. Participants do not touch
+  /// transcript invalidation, so a roster refresh reindexes nothing.
+  List<MeetingParticipant> saveParticipants(
+    int meeting,
+    List<MeetingParticipant> participants,
+  ) {
+    if (participants.length > maxParticipantBatch) {
+      throw ArgumentError.value(
+        participants.length,
+        'participants',
+        'at most $maxParticipantBatch per batch',
+      );
+    }
+    const applies = 'name_manual=0 AND excluded.last_seen_ms>=last_seen_ms';
+    const renamed = '$applies AND display_name IS NOT excluded.display_name';
+    return _savepoint('save_meeting_participants', () {
+      final saved = <MeetingParticipant>[];
+      for (final p in participants) {
+        db.execute(
+          'INSERT INTO meeting_participants(meeting_id,scope,identity_key,display_name,is_self,first_seen_ms,last_seen_ms) '
+          'VALUES(?,?,?,?,?,?,?) ON CONFLICT(meeting_id,scope,identity_key) DO UPDATE SET '
+          'previous_display_name=CASE WHEN $renamed THEN meeting_participants.display_name ELSE previous_display_name END,'
+          'rename_count=rename_count+($renamed),'
+          'name_changed_ms=CASE WHEN $renamed THEN excluded.last_seen_ms ELSE name_changed_ms END,'
+          'display_name=CASE WHEN $applies THEN excluded.display_name ELSE meeting_participants.display_name END,'
+          'is_self=MAX(is_self,excluded.is_self),'
+          'first_seen_ms=MIN(first_seen_ms,excluded.first_seen_ms),'
+          'last_seen_ms=MAX(last_seen_ms,excluded.last_seen_ms)',
+          [
+            meeting,
+            p.scope,
+            p.identityKey,
+            p.displayName,
+            p.isSelf ? 1 : 0,
+            p.firstSeenMs,
+            p.lastSeenMs,
+          ],
+        );
+        saved.add(
+          MeetingParticipant.fromRow(
+            _rows(
+              'SELECT * FROM meeting_participants WHERE meeting_id=? AND scope=? AND identity_key=?',
+              [meeting, p.scope, p.identityKey],
+            ).single,
+          ),
+        );
+      }
+      return List.unmodifiable(saved);
+    });
+  }
+
+  /// Save a roster of any size in consecutive batches. Each batch is atomic
+  /// and committed in order; a failure leaves the earlier batches saved, which
+  /// is safe because the upsert is idempotent. Callers retry the whole roster.
+  List<MeetingParticipant> saveParticipantsInBatches(
+    int meeting,
+    List<MeetingParticipant> participants,
+  ) => [
+    for (var i = 0; i < participants.length; i += maxParticipantBatch)
+      ...saveParticipants(
+        meeting,
+        participants.sublist(
+          i,
+          i + maxParticipantBatch > participants.length
+              ? participants.length
+              : i + maxParticipantBatch,
+        ),
+      ),
+  ];
+
+  /// Persist an automatic observation. A manual row is never replaced, and an
+  /// identical observation writes nothing (so retries are idempotent).
+  AttributionWriteOutcome saveAutomaticAttribution(
+    int transcriptId,
+    TranscriptAttribution attribution,
+  ) {
+    if (attribution.manual) {
+      throw ArgumentError.value(
+        attribution.manual,
+        'attribution',
+        'Use setManualAttribution for corrections',
+      );
+    }
+    return _savepoint(
+      'save_automatic_attribution',
+      () =>
+          _writeAttribution(transcriptId, attribution, overwriteManual: false),
+    );
+  }
+
+  /// A user correction replaces any prior attribution and survives all later
+  /// automatic observations until [resetAttribution]. It also records a durable
+  /// reprojection intent for the owning meeting.
+  void setManualAttribution(
+    int transcriptId,
+    TranscriptAttribution attribution,
+  ) {
+    if (!attribution.manual) {
+      throw ArgumentError.value(
+        attribution.manual,
+        'attribution',
+        'A correction must be manual',
+      );
+    }
+    _savepoint('save_manual_attribution', () {
+      _writeAttribution(transcriptId, attribution, overwriteManual: true);
+      _requestIndex(_transcriptMeeting(transcriptId));
+    });
+  }
+
+  /// Remove a correction (or any attribution) so the row shows its channel
+  /// label again and automatic observation may name it. Returns whether a row
+  /// existed.
+  bool resetAttribution(int transcriptId) =>
+      _savepoint('reset_attribution', () {
+        final meeting = _transcriptMeeting(transcriptId);
+        db.execute(
+          'DELETE FROM transcript_attributions WHERE transcript_id=?',
+          [transcriptId],
+        );
+        final removed = db.updatedRows == 1;
+        if (removed) _requestIndex(meeting);
+        return removed;
+      });
+
+  /// Rename a participant for the whole meeting: the participant name becomes
+  /// user-owned and every transcript row naming that participant is relabeled
+  /// in one statement, except a row the user corrected to a different custom
+  /// name. Returns the number of relabeled rows.
+  int renameParticipant(int participantId, String displayName) {
+    if (renderedAttributionName(displayName).isEmpty ||
+        displayName.runes.length > maxParticipantNameLength ||
+        displayName.contains('\u0000')) {
+      throw RpcError(
+        RpcErrorCode.invalidArgument,
+        'Participant name must contain 1–$maxParticipantNameLength characters without U+0000.',
+      );
+    }
+    return _savepoint('rename_participant', () {
+      final participant = _rows(
+        'SELECT meeting_id,display_name FROM meeting_participants WHERE id=?',
+        [participantId],
+      ).firstOrNull;
+      if (participant == null) {
+        throw RpcError(
+          RpcErrorCode.notFound,
+          'Participant not found: $participantId',
+        );
+      }
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final previousName = participant['display_name'] as String;
+      db.execute(
+        'UPDATE meeting_participants SET previous_display_name=CASE WHEN display_name IS NOT ? THEN display_name ELSE previous_display_name END,'
+        'rename_count=rename_count+(display_name IS NOT ?),'
+        'name_changed_ms=CASE WHEN display_name IS NOT ? THEN ? ELSE name_changed_ms END,'
+        'display_name=?,name_manual=1 WHERE id=?',
+        [
+          displayName,
+          displayName,
+          displayName,
+          now,
+          displayName,
+          participantId,
+        ],
+      );
+      db.execute(
+        "UPDATE transcript_attributions SET display_name=?,rendered_name=?,revision=revision+1,updated_ms=? "
+        "WHERE participant_id=? AND state='attributed' AND (manual=0 OR display_name=?) "
+        'AND (display_name IS NOT ? OR rendered_name IS NOT ?)',
+        [
+          displayName,
+          renderedAttributionName(displayName),
+          now,
+          participantId,
+          previousName,
+          displayName,
+          renderedAttributionName(displayName),
+        ],
+      );
+      final relabeled = db.updatedRows;
+      if (relabeled > 0) _requestIndex(participant['meeting_id'] as int);
+      return relabeled;
+    });
+  }
+
+  int _transcriptMeeting(int transcriptId) {
+    final row = _rows('SELECT meeting_id FROM transcript WHERE id=?', [
+      transcriptId,
+    ]).firstOrNull;
+    if (row == null) {
+      throw RpcError(
+        RpcErrorCode.notFound,
+        'Transcript segment not found: $transcriptId',
+      );
+    }
+    return row['meeting_id'] as int;
+  }
+
+  // The durable intent lets recovery reproject after a crash; the application
+  // still owns kicking its tracked producer.
+  void _requestIndex(int meeting) {
+    final epoch = _workspaceEpoch;
+    if (epoch == null) return;
+    MeetingIndexJobs(db, workspaceEpoch: epoch).request(meeting);
+  }
+
+  AttributionWriteOutcome _writeAttribution(
+    int transcriptId,
+    TranscriptAttribution attribution, {
+    required bool overwriteManual,
+  }) {
+    _transcriptMeeting(transcriptId);
+    var a = attribution;
+    if (!overwriteManual &&
+        a.participantId != null &&
+        a.state == AttributionState.attributed) {
+      // A name the user gave the participant outranks the observed spelling,
+      // so a delayed or retried observation cannot undo a rename.
+      final owner = _rows(
+        'SELECT display_name FROM meeting_participants WHERE id=? AND name_manual=1',
+        [a.participantId],
+      ).firstOrNull;
+      if (owner != null && owner['display_name'] != a.displayName) {
+        a = a.withDisplayName(owner['display_name'] as String);
+      }
+    }
+    final existing = _rows(
+      'SELECT * FROM transcript_attributions WHERE transcript_id=?',
+      [transcriptId],
+    ).firstOrNull;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final values = [
+      a.participantId,
+      a.displayName,
+      a.renderedName,
+      a.state.name,
+      a.method,
+      a.parserVersion,
+      a.policyVersion,
+      a.evidenceJson,
+      a.manual ? 1 : 0,
+      now,
+    ];
+    if (existing == null) {
+      db.execute(
+        'INSERT INTO transcript_attributions(participant_id,display_name,rendered_name,state,method,parser_version,policy_version,evidence,manual,updated_ms,transcript_id) '
+        'VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+        [...values, transcriptId],
+      );
+      return AttributionWriteOutcome.written;
+    }
+    if (existing['manual'] == 1 && !overwriteManual) {
+      return AttributionWriteOutcome.protectedByManual;
+    }
+    if (TranscriptAttribution.fromRow(existing).sameContent(a)) {
+      return AttributionWriteOutcome.unchanged;
+    }
+    db.execute(
+      'UPDATE transcript_attributions SET participant_id=?,display_name=?,rendered_name=?,state=?,method=?,parser_version=?,policy_version=?,evidence=?,manual=?,updated_ms=?,revision=revision+1 WHERE transcript_id=?',
+      [...values, transcriptId],
+    );
+    return AttributionWriteOutcome.written;
   }
 
   void artifact(

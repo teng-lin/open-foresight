@@ -124,10 +124,60 @@ void prePreferenceEntitiesFixture(Database db) {
   }
 }
 
+/// Reconstruct the actual pre25 schema: no attributions or participants, and
+/// the version-22 `source_contents` view that renders channel labels only. Like
+/// the audio fixture it refuses content it would silently discard.
+void preMeetingAttributionFixture(Database db) {
+  if (db
+      .select(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_attributions'",
+      )
+      .isEmpty) {
+    return;
+  }
+  if (db.select('SELECT 1 FROM transcript_attributions LIMIT 1').isNotEmpty ||
+      db.select('SELECT 1 FROM meeting_participants LIMIT 1').isNotEmpty) {
+    throw StateError(
+      'A historical migration fixture cannot contain speaker attribution',
+    );
+  }
+  for (final trigger in [
+    'transcript_attribution_participant_insert',
+    'transcript_attribution_participant_update',
+    'transcript_attribution_manual_guard',
+    'transcript_attribution_manual_replace_guard',
+    'transcript_attribution_replace',
+    'transcript_attribution_insert',
+    'transcript_attribution_update',
+    'transcript_attribution_delete',
+    'transcript_attribution_erase_replaced',
+    'transcript_attribution_erase_replace',
+    'transcript_attribution_erase',
+    'meeting_participant_erase_renamed',
+    'meeting_participant_erase',
+  ]) {
+    db.execute('DROP TRIGGER $trigger');
+  }
+  db.execute('DROP TABLE transcript_attributions');
+  db.execute('DROP TABLE meeting_participants');
+  db.execute('DROP VIEW source_contents');
+  db.execute('''
+CREATE VIEW source_contents AS SELECT s.id,CASE WHEN s.generated=1 AND m.meeting_id IS NOT NULL
+ THEN COALESCE((SELECT group_concat(body,char(10)) FROM (
+  SELECT '['||CASE trim(substr(t.source,1,instr(t.source||';',';')-1),char(9,10,11,12,13,32,133,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279))
+  WHEN 'microphone' THEN 'Microphone' WHEN 'microphone-capture-interruption' THEN 'Microphone'
+  WHEN 'playback' THEN 'Remote' WHEN 'playback-capture-interruption' THEN 'Remote' ELSE 'Unknown' END||' '||
+  CAST(COALESCE(t.start_ms,0) AS INTEGER)||'–'||CAST(COALESCE(t.end_ms,0) AS INTEGER)||' ms] '||COALESCE(t.text,'') AS body
+  FROM transcript t WHERE t.meeting_id=m.meeting_id AND t.final=1 ORDER BY t.id)), '')
+ ELSE s.content END AS content FROM sources s LEFT JOIN meeting_transcript_sources m ON m.source_id=s.id;
+''');
+}
+
 /// Reconstruct the actual pre24 schema. These downgrade fixtures contain no
 /// retained media; refusing nonempty audio avoids silently discarding fixture
 /// content while manufacturing an older database version.
 void preRecordingAudioFixture(Database db) {
+  preMeetingAttributionFixture(db);
   if (db
       .select(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='recording_sessions'",

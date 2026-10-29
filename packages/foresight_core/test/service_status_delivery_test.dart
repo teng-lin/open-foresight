@@ -758,6 +758,10 @@ void main() {
             "INSERT INTO transcript_audio_links VALUES(1,'audio-asr',0,0,'microphone',0,48000)",
         'audio_media_references':
             "INSERT INTO audio_media_references VALUES('audio-reader','audio-raw','reader-generation','playback')",
+        'meeting_participants':
+            "INSERT INTO meeting_participants(id,meeting_id,scope,identity_key,display_name,first_seen_ms,last_seen_ms) VALUES(1,1,'scope','key','Participant',0,1)",
+        'transcript_attributions':
+            "INSERT INTO transcript_attributions(transcript_id,participant_id,display_name,rendered_name,state,updated_ms) VALUES(1,1,'Participant','Participant','attributed',1)",
       };
       final tables = store
           .rows(

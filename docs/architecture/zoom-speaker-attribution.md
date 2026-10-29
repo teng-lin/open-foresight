@@ -8,7 +8,9 @@ code.
 
 Status: proposed implementation. Source baseline:
 `f7c063834b0e9e17f3c3507dd2ab93c8f34a1eeb`. The application schema at this baseline
-is version 23; allocate the next available ordered migration during implementation.
+is version 23; the recording-audio store then took version 24, and speaker
+attribution persistence is ordered migration 25 (see
+[schema migrations](schema-migrations.md)).
 Live Zoom acceptance is a required deliverable for each platform.
 
 ## Product behavior and delivery scope

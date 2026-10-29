@@ -1618,7 +1618,10 @@ void main() {
       failed.dispose();
       final upgraded = Store(oldPath);
       addTearDown(upgraded.close);
-      expect(upgraded.rows('PRAGMA user_version').single.values.single, 24);
+      expect(
+        upgraded.rows('PRAGMA user_version').single.values.single,
+        Store.schemaVersion,
+      );
       expect(upgraded.audioStore.storageGeneration, isNotEmpty);
       expect(upgraded.audioStore.mediaAdmitted, isFalse);
     },
