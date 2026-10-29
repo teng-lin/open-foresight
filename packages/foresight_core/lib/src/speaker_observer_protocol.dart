@@ -233,6 +233,15 @@ final class ObserverFrameEncoder {
 
   static void _requireOpaque(String value, String name) {
     if (!_isOpaque(value)) throw ArgumentError.value(name, name, 'invalid');
+    // The helpers bound identifiers by their escaped UTF-8 size, not by
+    // characters: refuse here what they would refuse there.
+    if (utf8.encode(jsonEncode(value)).length > _maxOpaqueLength + 2) {
+      throw ArgumentError.value(
+        name,
+        name,
+        'longer than $_maxOpaqueLength bytes once JSON-escaped',
+      );
+    }
   }
 }
 

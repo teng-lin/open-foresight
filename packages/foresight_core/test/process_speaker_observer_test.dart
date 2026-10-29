@@ -20,6 +20,7 @@ SpeakerObserverConfig fastConfig({
   Duration? restartRefillAfter = const Duration(minutes: 5),
   int pollMs = 100,
   int readDeadlineMs = 100,
+  int helperReadBudgetMs = 100,
   Duration stallSlack = const Duration(seconds: 5),
   int clockProbes = 3,
   Duration? clockRecheck = const Duration(seconds: 30),
@@ -38,6 +39,7 @@ SpeakerObserverConfig fastConfig({
   arguments: const ['--flag'],
   pollMs: pollMs,
   readDeadlineMs: readDeadlineMs,
+  helperReadBudgetMs: helperReadBudgetMs,
   spawnTimeout: spawn,
   handshakeTimeout: handshake,
   requestTimeout: request,
@@ -487,6 +489,18 @@ void main() {
         );
       }
     });
+
+    test(
+      'a session identifier the helper would refuse is refused locally',
+      () async {
+        h = Harness();
+        await expectLater(
+          h.observer.start('\u00e9' * 65),
+          throwsA(failureOf(SpeakerObserverFailure.invalidArgument)),
+        );
+        expect(h.helpers, isEmpty);
+      },
+    );
 
     test('keeps the lowest-latency clock probe', () async {
       h = Harness();
@@ -1753,6 +1767,27 @@ void main() {
             .first
             .value,
         9,
+      );
+    });
+
+    test('a short requested deadline does not shorten the stall timeout below '
+        'the helpers\' fixed read budget', () {
+      final config = SpeakerObserverConfig(
+        executable: '/fake/helper',
+        pollMs: 500,
+        readDeadlineMs: 200,
+        stallSlack: const Duration(seconds: 1),
+      );
+      // poll 500 + the 1500 ms budget + slack 1000, not 500 + 200 + 1000.
+      expect(config.stallTimeout, const Duration(milliseconds: 3000));
+      expect(
+        SpeakerObserverConfig(
+          executable: '/fake/helper',
+          pollMs: 500,
+          readDeadlineMs: 5000,
+          stallSlack: const Duration(seconds: 1),
+        ).stallTimeout,
+        const Duration(milliseconds: 6500),
       );
     });
 

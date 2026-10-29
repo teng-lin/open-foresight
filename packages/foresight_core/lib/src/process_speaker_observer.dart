@@ -72,6 +72,7 @@ final class SpeakerObserverConfig {
     this.arguments = const [],
     this.pollMs = 500,
     this.readDeadlineMs = 2000,
+    this.helperReadBudgetMs = 1500,
     this.spawnTimeout = const Duration(seconds: 5),
     this.handshakeTimeout = const Duration(seconds: 5),
     this.requestTimeout = const Duration(seconds: 5),
@@ -97,9 +98,17 @@ final class SpeakerObserverConfig {
   final List<String> arguments;
 
   /// Polling period and per-read deadline requested of the helper. A started
-  /// helper must emit one `observation` or `unavailable` frame per poll, so
-  /// silence for longer than poll + deadline + [stallSlack] is a stall.
+  /// helper emits one `observation` per poll while it can read the meeting, so
+  /// silence after one for longer than poll + read time + [stallSlack] is a
+  /// stall. `unavailable` is reported only when it begins or its reason
+  /// changes: after it silence is normal and a quiet helper is probed instead.
   final int pollMs, readDeadlineMs;
+
+  /// How long one read can take whatever [readDeadlineMs] says: both helpers
+  /// give a read a fixed 1500 ms budget. Stall detection allows the larger of
+  /// the two, so a healthy helper is not replaced for a read that is within
+  /// its budget but over a short requested deadline.
+  final int helperReadBudgetMs;
   final Duration spawnTimeout, handshakeTimeout, requestTimeout, stallSlack;
 
   /// Waits after closing stdin / `stop`, then after SIGTERM, then after SIGKILL.
@@ -140,7 +149,10 @@ final class SpeakerObserverConfig {
   final int maxStderrBytes, maxLineBytes;
 
   Duration get stallTimeout =>
-      Duration(milliseconds: pollMs + readDeadlineMs) + stallSlack;
+      Duration(
+        milliseconds: pollMs + math.max(readDeadlineMs, helperReadBudgetMs),
+      ) +
+      stallSlack;
 
   int get frameRateLimit => maxFramesPerSecond ?? math.max(20, 4000 ~/ pollMs);
 
@@ -154,6 +166,7 @@ final class SpeakerObserverConfig {
         pollMs > 5000 ||
         readDeadlineMs < 100 ||
         readDeadlineMs > 30000 ||
+        helperReadBudgetMs < 1 ||
         maxRestarts < 0 ||
         clockProbes < 1 ||
         maxStderrBytes < 0 ||
@@ -1391,7 +1404,8 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
         if (!_plausible(since, since)) return _implausible(connection);
         connection.quiet = true;
         _count(unavailableFrames: 1);
-        // A helper repeats the same unavailability every poll as a heartbeat.
+        // Only a change is reported by the helpers; the same state again (a
+        // different helper, or a repeat) is not a new event.
         if (frame.reason != _lastUnavailableReason ||
             frame.sinceUs != _lastUnavailableSince) {
           _lastUnavailableReason = frame.reason;

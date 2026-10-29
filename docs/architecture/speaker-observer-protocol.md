@@ -60,7 +60,7 @@ platform helpers (`zoom_observer_macos`, `zoom_observer_linux`). Design context:
 | --- | --- | --- |
 | `capabilities` | `id` | Report availability without prompting or changing settings |
 | `setup` | `id` | Explicit accessibility setup (may prompt / guide the user); reply with `capabilities` |
-| `start` | `id`, `session`, `poll_ms` (100 to 5000), `deadline_ms` (100 to 30000) | Begin observing the selected meeting for recording session `session`; `deadline_ms` bounds one read and the helper's shutdown |
+| `start` | `id`, `session`, `poll_ms` (100 to 5000), `deadline_ms` (100 to 30000) | Begin observing the selected meeting for recording session `session`; `deadline_ms` bounds the helper's shutdown; a read has a fixed 1500 ms budget in both helpers whatever it is |
 | `stop` | `id` | Finish the interval, emit `stopped`, exit 0 within `deadline_ms` |
 | `clock` | `id` | Reply with `clock` frame for offset measurement |
 
@@ -130,7 +130,7 @@ supervision.
 While started, the helper emits one `observation` per poll while it can read
 the meeting, and an `unavailable` frame only when an unavailable interval begins
 or its reason changes. The service therefore expects a frame within
-`poll_ms + deadline_ms` plus a slack after an `observation`, and treats longer
+`poll_ms + max(deadline_ms, 1500)` plus a slack after an `observation`, and treats longer
 silence as a stalled helper, terminates it and restarts it. After an
 `unavailable` frame silence is normal; the service then sends a `capabilities`
 request each stall timeout, which the polling thread answers between reads, and

@@ -103,6 +103,28 @@ void main() {
       expect(types, ['capabilities', 'setup', 'stop', 'clock']);
     });
 
+    test('bounds identifiers by escaped UTF-8 bytes, as the helpers do', () {
+      String encodeSession(String session) => utf8.decode(
+        ObserverFrameEncoder().encode(
+          StartRequest(
+            id: 'i1',
+            session: session,
+            pollMs: 500,
+            deadlineMs: 2000,
+          ),
+        ),
+      );
+      expect(encodeSession('a' * 128), contains('"session":"${'a' * 128}"'));
+      expect(() => encodeSession('a' * 129), throwsArgumentError);
+      // 64 two-byte characters are exactly 128 bytes; one more is not.
+      expect(encodeSession('\u00e9' * 64), contains('\u00e9'));
+      expect(() => encodeSession('\u00e9' * 65), throwsArgumentError);
+      expect(() => encodeSession('\u{1F600}' * 33), throwsArgumentError);
+      // A quote costs two bytes, so 64 quotes are 128 and 65 are not.
+      expect(encodeSession('"' * 64), isNotEmpty);
+      expect(() => encodeSession('"' * 65), throwsArgumentError);
+    });
+
     test('rejects a request larger than the line limit', () {
       final encoder = ObserverFrameEncoder(maxLineBytes: 20);
       expect(
