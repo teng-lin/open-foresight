@@ -32,6 +32,10 @@ namespace {
 
 int failures = 0;
 int checks = 0;
+// Counted from the helper's reader thread when its stall guard fires inside an
+// in-process test: in production that guard ends the process, which here would
+// silently end the whole test binary with exit 0.
+std::atomic<int> unexpected_guard_exits{0};
 
 #define CHECK(condition, message)                                              \
   do {                                                                         \
@@ -174,20 +178,27 @@ public:
     frame_fd_ = out[0];
     stderr_fd_ = err[0];
     ObserverConfig config = test_config(in[0], out[1], err[1]);
+    config.exit_process = [](int code) {
+      ++unexpected_guard_exits;
+      std::fprintf(stderr,
+                   "FAIL: the stall guard ended the process (code %d) during "
+                   "an in-process test\n",
+                   code);
+    };
     thread_ = std::thread(
         [this, &source, config, in0 = in[0], out1 = out[1], err1 = err[1]] {
           exit_code_ = run_observer(source, config);
           ::close(out1);
           ::close(err1);
           ::close(in0);
+          finished_ = true;
         });
   }
 
   ~Harness() {
     if (request_fd_ >= 0)
       ::close(request_fd_);
-    if (thread_.joinable())
-      thread_.join();
+    join();
     if (frame_fd_ >= 0)
       ::close(frame_fd_);
     ::close(stderr_fd_);
@@ -291,9 +302,27 @@ public:
     return text;
   }
 
+  // Waits for the helper to exit, reading and discarding its output meanwhile:
+  // a helper blocked writing to a pipe nobody reads can only be rescued by its
+  // stall guard, which would end the test process.
   int join() {
-    if (thread_.joinable())
+    if (thread_.joinable()) {
+      auto deadline = steady_clock::now() + milliseconds(10000);
+      while (!finished_ && steady_clock::now() < deadline) {
+        if (frame_fd_ < 0) {
+          std::this_thread::sleep_for(milliseconds(5));
+          continue;
+        }
+        pollfd descriptor{frame_fd_, POLLIN, 0};
+        if (::poll(&descriptor, 1, 20) > 0) {
+          char chunk[65536];
+          if (::read(frame_fd_, chunk, sizeof chunk) <= 0)
+            std::this_thread::sleep_for(milliseconds(5)); // EOF: thread ends
+        }
+      }
+      CHECK(finished_, "the helper exits while its output is drained");
       thread_.join();
+    }
     return exit_code_;
   }
 
@@ -301,6 +330,7 @@ private:
   int request_fd_ = -1, frame_fd_ = -1, stderr_fd_ = -1;
   std::thread thread_;
   int exit_code_ = -1;
+  std::atomic<bool> finished_{false};
   uint64_t out_seq_ = 0, in_seq_ = 0;
   std::string buffer_;
 };
@@ -349,6 +379,37 @@ struct Child {
     return true;
   }
 
+  // Reads everything the child writes until it closes stdout (that is, exits),
+  // appending to `output`. Returns false if it was still writing at the
+  // deadline.
+  bool drain(int timeout_ms) {
+    auto deadline = steady_clock::now() + milliseconds(timeout_ms);
+    for (;;) {
+      int remaining = static_cast<int>(std::chrono::duration_cast<milliseconds>(
+                                           deadline - steady_clock::now())
+                                           .count());
+      pollfd descriptor{from_child, POLLIN, 0};
+      if (remaining <= 0 || ::poll(&descriptor, 1, remaining) <= 0)
+        return false;
+      char chunk[4096];
+      ssize_t count = ::read(from_child, chunk, sizeof chunk);
+      if (count <= 0)
+        return true;
+      output.append(chunk, static_cast<size_t>(count));
+    }
+  }
+
+  // Number of complete frames (lines) of the given type seen so far.
+  size_t frames_of(const std::string &type) const {
+    size_t total = 0, at = 0;
+    const std::string needle = "\"type\":\"" + type + "\"";
+    while ((at = output.find(needle, at)) != std::string::npos) {
+      ++total;
+      at += needle.size();
+    }
+    return total;
+  }
+
   // Waits for the child to exit; kills it (by exact PID) after `timeout_ms`.
   int reap_within(int timeout_ms, bool &timed_out) {
     int status = 0;
@@ -393,6 +454,32 @@ Child spawn_stalled(int stall_ms, bool fill_stdout = false) {
       source.fill_fd = out[1];
     ObserverConfig config =
         test_config(in[0], out[1], ::open("/dev/null", O_WRONLY));
+    ::_exit(run_observer(source, config));
+  }
+  ::close(in[0]);
+  ::close(out[1]);
+  Child child;
+  child.pid = pid;
+  child.to_child = in[1];
+  child.from_child = out[0];
+  return child;
+}
+
+// Forks an observer that reads quickly but is slow to finish after writing its
+// closing frame (the `after_closing_frame` seam), so the shutdown guard times
+// out in the window between "closing frame written" and "main loop done".
+Child spawn_slow_finisher(int delay_ms) {
+  int in[2], out[2];
+  if (::pipe(in) || ::pipe(out))
+    std::abort();
+  pid_t pid = ::fork();
+  if (pid == 0) {
+    ::close(in[1]);
+    ::close(out[0]);
+    ScriptedSource source({gated("zoom_not_running", "zoom_not_running")});
+    ObserverConfig config =
+        test_config(in[0], out[1], ::open("/dev/null", O_WRONLY));
+    config.after_closing_frame = [delay_ms] { ::usleep(delay_ms * 1000); };
     ::_exit(run_observer(source, config));
   }
   ::close(in[0]);
@@ -476,10 +563,14 @@ void check_eof_and_fatal_during_stall() {
     auto begin = steady_clock::now();
     ::close(child.to_child);
     child.to_child = ::open("/dev/null", O_WRONLY);
+    // Read to EOF first: what the child wrote is only known once it is gone.
+    CHECK(child.drain(3000), "the child exits after end of input");
     CHECK(child.reap() == 0, "stdin close during a stalled read exits 0");
     CHECK(elapsed_ms(begin) < 1500, "end of input honors the session deadline");
-    CHECK(child.output.find("stopped") == std::string::npos,
-          "end of input emits no stopped frame");
+    CHECK(child.frames_of("hello") == 1,
+          "the drain saw the child's frames: " + child.output);
+    CHECK(child.frames_of("stopped") == 0 && child.frames_of("error") == 0,
+          "end of input emits no closing frame: " + child.output);
   }
   {
     Child child = spawn_stalled(6000);
@@ -494,7 +585,53 @@ void check_eof_and_fatal_during_stall() {
     CHECK(child.wait_output("malformed_json", 3000),
           "a protocol error is reported during a stalled read");
     CHECK(elapsed_ms(begin) < 1500, "fatal error honors the deadline");
+    CHECK(child.drain(3000), "the child exits after a fatal error");
     CHECK(child.reap() == 2, "exit 2 after a fatal error during a stall");
+    CHECK(child.frames_of("error") == 1 && child.frames_of("stopped") == 0,
+          "exactly one error frame follows hello: " + child.output);
+  }
+}
+
+// The guard's deadline can pass after the main loop wrote the closing frame but
+// before it marked itself done. That is a clean exit, not a lost frame: the
+// guard used to find the writer closed and turn it into exit 3.
+void check_guard_race_keeps_the_intended_exit_code() {
+  {
+    Child child = spawn_slow_finisher(700);
+    child.send({{"type", "start"},
+                {"id", "a"},
+                {"session", "s"},
+                {"deadline_ms", 100}});
+    child.send({{"type", "stop"}, {"id", "b"}});
+    CHECK(child.drain(4000), "the child exits");
+    bool timed_out = false;
+    int code = child.reap_within(2000, timed_out);
+    CHECK(code == 0,
+          "a delivered stopped is a clean exit 0, got " + std::to_string(code));
+    CHECK(child.frames_of("stopped") == 1,
+          "stopped was delivered exactly once: " + child.output);
+  }
+  {
+    Child child = spawn_slow_finisher(700);
+    child.send({{"type", "start"},
+                {"id", "a"},
+                {"session", "s"},
+                {"deadline_ms", 100}});
+    (void)!::write(child.to_child, "garbage\n", 8);
+    CHECK(child.drain(4000), "the child exits");
+    bool timed_out = false;
+    int code = child.reap_within(2000, timed_out);
+    CHECK(code == 2,
+          "a delivered fatal error exits 2, got " + std::to_string(code));
+    // The queued start may be answered `cancelled`; the fatal error is the one
+    // carrying malformed_json, and it must be delivered exactly once.
+    size_t fatal_frames = 0;
+    for (size_t at = 0;
+         (at = child.output.find("malformed_json", at)) != std::string::npos;
+         at += 14)
+      ++fatal_frames;
+    CHECK(fatal_frames == 1,
+          "the fatal error was delivered once: " + child.output);
   }
 }
 
@@ -1079,7 +1216,9 @@ void check_boundaries() {
   CHECK(reply({{"type", "clock"}}, "error")["code"] == "invalid_request",
         "a missing id is refused");
 
-  // Start field bounds, each refused request leaves the session unstarted.
+  // Start field bounds. Every refused request leaves the session unstarted
+  // (proved by the valid start on the same harness afterwards); every accepted
+  // one starts a session on a harness of its own.
   struct Bound {
     json fields;
     bool accepted;
@@ -1094,36 +1233,44 @@ void check_boundaries() {
       {{{"session", "s"}, {"poll_ms", 1.5}}, false, "poll_ms fraction"},
       {{{"session", "s"}, {"deadline_ms", 99}}, false, "deadline_ms 99"},
       {{{"session", "s"}, {"deadline_ms", 30001}}, false, "deadline_ms 30001"},
+      {{{"session", std::string(128, 's')},
+        {"poll_ms", 100},
+        {"deadline_ms", 100}},
+       true,
+       "session 128 bytes, minimum poll and deadline"},
+      {{{"session", "s"}, {"poll_ms", 5000}, {"deadline_ms", 30000}},
+       true,
+       "maximum poll and deadline"},
       {{{"session", "s"}, {"deadline_ms", nullptr}, {"poll_ms", nullptr}},
        true,
        "null optional fields"},
   };
   for (const auto &bound : bounds) {
-    if (bound.accepted)
-      continue;
     json request = bound.fields;
     request["type"] = "start";
     request["id"] = bound.label;
-    json frame = reply(request, "error");
-    CHECK(frame["code"] == "invalid_request" && frame["id"] == bound.label,
-          std::string("refused: ") + bound.label);
-  }
-  for (const auto &accepted :
-       {json{{"session", std::string(128, 's')},
-             {"poll_ms", 100},
-             {"deadline_ms", 100}},
-        json{{"session", "s"}, {"poll_ms", 5000}, {"deadline_ms", 30000}}}) {
+    if (!bound.accepted) {
+      json frame = reply(request, "error");
+      CHECK(frame["code"] == "invalid_request" && frame["id"] == bound.label,
+            std::string("refused: ") + bound.label);
+      continue;
+    }
     ScriptedSource ok_source({gated("zoom_not_running", "zoom_not_running")});
     Harness inner(ok_source);
     inner.expect("hello");
-    json request = accepted;
-    request["type"] = "start";
-    request["id"] = "ok";
     inner.send(request);
-    CHECK(inner.expect("started")["id"] == "ok", "boundary start accepted");
+    json started = inner.expect("started");
+    CHECK(started["id"] == bound.label &&
+              started["session"] == bound.fields["session"],
+          std::string("accepted: ") + bound.label);
     inner.close_input();
     inner.join();
   }
+  // None of the refusals started a session: a valid start still succeeds.
+  json valid =
+      reply({{"type", "start"}, {"id", "valid"}, {"session", "ok"}}, "started");
+  CHECK(valid["id"] == "valid" && valid["session"] == "ok",
+        "a valid start after the refusals starts the session");
   h.close_input();
   CHECK(h.join() == 0, "exits 0");
 }
@@ -1466,6 +1613,13 @@ void check_unwatchable_stdout() {
 } // namespace
 
 // ZOOM_TEST_TRACE=1 names each test before it runs, to find a hang.
+// Runs a test, naming it first when tracing; the label is the function itself.
+#define RUN(test)                                                              \
+  do {                                                                         \
+    trace(#test);                                                              \
+    test();                                                                    \
+  } while (0)
+
 void trace(const char *name) {
   if (std::getenv("ZOOM_TEST_TRACE"))
     std::fprintf(stderr, "running %s\n", name);
@@ -1476,54 +1630,35 @@ int main(int argc, char **argv) {
   (void)argv;
   std::signal(SIGPIPE, SIG_IGN);
   // Fork-based tests first, before any other thread exists.
-  trace("check_stalled_read_stop");
-  check_stalled_read_stop();
-  trace("check_duplicate_start_keeps_session");
-  check_duplicate_start_keeps_session();
-  trace("check_eof_and_fatal_during_stall");
-  check_eof_and_fatal_during_stall();
-  trace("check_clock_during_stall");
-  check_clock_during_stall();
-  trace("check_guard_survives_a_full_stdout");
-  check_guard_survives_a_full_stdout();
-  trace("check_guard_reports_only_a_started_session");
-  check_guard_echoes_the_accepted_session();
-  trace("check_hello_and_clock");
-  check_hello_and_clock();
-  trace("check_capabilities");
-  check_capabilities();
-  trace("check_session");
-  check_session();
-  trace("check_identity_flags_incomplete");
-  check_equal_names_policy();
-  trace("check_ref_table");
-  check_ref_table();
-  trace("check_max_observation_fits_and_oversize_recovers");
-  check_max_observation_fits_and_oversize_recovers();
-  trace("check_protocol_errors");
-  check_protocol_errors();
-  trace("check_boundaries");
-  check_boundaries();
-  trace("check_framing");
-  check_framing();
-  trace("check_start_without_zoom_and_cadence");
-  check_start_without_zoom_and_cadence();
-  trace("check_cooperative_cancellation");
-  check_cooperative_cancellation();
-  trace("check_polling_not_starved_by_requests");
-  check_polling_not_starved_by_requests();
-  trace("check_broken_stdout_ends_the_helper");
-  check_broken_stdout_ends_the_helper();
-  trace("check_stop_is_not_queued_behind_a_full_queue");
-  check_stop_is_not_queued_behind_a_full_queue();
-  trace("check_idle_hangup_is_detected");
-  check_idle_hangup_is_detected();
-  trace("check_unwatchable_stdout");
-  check_unwatchable_stdout();
-  trace("check_busy_start_can_be_retried");
-  check_busy_start_can_be_retried();
-  trace("check_invalid_configuration_is_refused");
-  check_invalid_configuration_is_refused();
+  RUN(check_stalled_read_stop);
+  RUN(check_duplicate_start_keeps_session);
+  RUN(check_eof_and_fatal_during_stall);
+  RUN(check_clock_during_stall);
+  RUN(check_guard_race_keeps_the_intended_exit_code);
+  RUN(check_guard_survives_a_full_stdout);
+  RUN(check_guard_echoes_the_accepted_session);
+  RUN(check_hello_and_clock);
+  RUN(check_capabilities);
+  RUN(check_session);
+  RUN(check_equal_names_policy);
+  RUN(check_ref_table);
+  RUN(check_max_observation_fits_and_oversize_recovers);
+  RUN(check_protocol_errors);
+  RUN(check_boundaries);
+  RUN(check_framing);
+  RUN(check_start_without_zoom_and_cadence);
+  RUN(check_cooperative_cancellation);
+  RUN(check_polling_not_starved_by_requests);
+  RUN(check_broken_stdout_ends_the_helper);
+  RUN(check_stop_is_not_queued_behind_a_full_queue);
+  RUN(check_idle_hangup_is_detected);
+  RUN(check_unwatchable_stdout);
+  RUN(check_busy_start_can_be_retried);
+  RUN(check_invalid_configuration_is_refused);
+  if (unexpected_guard_exits != 0)
+    ++failures;
+  // ctest requires this exact final line (PASS_REGULAR_EXPRESSION), so a run
+  // that ends early, even with exit 0, cannot pass.
   std::printf("zoom_observer_core: %d checks, %d failures\n", checks, failures);
   return failures == 0 ? 0 : 1;
 }

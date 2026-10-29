@@ -93,6 +93,14 @@ public:
     return result;
   }
 
+  // True once a terminal frame (`stopped`, or the fatal `error`) was written by
+  // anyone. The shutdown guard uses it to tell "the consumer never saw the
+  // closing frame" from "the main loop delivered it and is only late to
+  // finish".
+  bool terminal_written() const {
+    return terminal_written_.load();
+  }
+
   // The reader polls stdout for a hang-up while idle.
   void mark_failed() {
     bool first = false;
@@ -145,8 +153,11 @@ private:
           result = Result::Failed;
         }
       }
-      if (terminal)
+      if (terminal) {
         closed_ = true;
+        if (result == Result::Written)
+          terminal_written_ = true;
+      }
     }
     if (first_failure && failure_)
       failure_();
@@ -177,6 +188,7 @@ private:
   }
 
   std::atomic<Clock::rep> bounded_blocked_until_{0};
+  std::atomic<bool> terminal_written_{false};
   std::timed_mutex mutex_;
   int fd_;
   uint64_t seq_ = 0;
@@ -291,9 +303,10 @@ bool optional_int(const json &request, const char *name, int low, int high,
 class Reader {
 public:
   Reader(Shared &shared, Writer &writer, Source &source, Diagnostics &diag,
-         int fd, int wake_fd, int out_fd)
+         int fd, int wake_fd, int out_fd, std::function<void(int)> exit_process)
       : shared_(shared), writer_(writer), source_(source), diag_(diag), fd_(fd),
-        wake_fd_(wake_fd), watch_out_(watchable_output(out_fd, fd)) {}
+        wake_fd_(wake_fd), watch_out_(watchable_output(out_fd, fd)),
+        exit_process_(std::move(exit_process)) {}
 
   void run() {
     std::string line;
@@ -406,6 +419,11 @@ private:
     // A closing frame that could not be written (a wedged or broken stdout, or
     // an oversize one) means the consumer never saw it: exit 3, not 0. A write
     // can also be cut short by this exit, leaving a torn last line.
+    // If the main loop already wrote the closing frame and was merely slow to
+    // mark itself done, nothing was lost: leave with the code it intends.
+    const int intended = kind == Request::Kind::Fatal ? kExitProtocol : 0;
+    if (writer_.terminal_written())
+      return leave(intended);
     Writer::Result written = Writer::Result::Written;
     if (kind == Request::Kind::Stop)
       written = writer_.emit_bounded(
@@ -417,9 +435,21 @@ private:
       written = writer_.emit_bounded(
           "error", {{"code", request.code}, {"message", "protocol error"}},
           true);
-    if (written != Writer::Result::Written)
-      ::_exit(kExitOutput);
-    ::_exit(kind == Request::Kind::Fatal ? kExitProtocol : 0);
+    // The lock wait can end while the main loop is finishing its own closing
+    // write, so check again before calling the frame lost.
+    if (written != Writer::Result::Written && !writer_.terminal_written())
+      return leave(kExitOutput);
+    leave(intended);
+  }
+
+  // Ends the whole process (the stall guard). `exit_process` is a test seam so
+  // an in-process test can notice that the guard fired instead of silently
+  // losing its own process.
+  void leave(int code) {
+    if (exit_process_)
+      exit_process_(code);
+    else
+      ::_exit(code);
   }
 
   void fatal(const char *code) {
@@ -530,6 +560,7 @@ private:
   int fd_;
   int wake_fd_;
   int watch_out_;
+  std::function<void(int)> exit_process_;
   uint64_t expected_seq_ = 0;
   bool started_ = false;
 };
@@ -788,7 +819,7 @@ int run_observer(Source &source, const ObserverConfig &config) {
                         {"parser_version", config.parser_version},
                         {"platform", config.platform}});
   Reader reader(shared, writer, source, diag, config.in_fd, wake[0],
-                config.out_fd);
+                config.out_fd, config.exit_process);
   std::thread reader_thread([&] { reader.run(); });
 
   Session session(source, writer, shared, diag, config);
@@ -862,6 +893,8 @@ int run_observer(Source &source, const ObserverConfig &config) {
                         {{"id", request.id}, {"session", accepted_session()}},
                         true) == Writer::Result::Failed)
           exit_code = kExitOutput;
+        if (config.after_closing_frame)
+          config.after_closing_frame();
         running = false;
         break;
       case Request::Kind::Eof:
@@ -872,6 +905,8 @@ int run_observer(Source &source, const ObserverConfig &config) {
                     {{"code", request.code}, {"message", "protocol error"}},
                     true);
         exit_code = kExitProtocol;
+        if (config.after_closing_frame)
+          config.after_closing_frame();
         running = false;
         break;
       case Request::Kind::OutputClosed:

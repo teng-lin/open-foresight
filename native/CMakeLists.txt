@@ -439,22 +439,26 @@ if(BUILD_TESTING)
     target_compile_features(zoom_ax_parser_test PRIVATE cxx_std_20)
     target_link_libraries(zoom_ax_parser_test PRIVATE foresight_zoom_ax_parser nlohmann_json::nlohmann_json)
     add_test(NAME zoom_ax_parser COMMAND zoom_ax_parser_test "${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures/zoom_ax")
-    set_tests_properties(zoom_ax_parser PROPERTIES TIMEOUT 30)
+    set_tests_properties(zoom_ax_parser PROPERTIES TIMEOUT 30
+      PASS_REGULAR_EXPRESSION "zoom_ax_parser: [0-9]+ checks, 0 failures")
     add_executable(zoom_observer_core_test ../tests/native/zoom_observer_core.cpp)
     target_compile_features(zoom_observer_core_test PRIVATE cxx_std_20)
     target_link_libraries(zoom_observer_core_test PRIVATE foresight_zoom_observer_core foresight_zoom_ax_parser nlohmann_json::nlohmann_json)
     add_test(NAME zoom_observer_core COMMAND zoom_observer_core_test)
-    set_tests_properties(zoom_observer_core PROPERTIES TIMEOUT 60)
+    set_tests_properties(zoom_observer_core PROPERTIES TIMEOUT 60
+      PASS_REGULAR_EXPRESSION "zoom_observer_core: [0-9]+ checks, 0 failures")
     add_executable(zoom_mac_source_test ../tests/native/zoom_mac_source.cpp)
     target_compile_features(zoom_mac_source_test PRIVATE cxx_std_20)
     target_link_libraries(zoom_mac_source_test PRIVATE foresight_zoom_mac_source)
     add_test(NAME zoom_mac_source COMMAND zoom_mac_source_test)
-    set_tests_properties(zoom_mac_source PROPERTIES TIMEOUT 60)
+    set_tests_properties(zoom_mac_source PROPERTIES TIMEOUT 60
+      PASS_REGULAR_EXPRESSION "zoom_mac_source: [0-9]+ checks, 0 failures")
     add_executable(zoom_ax_convert_test ../tests/native/zoom_ax_convert.cpp)
     target_compile_features(zoom_ax_convert_test PRIVATE cxx_std_20)
     target_link_libraries(zoom_ax_convert_test PRIVATE foresight_zoom_ax_convert)
     add_test(NAME zoom_ax_convert COMMAND zoom_ax_convert_test)
-    set_tests_properties(zoom_ax_convert PROPERTIES TIMEOUT 60)
+    set_tests_properties(zoom_ax_convert PROPERTIES TIMEOUT 60
+      PASS_REGULAR_EXPRESSION "zoom_ax_convert: [0-9]+ checks, 0 failures")
     # The same helper source with a bundle id no application owns, so the
     # protocol test sees "Zoom is not running" even on a machine running Zoom.
     add_executable(zoom_observer_macos_absent zoom_observer_macos.mm)

@@ -75,6 +75,13 @@ struct ObserverConfig {
   // platform and parser_version.
   std::function<ParseResult(const AxSnapshot &)> parse;
   std::string parser_version;
+  // Test seam, unused in production: runs on the main loop right after it
+  // wrote the closing frame (`stopped` or the fatal `error`) and before it
+  // reports itself finished, to make the shutdown-guard race deterministic.
+  std::function<void()> after_closing_frame;
+  // Test seam, unused in production: replaces ::_exit in the stall guard, so an
+  // in-process test can detect the guard firing rather than lose its process.
+  std::function<void(int)> exit_process;
   int in_fd = 0;
   int out_fd = 1;
   int err_fd = 2;
