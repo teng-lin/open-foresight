@@ -76,6 +76,8 @@ bool dbus_daemon_in_path() {
   return false;
 }
 
+bool spawn_daemon(Daemon &daemon);
+
 // False when the daemon could not be started. The caller has already checked
 // that dbus-daemon exists, so a failure here is a test failure, not a skip.
 bool start_daemon(Daemon &daemon) {
@@ -110,6 +112,13 @@ bool start_daemon(Daemon &daemon) {
            "eavesdrop=\"true\"/>"
            "<allow own=\"*\"/></policy></busconfig>\n";
   }
+  return spawn_daemon(daemon);
+}
+
+// Starts dbus-daemon on the daemon's config; also used to restart one at the
+// same address after stop().
+bool spawn_daemon(Daemon &daemon) {
+  const std::string config = daemon.directory + "/bus.conf";
   int address_pipe[2];
   if (pipe(address_pipe) != 0)
     return false;
@@ -148,6 +157,9 @@ bool start_daemon(Daemon &daemon) {
 class FakeA11y {
 public:
   enum class Status { Boolean, Unreadable, NotBoolean };
+  // What the fake does with a Set of IsEnabled: take it, refuse it with an
+  // error reply (a live owner that says no), or answer too late for the caller.
+  enum class SetBehavior { Accept, Refuse, Stall };
   FakeA11y(const std::string &bus_address, Status status, bool enabled,
            std::string reply)
       : status_(status), enabled_(enabled), reply_(std::move(reply)) {
@@ -167,6 +179,7 @@ public:
     thread_.join();
   }
   std::atomic<int> sets{0}, gets{0}, addresses{0};
+  std::atomic<SetBehavior> set_behavior{SetBehavior::Accept};
   bool enabled() const {
     return enabled_;
   }
@@ -198,9 +211,23 @@ private:
   }
   static gboolean set_property(GDBusConnection *, const gchar *, const gchar *,
                                const gchar *, const gchar *, GVariant *value,
-                               GError **, gpointer data) {
+                               GError **error, gpointer data) {
     auto *self = static_cast<FakeA11y *>(data);
     ++self->sets;
+    switch (self->set_behavior.load()) {
+    case SetBehavior::Refuse:
+      g_set_error_literal(error, G_DBUS_ERROR, G_DBUS_ERROR_ACCESS_DENIED,
+                          "refused");
+      return FALSE;
+    case SetBehavior::Stall:
+      // Longer than the helper's 1 s call timeout, shorter than the test's
+      // wait.
+      std::this_thread::sleep_for(std::chrono::milliseconds(1300));
+      g_set_error_literal(error, G_DBUS_ERROR, G_DBUS_ERROR_FAILED, "late");
+      return FALSE; // the caller gave up long ago, and nothing changed
+    case SetBehavior::Accept:
+      break;
+    }
     self->enabled_ = g_variant_get_boolean(value);
     return TRUE;
   }
@@ -563,8 +590,15 @@ struct A11yWorld {
   bool start(const Daemon &session) {
     if (!start_daemon(bus))
       return false;
+    // The address handed to libatspi has no `guid=`: like a real accessibility
+    // bus address, it names a socket, not one particular daemon, so a new
+    // daemon at the same path can be reconnected to.
+    std::string address = bus.address;
+    const auto guid = address.find(",guid=");
+    if (guid != std::string::npos)
+      address.resize(guid);
     status = std::make_unique<FakeA11y>(
-        session.address, FakeA11y::Status::Boolean, true, bus.address);
+        session.address, FakeA11y::Status::Boolean, true, address);
     registry = std::make_unique<FakeRegistry>(bus.address);
     return true;
   }
@@ -584,7 +618,9 @@ void expect_fatal_loss(Helper &h, int id, const std::string &what) {
 
 // A registry that stalls or restarts is not the end of libatspi's connection:
 // the read fails, the helper stays up, and it recovers when the registry is
-// back.
+// back. No session runs during the recovery (its polls would interleave
+// unsolicited frames); a second helper shows a session reports the outage
+// without ending.
 void registry_blip_is_not_fatal(const Daemon &session) {
   SelfAsZoom zoom;
   A11yWorld world;
@@ -603,36 +639,34 @@ void registry_blip_is_not_fatal(const Daemon &session) {
   world.registry.reset(); // the registry goes away; the accessibility bus stays
   expect_state(capabilities(h, 2), "unavailable", "ax_read_failed",
                "a registry that is gone for a moment");
-  h.expect_clock(3);
-  h.send({{"type", "start"},
-          {"id", 4},
-          {"session", "s"},
-          {"poll_ms", 100},
-          {"deadline_ms", 1000}});
-  h.expect("started");
-  check(h.expect("unavailable")["reason"] == "ax_read_failed",
-        "and a session reports it without ending");
+  {
+    Helper watcher = launch(session, zoom.env_with_rules);
+    watcher.expect("hello");
+    watcher.send({{"type", "start"},
+                  {"id", 3},
+                  {"session", "s"},
+                  {"poll_ms", 100},
+                  {"deadline_ms", 1000}});
+    watcher.expect("started");
+    check(watcher.expect("unavailable")["reason"] == "ax_read_failed",
+          "a session reports the outage as an ordinary failed read");
+    watcher.send({{"type", "stop"}, {"id", 4}});
+    watcher.expect("stopped");
+    check(watcher.wait_exit() == 0, "and it ends cleanly on stop");
+  }
+
   world.registry = std::make_unique<FakeRegistry>(world.bus.address);
   // libatspi reattaches when the well-known name returns; the helper follows.
-  // Bounded: a helper that died stops the loop at once instead of timing out.
+  // Every wait is a request/reply round trip, and the loop ends as soon as the
+  // helper answers or dies, so nothing here depends on elapsed time.
   json again = json::object();
-  for (int attempt = 0; attempt < 40; ++attempt) {
+  for (int attempt = 0; attempt < 200; ++attempt) {
     auto frame = h.try_capabilities(100 + attempt);
     if (!frame)
       break;
     again = *frame;
     if (again["reason"] == "zoom_not_exposed")
       break;
-    const json first = h.expect_clock(200 + attempt);
-    if (!first.contains("monotonic_ms"))
-      break;
-    const std::int64_t at = first["monotonic_ms"];
-    for (int tick = 0; tick < 400; ++tick) {
-      const json now = h.expect_clock(300 + tick);
-      if (!now.contains("monotonic_ms") ||
-          now["monotonic_ms"].get<std::int64_t>() - at >= 100)
-        break;
-    }
   }
   expect_state(again, "unavailable", "zoom_not_exposed",
                "recovered after the registry returned");
@@ -658,6 +692,53 @@ void bus_connection_drop_is_fatal(const Daemon &session) {
   world.bus
       .stop(); // the accessibility bus daemon dies: libatspi's connection drops
   expect_fatal_loss(h, 2, "accessibility bus gone");
+}
+
+// The accessibility bus dies and a new one listens at the same address:
+// libatspi keeps calling through its dead connection. The check must look at
+// that connection, not reconnect and report "alive".
+void bus_restart_at_the_same_address_is_fatal(const Daemon &session) {
+  SelfAsZoom zoom;
+  A11yWorld world;
+  if (!world.start(session)) {
+    check(false, "the accessibility daemon starts");
+    return;
+  }
+  Helper h = launch(session, zoom.env_with_rules);
+  h.expect("hello");
+  expect_state(capabilities(h, 1), "unavailable", "zoom_not_exposed",
+               "a desktop read before the restart");
+  world.registry.reset();
+  world.bus.stop();
+  check(spawn_daemon(world.bus),
+        "a new accessibility daemon starts at the address");
+  expect_fatal_loss(h, 2, "accessibility bus restarted");
+}
+
+// Setup outcomes: a live bus that refuses is an attempt that did not take; one
+// that answers too late is not an attempt at all.
+void setup_refused_counts_as_attempted(const Daemon &session) {
+  FakeA11y fake(session.address, FakeA11y::Status::Boolean, false, "x");
+  fake.set_behavior = FakeA11y::SetBehavior::Refuse;
+  Helper h = launch(session);
+  h.expect("hello");
+  expect_state(capabilities(h, 1), "needs_setup", "accessibility_disabled",
+               "disabled before setup");
+  h.send({{"type", "setup"}, {"id", 2}});
+  expect_state(h.expect("capabilities"), "permission_denied",
+               "setup_not_effective", "a refused setup was attempted");
+  check(fake.sets == 1 && !fake.enabled(), "the refusal changed nothing");
+}
+
+void setup_timeout_is_not_an_attempt(const Daemon &session) {
+  FakeA11y fake(session.address, FakeA11y::Status::Boolean, false, "x");
+  fake.set_behavior = FakeA11y::SetBehavior::Stall;
+  Helper h = launch(session);
+  h.expect("hello");
+  h.send({{"type", "setup"}, {"id", 1}});
+  expect_state(h.expect("capabilities", 10000), "needs_setup",
+               "accessibility_disabled",
+               "a setup that timed out is not counted as an attempt");
 }
 
 // A different owner of org.a11y.Bus than the one libatspi connected through is
@@ -691,10 +772,12 @@ int main(int argc, char **argv) {
     return 77;
   }
   const std::vector<void (*)(const Daemon &)> scenarios = {
-      no_accessibility_bus,         disabled_then_setup,
-      unreadable_and_mistyped,      no_libatspi_without_a_rule,
-      unreachable_registry,         registry_blip_is_not_fatal,
-      bus_connection_drop_is_fatal, bus_owner_loss_is_fatal};
+      no_accessibility_bus,           disabled_then_setup,
+      unreadable_and_mistyped,        no_libatspi_without_a_rule,
+      unreachable_registry,           registry_blip_is_not_fatal,
+      bus_connection_drop_is_fatal,   bus_restart_at_the_same_address_is_fatal,
+      bus_owner_loss_is_fatal,        setup_refused_counts_as_attempted,
+      setup_timeout_is_not_an_attempt};
   for (auto scenario : scenarios) {
     Daemon daemon;
     // dbus-daemon is installed, so a daemon that will not start is a failure

@@ -45,15 +45,19 @@ validated rule needs a read.
 2. Accessibility bus: `GetNameOwner("org.a11y.Bus")`. A failure other than "no owner" is
    `session_bus_unreachable`; no owner is `needs_setup`/`atspi_bus_absent`. If libatspi was
    already connected, no owner, or an owner different from the one it connected to, or a
-   dropped libatspi connection, is `atspi_bus_lost` (see below).
+   dropped libatspi connection (checked on the connection libatspi opened at init, never
+   through `atspi_get_a11y_bus()`, which reconnects), is `atspi_bus_lost` (see below).
 3. `org.a11y.Status.IsEnabled`. Unreadable or not a boolean is `atspi_status_unreadable`;
    false is `needs_setup`/`accessibility_disabled`, `permission_denied`/`setup_not_effective`
    after a `setup` that did not turn it on, and `permission_denied`/`accessibility_lost`
    after a grant that was seen and then lost. Deviation from the contract's
    "permission_denied after setup" sentence: an absent accessibility bus stays
    `needs_setup`/`atspi_bus_absent` after `setup`, because the helper cannot start it; and a
-   `setup` whose `Set` call got no reply (no bus, no session bus) is not counted as an
-   attempt, so a bus that appears later, disabled, is `needs_setup`/`accessibility_disabled`.
+   `setup` that no live accessibility bus answered (no session bus, no accessibility bus
+   running, `ServiceUnknown`/`NameHasNoOwner`, a timeout) is not counted as an attempt, so a
+   bus that appears later, disabled, is `needs_setup`/`accessibility_disabled`. An error
+   reply from a running bus (a refusal) is an attempt that did not take:
+   `permission_denied`/`setup_not_effective`.
    The contract documents this.
 4. Zoom: processes of the same user whose executable is named `zoom`
    (`/proc/<pid>/exe`, a ` (deleted)` suffix removed); none is `zoom_not_running`,

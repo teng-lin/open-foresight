@@ -68,8 +68,10 @@ public:
   virtual ~LinuxDesktop() = default;
   // Read-only: never activates a service or changes a setting.
   virtual BusStatus bus_status() = 0;
-  // Explicit setup only: enables desktop accessibility support. True when the
-  // request reached the accessibility bus and got a reply (not merely tried).
+  // Explicit setup only: enables desktop accessibility support. True when a
+  // live accessibility bus answered the request, whether it accepted it or
+  // replied with an error (a refusal); false when nothing answered (no session
+  // bus, no bus running, a timeout).
   virtual bool enable_accessibility() = 0;
   virtual ProcessScan zoom_processes() = 0;
   // One bounded traversal of the application owning `pid`.

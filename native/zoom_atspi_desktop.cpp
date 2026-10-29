@@ -299,7 +299,10 @@ AtspiDesktop::AtspiDesktop(std::string executable_name)
     : executable_(std::move(executable_name)) {}
 
 AtspiDesktop::~AtspiDesktop() {
-  // atspi_exit is deliberately not called: after it libatspi cannot reconnect.
+  // atspi_exit is deliberately not called: libatspi's application table
+  // survives it, so a later atspi_init() cannot reach a new registry.
+  if (a11y_connection_)
+    dbus_connection_unref(a11y_connection_);
   drop_session_bus();
 }
 
@@ -317,8 +320,7 @@ void AtspiDesktop::drain_events() {
 }
 
 bool AtspiDesktop::a11y_connection_alive() const {
-  DBusConnection *connection = atspi_get_a11y_bus();
-  return connection && dbus_connection_get_is_connected(connection);
+  return a11y_connection_ && dbus_connection_get_is_connected(a11y_connection_);
 }
 
 void AtspiDesktop::drop_session_bus() {
@@ -342,8 +344,9 @@ BusStatus AtspiDesktop::connect_session_bus() {
 
 BusStatus AtspiDesktop::bus_status() {
   drain_events();
-  // libatspi's own connection to the accessibility bus dropped: it cannot
-  // reconnect, and its application table is now stale.
+  // The accessibility bus connection libatspi opened at init has dropped (the
+  // bus died or restarted): libatspi keeps calling through it and its
+  // application table is stale, so this is unrecoverable in-process.
   if (atspi_ready_ && !a11y_connection_alive())
     return BusStatus::BusLost;
   const BusStatus connected = connect_session_bus();
@@ -399,6 +402,22 @@ BusStatus AtspiDesktop::bus_status() {
   return on ? BusStatus::Ready : BusStatus::Disabled;
 }
 
+// Did a failed Set still reach a live accessibility bus? An error reply from
+// the bus daemon's owner (a refusal, a bad argument) is an answer: setup was
+// attempted and did not take. No owner, no service, a timeout or a closed
+// connection is not.
+static bool setup_reached_a_live_bus(const GError *error) {
+  if (!error || !g_dbus_error_is_remote_error(error))
+    return false;
+  for (const GDBusError code :
+       {G_DBUS_ERROR_SERVICE_UNKNOWN, G_DBUS_ERROR_NAME_HAS_NO_OWNER,
+        G_DBUS_ERROR_NO_REPLY, G_DBUS_ERROR_TIMEOUT, G_DBUS_ERROR_TIMED_OUT,
+        G_DBUS_ERROR_DISCONNECTED})
+    if (g_error_matches(error, G_DBUS_ERROR, code))
+      return false;
+  return true;
+}
+
 bool AtspiDesktop::enable_accessibility() {
   if (connect_session_bus() != BusStatus::Ready)
     return false;
@@ -417,7 +436,7 @@ bool AtspiDesktop::enable_accessibility() {
   if (!reply) {
     note("setup_failed");
     note_error("setup", error.error);
-    return false;
+    return setup_reached_a_live_bus(error.error);
   }
   g_variant_unref(reply);
   return true;
@@ -471,6 +490,11 @@ bool AtspiDesktop::ensure_atspi() {
     note_error("get_address", error.error);
   }
   if (ok) {
+    // Keep the connection as it is right after init. atspi_get_a11y_bus() opens
+    // a new connection when called again, so liveness is checked on this one.
+    a11y_connection_ = atspi_get_a11y_bus();
+    if (a11y_connection_)
+      dbus_connection_ref(a11y_connection_);
     atspi_ready_ = true;
     a11y_owner_ = owner_seen_;
     init_failures_ = 0;

@@ -37,8 +37,12 @@ platform helpers (`zoom_observer_macos`, `zoom_observer_linux`). Design context:
   source's reason token (`atspi_bus_lost`), with the `id` of the request whose read
   found it (none when a poll did; that poll first reports the `unavailable`
   interval), and exits with the source's status (4 for the Linux registry loss). A
-  stop, end of input or broken stdout that began first wins: the request is
-  answered `cancelled`, `stopped` is written, and the exit is the clean one.
+  stop, end of input or broken stdout that began first wins and the request is
+  answered `cancelled`: after a stop `stopped` is written and the exit is 0; end of
+  input writes no further frame and exits 0; a broken stdout writes nothing and
+  exits 3. If a stop arrives while the fatal `error` is being finished, the shutdown
+  guard leaves with the status of the frame that was written (4 here), not the
+  stop's 0.
 - The helper is launched as `<helper> --protocol 1`; any other arguments exit 64
   with a usage line on stderr.
 - All observed strings (names, window titles) are untrusted source data.
@@ -132,8 +136,9 @@ is still not granted, or after a grant is lost, the state is `permission_denied`
 On Linux this holds when the accessibility bus is there but stays disabled
 (`permission_denied`/`setup_not_effective`, or `accessibility_lost` after a grant
 was seen) and not when the bus is absent: the helper cannot start it, so that
-state stays `needs_setup`/`atspi_bus_absent` after `setup`, and a `setup` that
-reached no bus is not counted as an attempt.
+state stays `needs_setup`/`atspi_bus_absent` after `setup`, and a `setup` that no
+live accessibility bus answered (none running, a timeout) is not counted as an
+attempt; a refusal from a running bus is.
 `clock.uptime_ms` is the same instant on the sleep-excluding uptime clock
 (`mach_absolute_time` on macOS; on Linux `CLOCK_MONOTONIC` already excludes sleep, so
 it equals `monotonic_ms`), provided because native capture timestamps may

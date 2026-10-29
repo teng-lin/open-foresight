@@ -93,7 +93,8 @@ The optional Zoom speaker observer, `zoom_observer_linux`, reads Zoom's accessib
 tree through libatspi. A host build includes it only when pkg-config finds `atspi-2`,
 `gio-2.0` and `dbus-1`; otherwise CMake prints a status line, skips the helper and its tests that
 need it (the CTest `zoom_observer_linux_built` then reports Skipped), and everything else
-builds. Configure with `-DFORESIGHT_REQUIRE_ATSPI=ON` to make a missing library a configure
+builds (`dbus-1` is a dependency of the libatspi development package on Debian and Ubuntu;
+its package on other distributions is not verified here). Configure with `-DFORESIGHT_REQUIRE_ATSPI=ON` to make a missing library a configure
 error instead. Development packages (checked against the package index): Debian 13 and
 Ubuntu 24.04 `libatspi2.0-dev` and `libglib2.0-dev`; Arch `at-spi2-core` and `glib2`
 (headers and `libatspi.so` ship in the runtime package). Fedora `at-spi2-core-devel` and

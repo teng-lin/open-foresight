@@ -11,7 +11,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <csignal>
+#include <fcntl.h>
 #include <iostream>
 #include <mutex>
 #include <optional>
@@ -100,6 +102,10 @@ public:
   }
   SnapshotOutcome snapshot(const std::function<bool()> &cancelled) override {
     const int call = ++snapshots;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      probe_ = cancelled; // lets a test watch the core's cancel flag
+    }
     if (block_call == call) { // a cooperative read that ends when cancelled
       blocked = true;
       while (!cancelled())
@@ -120,6 +126,11 @@ public:
   uint64_t uptime_ms() override {
     return 500 + 10 * ++clock_;
   }
+  // The cancel callback of the latest snapshot (null before the first).
+  std::function<bool()> probe() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return probe_;
+  }
   // Replaces what later polls return.
   void script(std::vector<SnapshotOutcome> next) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -135,6 +146,7 @@ public:
 private:
   std::mutex mutex_;
   std::vector<SnapshotOutcome> script_;
+  std::function<bool()> probe_;
   size_t next_ = 0;
   std::atomic<uint64_t> clock_{0};
 };
@@ -149,9 +161,16 @@ bool wait_for(const std::function<bool()> &condition, int timeout_ms = 5000) {
   return true;
 }
 
+// Test seams of the core (unused in production).
+struct Seams {
+  std::function<void()> after_closing_frame;
+  std::function<void(int)> exit_process;
+};
+
 class Harness {
 public:
-  Harness(Source &source, const RuleSet &rules) : rules_(rules) {
+  Harness(Source &source, const RuleSet &rules, Seams seams = {})
+      : rules_(rules) {
     int in[2], out[2], err[2];
     if (::pipe(in) || ::pipe(out) || ::pipe(err))
       std::abort();
@@ -165,8 +184,11 @@ public:
     config.parse = [this](const AxSnapshot &snapshot) {
       return parse_atspi_snapshot(snapshot, rules_);
     };
+    config.after_closing_frame = std::move(seams.after_closing_frame);
+    config.exit_process = std::move(seams.exit_process);
     config.in_fd = in[0];
     config.out_fd = out[1];
+    out_write_fd_ = out[1];
     config.err_fd = err[1];
     thread_ = std::thread([this, &source, config] {
       exit_code_ = run_observer(source, config);
@@ -188,6 +210,35 @@ public:
     request["seq"] = out_seq_++;
     const std::string line = request.dump() + "\n";
     (void)!::write(request_fd_, line.data(), line.size());
+  }
+  void send_raw(const std::string &text) {
+    (void)!::write(request_fd_, text.data(), text.size());
+  }
+  // Fills the observer's stdout pipe with filler (its next write blocks) and
+  // returns how many bytes that took; discard() reads them back out.
+  size_t fill_output() {
+    const int flags = ::fcntl(out_write_fd_, F_GETFL);
+    ::fcntl(out_write_fd_, F_SETFL, flags | O_NONBLOCK);
+    const std::string chunk(4096, 'x');
+    size_t total = 0;
+    for (;;) {
+      const ssize_t n = ::write(out_write_fd_, chunk.data(), chunk.size());
+      if (n <= 0)
+        break;
+      total += static_cast<size_t>(n);
+    }
+    ::fcntl(out_write_fd_, F_SETFL, flags);
+    return total;
+  }
+  void discard(size_t bytes) {
+    char chunk[4096];
+    while (bytes > 0) {
+      const ssize_t n =
+          ::read(frame_fd_, chunk, std::min(bytes, sizeof(chunk)));
+      if (n <= 0)
+        break;
+      bytes -= static_cast<size_t>(n);
+    }
   }
   void close_input() {
     ::close(request_fd_);
@@ -247,7 +298,7 @@ public:
 
 private:
   const RuleSet &rules_;
-  int request_fd_ = -1, frame_fd_ = -1, stderr_fd_ = -1;
+  int request_fd_ = -1, frame_fd_ = -1, stderr_fd_ = -1, out_write_fd_ = -1;
   std::thread thread_;
   int exit_code_ = -1;
   uint64_t out_seq_ = 0, in_seq_ = 0;
@@ -539,6 +590,130 @@ void check_fatal_source_outcome() {
   }
 }
 
+// The shutdown guard leaves with the status of the closing frame that was
+// actually written, whoever asked for the shutdown. The core's seams make the
+// race deterministic: the main loop is held right after it wrote its closing
+// frame while the shutdown is requested, and the guard's exit is recorded.
+struct GuardRun {
+  std::mutex mutex;
+  std::condition_variable fired;
+  bool exited = false;
+  int code = -1;
+  Seams seams() {
+    Seams seams;
+    seams.after_closing_frame = [this] {
+      std::unique_lock<std::mutex> lock(mutex);
+      fired.wait_for(lock, std::chrono::seconds(5), [this] { return exited; });
+    };
+    seams.exit_process = [this](int c) {
+      std::lock_guard<std::mutex> lock(mutex);
+      code = c;
+      exited = true;
+      fired.notify_all();
+    };
+    return seams;
+  }
+  bool wait() {
+    std::unique_lock<std::mutex> lock(mutex);
+    return fired.wait_for(lock, std::chrono::seconds(5),
+                          [this] { return exited; });
+  }
+};
+
+void start_with_deadline(Harness &h, int deadline_ms) {
+  h.send({{"type", "start"},
+          {"id", "s"},
+          {"session", "S"},
+          {"poll_ms", 5000},
+          {"deadline_ms", deadline_ms}});
+}
+
+void check_guard_keeps_the_written_frames_status() {
+  const RuleSet rules = synthetic_rules();
+  // A fatal source error was written (status 4); a stop arrives while the main
+  // loop is still finishing: the guard must leave with 4, not the stop's 0.
+  {
+    ScriptedSource source(
+        {meeting({item(1, "Synthetic Alpha")}), lost_registry()});
+    GuardRun run;
+    Harness h(source, rules, run.seams());
+    h.expect("hello");
+    start_with_deadline(h, 100);
+    h.expect("started");
+    h.expect("observation");
+    h.send({{"type", "capabilities"}, {"id", 9}});
+    CHECK(h.expect("error")["code"] == "atspi_bus_lost",
+          "the fatal error was written");
+    h.send({{"type", "stop"}, {"id", "end"}});
+    CHECK(run.wait(), "the guard fired");
+    CHECK(run.code == 4,
+          "it leaves with the fatal error's status, not the stop's 0");
+  }
+  // The macOS-equivalent paths keep their statuses: 0 after `stopped`, 2 after
+  // a protocol error.
+  {
+    ScriptedSource source({meeting({item(1, "Synthetic Alpha")})});
+    GuardRun run;
+    Harness h(source, rules, run.seams());
+    h.expect("hello");
+    start_with_deadline(h, 100);
+    h.expect("started");
+    h.expect("observation");
+    h.send({{"type", "stop"}, {"id", "end"}});
+    CHECK(h.expect("stopped")["id"] == "end", "stopped was written");
+    CHECK(run.wait() && run.code == 0,
+          "a late finish after stopped leaves with 0");
+  }
+  {
+    ScriptedSource source({meeting({item(1, "Synthetic Alpha")})});
+    GuardRun run;
+    Harness h(source, rules, run.seams());
+    h.expect("hello");
+    start_with_deadline(h, 100);
+    h.expect("started");
+    h.expect("observation");
+    h.send_raw("{not json\n");
+    CHECK(h.expect("error")["code"] == "malformed_json",
+          "the protocol error was written");
+    CHECK(run.wait() && run.code == 2,
+          "a late finish after a fatal error leaves with 2");
+  }
+}
+
+// A stop that lands after the fatal read and before the core acts on it (here:
+// while the poll's `unavailable` frame is blocked on a full stdout) wins: no
+// fatal error, `stopped`, exit 0. The core's cancel flag is watched through the
+// callback the source was given.
+void check_stop_between_a_fatal_poll_and_its_error() {
+  const RuleSet rules = synthetic_rules();
+  ScriptedSource source(
+      {meeting({item(1, "Synthetic Alpha")}), lost_registry()});
+  Harness h(source, rules);
+  h.expect("hello");
+  h.send({{"type", "start"}, {"id", "s"}, {"session", "S"}, {"poll_ms", 1000}});
+  h.expect("started");
+  h.expect("observation");
+  const size_t filler =
+      h.fill_output(); // the next frame the core writes blocks
+  CHECK(wait_for([&] { return source.snapshots >= 2; }, 5000),
+        "the fatal poll ran");
+  h.send({{"type", "stop"}, {"id", "end"}});
+  CHECK(wait_for(
+            [&] {
+              auto p = source.probe();
+              return p && p();
+            },
+            5000),
+        "the core saw the stop");
+  h.discard(filler); // unblocks the write of the poll's unavailable frame
+  CHECK(h.expect("unavailable")["reason"] == "atspi_bus_lost",
+        "the loss was reported");
+  const json next = h.expect("stopped");
+  CHECK(next.value("id", json()) == "end",
+        "then the stop is answered, not a fatal error");
+  CHECK(h.join() == 0, "and the exit is the clean one");
+}
+
 void check_cancellation() {
   const RuleSet rules = synthetic_rules();
   {
@@ -605,6 +780,8 @@ int main() {
   check_no_speaker_signal_is_never_silence();
   check_cancellation();
   check_fatal_source_outcome();
+  check_guard_keeps_the_written_frames_status();
+  check_stop_between_a_fatal_poll_and_its_error();
   check_broken_stdout();
   std::cout << "zoom_linux_core: " << checks << " checks, " << failures
             << " failures\n";

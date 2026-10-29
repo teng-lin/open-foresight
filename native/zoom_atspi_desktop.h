@@ -7,6 +7,9 @@
 #include <gio/gio.h>
 #include <string>
 
+// libdbus's connection type (the full definition stays out of this header).
+struct DBusConnection;
+
 namespace foresight::zoom {
 
 class AtspiDesktop final : public LinuxDesktop, public AccessibleDesktop {
@@ -36,12 +39,16 @@ private:
   void drop_session_bus();
   bool ensure_atspi();
   void drain_events();
-  // The libatspi connection to the accessibility bus is gone (or was never up).
+  // The connection libatspi opened to the accessibility bus is still up. Checks
+  // the connection held since init, never atspi_get_a11y_bus() (which
+  // reconnects).
   bool a11y_connection_alive() const;
 
   std::string executable_;
   GDBusConnection *bus_ = nullptr;
   bool atspi_ready_ = false;
+  // Referenced when libatspi connected; liveness is checked on this connection.
+  DBusConnection *a11y_connection_ = nullptr;
   std::string
       a11y_owner_; // unique name of org.a11y.Bus when libatspi connected
   std::string
