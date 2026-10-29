@@ -83,6 +83,14 @@ SnapshotOutcome gated(const char *state, const char *reason) {
   return outcome;
 }
 
+// What LinuxSource reports when libatspi loses its registry.
+SnapshotOutcome lost_registry() {
+  SnapshotOutcome outcome = gated("unavailable", "atspi_bus_lost");
+  outcome.fatal = true;
+  outcome.fatal_exit = 4;
+  return outcome;
+}
+
 class ScriptedSource final : public Source {
 public:
   explicit ScriptedSource(std::vector<SnapshotOutcome> script)
@@ -96,7 +104,8 @@ public:
       blocked = true;
       while (!cancelled())
         std::this_thread::sleep_for(milliseconds(2));
-      return gated("unavailable", "read_cancelled");
+      return fatal_when_cancelled ? lost_registry()
+                                  : gated("unavailable", "read_cancelled");
     }
     std::lock_guard<std::mutex> lock(mutex_);
     SnapshotOutcome outcome = script_[std::min(next_, script_.size() - 1)];
@@ -121,6 +130,7 @@ public:
   std::atomic<int> access_requests{0}, snapshots{0};
   std::atomic<bool> blocked{false};
   int block_call = 0;
+  bool fatal_when_cancelled = false;
 
 private:
   std::mutex mutex_;
@@ -471,6 +481,64 @@ void check_no_speaker_signal_is_never_silence() {
   h.expect("stopped");
 }
 
+void check_fatal_source_outcome() {
+  const RuleSet rules = synthetic_rules();
+  // A request that causes the fatal read gets the terminal error, with its id,
+  // instead of a capabilities/started reply; then the process ends with the
+  // source's exit status.
+  for (const char *type : {"capabilities", "setup", "start"}) {
+    ScriptedSource source({lost_registry()});
+    Harness h(source, rules);
+    h.expect("hello");
+    json request = {{"type", type}, {"id", "r7"}};
+    if (std::string(type) == "start")
+      request["session"] = "S";
+    h.send(request);
+    const json error = h.expect("error");
+    CHECK(error["id"] == "r7" && error["code"] == "atspi_bus_lost",
+          std::string(type) +
+              ": terminal error carries the request id and reason");
+    CHECK(!h.read(100).has_value(),
+          std::string(type) + ": nothing follows the error");
+    CHECK(h.join() == 4,
+          std::string(type) + ": exits with the source's status");
+  }
+  // A poll that turns fatal first reports the unavailable interval, then ends.
+  {
+    ScriptedSource source(
+        {meeting({item(1, "Synthetic Alpha")}), lost_registry()});
+    Harness h(source, rules);
+    h.expect("hello");
+    start(h);
+    h.expect("started");
+    h.expect("observation");
+    CHECK(h.expect("unavailable")["reason"] == "atspi_bus_lost",
+          "the loss is reported");
+    const json error = h.expect("error");
+    CHECK(error["code"] == "atspi_bus_lost" && !error.contains("id"),
+          "then a terminal error without a request id");
+    CHECK(h.join() == 4, "and the process exits 4");
+  }
+  // A stop that arrived first wins: the queued request is answered cancelled,
+  // the stop is answered, and the exit is the clean one.
+  {
+    ScriptedSource source({lost_registry()});
+    source.block_call = 1;
+    source.fatal_when_cancelled = true;
+    Harness h(source, rules);
+    h.expect("hello");
+    h.send({{"type", "capabilities"}, {"id", "k1"}});
+    CHECK(wait_for([&] { return source.blocked.load(); }),
+          "the read is in flight");
+    h.send({{"type", "stop"}, {"id", "end"}});
+    const json refused = h.expect("error");
+    CHECK(refused["id"] == "k1" && refused["code"] == "cancelled",
+          "the request is cancelled, not turned into a fatal error");
+    CHECK(h.expect("stopped")["id"] == "end", "the stop is answered");
+    CHECK(h.join() == 0, "exit 0, not the fatal status");
+  }
+}
+
 void check_cancellation() {
   const RuleSet rules = synthetic_rules();
   {
@@ -536,6 +604,7 @@ int main() {
   check_unique_names_are_complete_on_first_sight();
   check_no_speaker_signal_is_never_silence();
   check_cancellation();
+  check_fatal_source_outcome();
   check_broken_stdout();
   std::cout << "zoom_linux_core: " << checks << " checks, " << failures
             << " failures\n";

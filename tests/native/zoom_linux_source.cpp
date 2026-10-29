@@ -24,10 +24,13 @@ public:
   BusStatus bus_status() override {
     return bus;
   }
-  void enable_accessibility() override {
+  bool enable_accessibility() override {
     ++setups;
+    if (!setup_reaches_bus)
+      return false;
     if (setup_effective)
       bus = BusStatus::Ready;
+    return true;
   }
   ProcessScan zoom_processes() override {
     return {scan_ok, processes};
@@ -48,6 +51,7 @@ public:
 
   BusStatus bus = BusStatus::Ready;
   bool setup_effective = false;
+  bool setup_reaches_bus = true;
   bool scan_ok = true;
   bool flip_cancel = false;
   std::vector<ZoomProcess> processes{{4242, "0.0.0-synthetic"}};
@@ -155,7 +159,6 @@ void reads() {
   } failures_[] = {{TreeRead::Status::NotExposed, "zoom_not_exposed"},
                    {TreeRead::Status::Failed, "ax_read_failed"},
                    {TreeRead::Status::Cancelled, "read_cancelled"},
-                   {TreeRead::Status::BusLost, "atspi_bus_lost"},
                    {TreeRead::Status::Unreachable, "atspi_unreachable"}};
   for (const auto &f : failures_) {
     desktop.tree.status = f.status;
@@ -220,6 +223,52 @@ void grant_lost() {
          "a grant that was seen and lost is not a first run");
 }
 
+// A lost registry cannot be recovered in-process: the outcome is fatal, with
+// the exit status the supervisor's restart relies on.
+void registry_loss_is_fatal() {
+  {
+    FakeDesktop desktop;
+    desktop.bus = BusStatus::BusLost;
+    const RuleSet rules = synthetic_rules();
+    LinuxSource source(desktop, rules);
+    const SnapshotOutcome outcome = source.snapshot(never);
+    expect(outcome, false, "unavailable", "atspi_bus_lost", "bus lost");
+    check(outcome.fatal && outcome.fatal_exit == kLinuxExitRegistryLost &&
+              kLinuxExitRegistryLost == 4,
+          "a lost bus is fatal with exit status 4");
+  }
+  {
+    FakeDesktop desktop;
+    desktop.tree.status = TreeRead::Status::BusLost;
+    const RuleSet rules = synthetic_rules();
+    LinuxSource source(desktop, rules);
+    const SnapshotOutcome outcome = source.snapshot(never);
+    expect(outcome, false, "unavailable", "atspi_bus_lost", "connection lost");
+    check(outcome.fatal && outcome.fatal_exit == 4 && outcome.pid == 4242,
+          "a dropped connection during a read is fatal too");
+  }
+  FakeDesktop desktop;
+  const RuleSet rules = synthetic_rules();
+  LinuxSource source(desktop, rules);
+  desktop.tree.status = TreeRead::Status::Failed;
+  check(!source.snapshot(never).fatal, "an ordinary failed read is not fatal");
+}
+
+// A setup that never reached an accessibility bus did nothing: a bus that shows
+// up later, disabled, is a first run, not a failed setup.
+void setup_that_reached_nothing() {
+  FakeDesktop desktop;
+  desktop.bus = BusStatus::A11yBusAbsent;
+  desktop.setup_reaches_bus = false;
+  const RuleSet rules = synthetic_rules();
+  LinuxSource source(desktop, rules);
+  source.request_access();
+  check(desktop.setups == 1, "setup was attempted");
+  desktop.bus = BusStatus::Disabled;
+  expect(source.snapshot(never), false, "needs_setup", "accessibility_disabled",
+         "a setup that reached no bus is not blamed later");
+}
+
 void setup_not_effective() {
   FakeDesktop desktop;
   desktop.bus = BusStatus::Disabled;
@@ -257,6 +306,8 @@ int main() {
   reads();
   setup_is_explicit();
   setup_not_effective();
+  setup_that_reached_nothing();
+  registry_loss_is_fatal();
   cancel_is_forwarded();
   other_states_survive_setup();
   grant_lost();

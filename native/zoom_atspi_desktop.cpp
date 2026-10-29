@@ -303,21 +303,11 @@ AtspiDesktop::~AtspiDesktop() {
   drop_session_bus();
 }
 
-void AtspiDesktop::exit_if_registry_lost() {
-  if (!lost_)
-    return;
-  // libatspi keeps a static table of applications that atspi_exit() does not
-  // clear, so an in-process atspi_exit()/atspi_init() cycle cannot reach a new
-  // registry. The loss was reported on the previous poll; end the process and
-  // let the supervisor start a fresh one.
-  note("registry_lost_exit");
-  _exit(kExitRegistryLost);
-}
-
 void AtspiDesktop::drain_events() {
-  // atspi_init hooks the default GLib context and subscribes to cache and event
-  // signals. Nothing else iterates it, so without this the signals queue up in
-  // libdbus and the bus until every call times out.
+  // atspi_init hooks the default GLib context and subscribes to the registry's
+  // cache and event signals. libatspi hands them to its handlers from that
+  // context; nothing else iterates it, so without this the deferred work grows
+  // in memory for as long as the process lives.
   if (!atspi_ready_)
     return;
   for (int i = 0;
@@ -326,9 +316,9 @@ void AtspiDesktop::drain_events() {
   }
 }
 
-Lookup AtspiDesktop::registry_lost() {
-  lost_ = true;
-  return Lookup::BusLost;
+bool AtspiDesktop::a11y_connection_alive() const {
+  DBusConnection *connection = atspi_get_a11y_bus();
+  return connection && dbus_connection_get_is_connected(connection);
 }
 
 void AtspiDesktop::drop_session_bus() {
@@ -351,8 +341,11 @@ BusStatus AtspiDesktop::connect_session_bus() {
 }
 
 BusStatus AtspiDesktop::bus_status() {
-  exit_if_registry_lost();
   drain_events();
+  // libatspi's own connection to the accessibility bus dropped: it cannot
+  // reconnect, and its application table is now stale.
+  if (atspi_ready_ && !a11y_connection_alive())
+    return BusStatus::BusLost;
   const BusStatus connected = connect_session_bus();
   if (connected != BusStatus::Ready)
     return connected;
@@ -372,7 +365,6 @@ BusStatus AtspiDesktop::bus_status() {
     }
     if (!atspi_ready_)
       return BusStatus::A11yBusAbsent;
-    lost_ = true;
     return BusStatus::BusLost;
   }
   const char *unique = nullptr;
@@ -381,10 +373,8 @@ BusStatus AtspiDesktop::bus_status() {
   g_variant_unref(owner);
   // A different owner than when libatspi connected is a restarted accessibility
   // bus: our connection and its cached applications are stale.
-  if (atspi_ready_ && current_owner != a11y_owner_) {
-    lost_ = true;
+  if (atspi_ready_ && current_owner != a11y_owner_)
     return BusStatus::BusLost;
-  }
   owner_seen_ = current_owner;
 
   GVariant *enabled = g_dbus_connection_call_sync(
@@ -409,9 +399,9 @@ BusStatus AtspiDesktop::bus_status() {
   return on ? BusStatus::Ready : BusStatus::Disabled;
 }
 
-void AtspiDesktop::enable_accessibility() {
+bool AtspiDesktop::enable_accessibility() {
   if (connect_session_bus() != BusStatus::Ready)
-    return;
+    return false;
   // org.a11y.Status.IsEnabled is the desktop-neutral switch toolkits read.
   // at-spi-bus-launcher mirrors it into GSettings where that exists. Like every
   // other call this never activates a service: if the accessibility bus is not
@@ -424,12 +414,13 @@ void AtspiDesktop::enable_accessibility() {
                     g_variant_new_boolean(TRUE)),
       nullptr, G_DBUS_CALL_FLAGS_NO_AUTO_START, kDBusTimeoutMs, nullptr,
       error.out());
-  if (reply) {
-    g_variant_unref(reply);
-  } else {
+  if (!reply) {
     note("setup_failed");
     note_error("setup", error.error);
+    return false;
   }
+  g_variant_unref(reply);
+  return true;
 }
 
 ProcessScan AtspiDesktop::zoom_processes() {
@@ -495,7 +486,6 @@ bool AtspiDesktop::ensure_atspi() {
 
 TreeRead AtspiDesktop::read_tree(int pid, int budget_ms,
                                  const std::function<bool()> &cancelled) {
-  exit_if_registry_lost();
   TreeRead read;
   if (!ensure_atspi()) {
     read.status = TreeRead::Status::Unreachable;
@@ -527,7 +517,10 @@ AtspiDesktop::applications(int pid, const std::function<bool()> &cancelled,
   if (error.error || count < 0) {
     note_error("desktop_count", error.error);
     g_object_unref(desktop);
-    return registry_lost();
+    // A slow or restarting registry (NoReply, ServiceUnknown) is a failed read:
+    // libatspi re-registers it when its well-known name reappears. Only a
+    // dropped connection to the accessibility bus is unrecoverable.
+    return a11y_connection_alive() ? Lookup::Failed : Lookup::BusLost;
   }
   Lookup result = Lookup::Ok;
   for (gint i = 0; i < count; ++i) {

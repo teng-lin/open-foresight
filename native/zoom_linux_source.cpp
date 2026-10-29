@@ -9,12 +9,22 @@ SnapshotOutcome refused(const char *state, const char *reason) {
   outcome.reason = reason;
   return outcome;
 }
+// libatspi cannot reach a new registry in-process: end the process.
+SnapshotOutcome registry_lost() {
+  SnapshotOutcome outcome = refused("unavailable", "atspi_bus_lost");
+  outcome.fatal = true;
+  outcome.fatal_exit = kLinuxExitRegistryLost;
+  return outcome;
+}
 
 } // namespace
 
 void LinuxSource::request_access() {
-  setup_attempted_ = true;
-  desktop_.enable_accessibility();
+  // A setup that never reached an accessibility bus (none running, no session
+  // bus) did nothing, so it must not later explain a disabled bus as a failed
+  // setup.
+  if (desktop_.enable_accessibility())
+    setup_attempted_ = true;
 }
 
 SnapshotOutcome LinuxSource::snapshot(const std::function<bool()> &cancelled) {
@@ -24,7 +34,7 @@ SnapshotOutcome LinuxSource::snapshot(const std::function<bool()> &cancelled) {
     seen_ready_ = true;
     break;
   case BusStatus::BusLost:
-    return refused("unavailable", "atspi_bus_lost");
+    return registry_lost();
   case BusStatus::NoSessionBus:
     return refused("unavailable", "no_session_bus");
   case BusStatus::SessionBusUnreachable:
@@ -93,8 +103,9 @@ SnapshotOutcome LinuxSource::snapshot(const std::function<bool()> &cancelled) {
     outcome.reason = "atspi_unreachable";
     return outcome;
   case TreeRead::Status::BusLost:
-    outcome.state = "unavailable";
-    outcome.reason = "atspi_bus_lost";
+    outcome = registry_lost();
+    outcome.pid = processes[0].pid;
+    outcome.zoom_version = processes[0].version;
     return outcome;
   case TreeRead::Status::Ok:
     break;

@@ -21,7 +21,7 @@
 #include <thread>
 
 using namespace zoom_harness;
-using foresight::zoom::kExitRegistryLost;
+using foresight::zoom::kLinuxExitRegistryLost;
 
 namespace {
 
@@ -31,19 +31,53 @@ struct Daemon {
   pid_t pid = -1;
   std::string address, directory;
   ~Daemon() {
+    stop();
+    if (!directory.empty()) {
+      unlink((directory + "/bus").c_str());
+      unlink((directory + "/bus.conf").c_str());
+      unlink((directory + "/services/org.a11y.Bus.service").c_str());
+      rmdir((directory + "/services").c_str());
+      unlink(marker().c_str());
+      rmdir(directory.c_str());
+    }
+  }
+  // Kills the daemon: every client connection to it drops.
+  void stop() {
     if (pid > 0) {
       kill(pid, SIGTERM);
       waitpid(pid, nullptr, 0);
     }
-    if (!directory.empty()) {
-      unlink((directory + "/bus").c_str());
-      unlink((directory + "/bus.conf").c_str());
-      rmdir(directory.c_str());
-    }
+    pid = -1;
+  }
+  std::string marker() const {
+    return directory + "/activated";
+  }
+  // Did the daemon ever activate the org.a11y.Bus service? Its Exec creates the
+  // marker, so a helper that auto-starts the accessibility bus leaves it
+  // behind.
+  bool activated() const {
+    return access(marker().c_str(), F_OK) == 0;
   }
 };
 
-// False when dbus-daemon cannot be started (the test is skipped).
+bool dbus_daemon_in_path() {
+  const char *path = std::getenv("PATH");
+  std::string list = path ? path : "/usr/bin:/bin";
+  for (size_t start = 0; start <= list.size();) {
+    size_t end = list.find(':', start);
+    if (end == std::string::npos)
+      end = list.size();
+    const std::string candidate =
+        list.substr(start, end - start) + "/dbus-daemon";
+    if (access(candidate.c_str(), X_OK) == 0)
+      return true;
+    start = end + 1;
+  }
+  return false;
+}
+
+// False when the daemon could not be started. The caller has already checked
+// that dbus-daemon exists, so a failure here is a test failure, not a skip.
 bool start_daemon(Daemon &daemon) {
   const char *root = std::getenv("FORESIGHT_TEST_TEMP_ROOT");
   if (!root || !*root)
@@ -54,6 +88,14 @@ bool start_daemon(Daemon &daemon) {
     return false;
   daemon.directory = pattern;
   chmod(pattern.c_str(), 0700);
+  // A service that would start the accessibility bus if anything activated it:
+  // its Exec leaves a marker file the tests look for.
+  mkdir((daemon.directory + "/services").c_str(), 0700);
+  {
+    std::ofstream service(daemon.directory + "/services/org.a11y.Bus.service");
+    service << "[D-BUS Service]\nName=org.a11y.Bus\nExec=/usr/bin/env touch "
+            << daemon.marker() << "\n";
+  }
   const std::string config = daemon.directory + "/bus.conf";
   {
     std::ofstream out(config);
@@ -61,8 +103,9 @@ bool start_daemon(Daemon &daemon) {
            "Configuration 1.0//EN\" "
            "\"http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd\">\n"
            "<busconfig><type>session</type><listen>unix:path="
-        << daemon.directory
-        << "/bus</listen><auth>EXTERNAL</auth><policy context=\"default\">"
+        << daemon.directory << "/bus</listen><auth>EXTERNAL</auth>"
+        << "<servicedir>" << daemon.directory << "/services</servicedir>"
+        << "<policy context=\"default\">"
            "<allow send_destination=\"*\" eavesdrop=\"true\"/><allow "
            "eavesdrop=\"true\"/>"
            "<allow own=\"*\"/></policy></busconfig>\n";
@@ -308,6 +351,12 @@ private:
   std::thread thread_;
 };
 
+bool check_started(Daemon &daemon) {
+  const bool started = start_daemon(daemon);
+  check(started, "the private dbus-daemon starts");
+  return started;
+}
+
 json capabilities(Helper &h, int id) {
   h.send({{"type", "capabilities"}, {"id", id}});
   return h.expect("capabilities");
@@ -315,9 +364,12 @@ json capabilities(Helper &h, int id) {
 
 void expect_state(const json &caps, const char *state, const char *reason,
                   const std::string &what) {
-  check(caps["state"] == state && caps["reason"] == reason,
-        what + " (got " + caps["state"].dump() + "/" + caps["reason"].dump() +
-            ")");
+  // value(): a helper that answered with something else (or died) fails this
+  // check instead of aborting the test on a missing key.
+  const json got_state = caps.value("state", json("<none>"));
+  const json got_reason = caps.value("reason", json("<none>"));
+  check(got_state == state && got_reason == reason,
+        what + " (got " + got_state.dump() + "/" + got_reason.dump() + ")");
 }
 
 Helper launch(const Daemon &daemon, std::vector<std::string> extra = {}) {
@@ -393,6 +445,15 @@ void no_accessibility_bus(const Daemon &daemon) {
       h.expect("capabilities"), "needs_setup", "atspi_bus_absent",
       "setup with no accessibility bus cannot enable it and starts nothing");
   check(!a11y_owned(daemon), "the helper never started the accessibility bus");
+  check(
+      !daemon.activated(),
+      "no call activated the org.a11y.Bus service (its marker never appeared)");
+  // The setup above reached no bus, so a bus that appears later, disabled, is a
+  // first run and not a failed setup.
+  FakeA11y late(daemon.address, FakeA11y::Status::Boolean, false, "x");
+  expect_state(capabilities(h, 4), "needs_setup", "accessibility_disabled",
+               "a setup that reached no bus is not blamed on a later one");
+  check(late.sets == 0, "and nothing was set");
 }
 
 void disabled_then_setup(const Daemon &daemon) {
@@ -493,29 +554,127 @@ void unreachable_registry(const Daemon &daemon) {
   check(h.wait_exit() == 0, "exit 0");
 }
 
-// libatspi cannot reach a new registry after the first one is gone (its
-// application table survives atspi_exit), so a lost registry is reported once
-// and the helper then exits for the supervisor to restart.
-void registry_loss_is_fatal(const Daemon &daemon) {
+// A second daemon plays the accessibility bus (as on a real desktop, where it
+// is separate from the session bus); the registry lives on it.
+struct A11yWorld {
+  Daemon bus;
+  std::unique_ptr<FakeA11y> status;
+  std::unique_ptr<FakeRegistry> registry;
+  bool start(const Daemon &session) {
+    if (!start_daemon(bus))
+      return false;
+    status = std::make_unique<FakeA11y>(
+        session.address, FakeA11y::Status::Boolean, true, bus.address);
+    registry = std::make_unique<FakeRegistry>(bus.address);
+    return true;
+  }
+};
+
+// Sends capabilities and expects the helper's terminal error instead of a
+// reply, then exit status 4.
+void expect_fatal_loss(Helper &h, int id, const std::string &what) {
+  h.send({{"type", "capabilities"}, {"id", id}});
+  const json error = h.expect("error");
+  check(error["code"] == "atspi_bus_lost" && error["id"] == id,
+        what + ": a terminal error carries the request id and reason: " +
+            error.dump());
+  check(h.wait_exit(5000) == kLinuxExitRegistryLost,
+        what + ": the helper exits with status 4");
+}
+
+// A registry that stalls or restarts is not the end of libatspi's connection:
+// the read fails, the helper stays up, and it recovers when the registry is
+// back.
+void registry_blip_is_not_fatal(const Daemon &session) {
   SelfAsZoom zoom;
-  FakeA11y a11y(daemon.address, FakeA11y::Status::Boolean, true,
-                daemon.address);
-  auto registry = std::make_unique<FakeRegistry>(daemon.address);
-  Helper h = launch(daemon, zoom.env_with_rules);
+  A11yWorld world;
+  if (!world.start(session)) {
+    check(false, "the accessibility daemon starts");
+    return;
+  }
+  Helper h = launch(session, zoom.env_with_rules);
   h.expect("hello");
   // The read reaches the real desktop: init, then the registry's child count.
   expect_state(capabilities(h, 1), "unavailable", "zoom_not_exposed",
-               "a desktop read before the loss (no application for Zoom)");
-  check(registry->queries >= 1, "the fake registry was queried by libatspi");
+               "a desktop read before the blip (no application for Zoom)");
+  check(world.registry->queries >= 1,
+        "the fake registry was queried by libatspi");
 
-  registry.reset(); // the accessibility registry goes away
-  expect_state(capabilities(h, 2), "unavailable", "atspi_bus_lost",
-               "registry lost");
-  h.send({{"type", "capabilities"}, {"id", 3}});
-  check(h.wait_exit(5000) == kExitRegistryLost,
-        "the helper then exits with the documented code");
-  check(h.drain_stderr().find("registry_lost_exit") != std::string::npos,
-        "a stable token explains the exit");
+  world.registry.reset(); // the registry goes away; the accessibility bus stays
+  expect_state(capabilities(h, 2), "unavailable", "ax_read_failed",
+               "a registry that is gone for a moment");
+  h.expect_clock(3);
+  h.send({{"type", "start"},
+          {"id", 4},
+          {"session", "s"},
+          {"poll_ms", 100},
+          {"deadline_ms", 1000}});
+  h.expect("started");
+  check(h.expect("unavailable")["reason"] == "ax_read_failed",
+        "and a session reports it without ending");
+  world.registry = std::make_unique<FakeRegistry>(world.bus.address);
+  // libatspi reattaches when the well-known name returns; the helper follows.
+  // Bounded: a helper that died stops the loop at once instead of timing out.
+  json again = json::object();
+  for (int attempt = 0; attempt < 40; ++attempt) {
+    auto frame = h.try_capabilities(100 + attempt);
+    if (!frame)
+      break;
+    again = *frame;
+    if (again["reason"] == "zoom_not_exposed")
+      break;
+    const json first = h.expect_clock(200 + attempt);
+    if (!first.contains("monotonic_ms"))
+      break;
+    const std::int64_t at = first["monotonic_ms"];
+    for (int tick = 0; tick < 400; ++tick) {
+      const json now = h.expect_clock(300 + tick);
+      if (!now.contains("monotonic_ms") ||
+          now["monotonic_ms"].get<std::int64_t>() - at >= 100)
+        break;
+    }
+  }
+  expect_state(again, "unavailable", "zoom_not_exposed",
+               "recovered after the registry returned");
+  h.send({{"type", "stop"}, {"id", 5}});
+  h.expect("stopped", 10000);
+}
+
+// libatspi cannot reach a new registry once its connection to the accessibility
+// bus is gone (its application table survives atspi_exit): that is fatal,
+// reported in a terminal error, and the supervisor restarts the helper.
+void bus_connection_drop_is_fatal(const Daemon &session) {
+  SelfAsZoom zoom;
+  A11yWorld world;
+  if (!world.start(session)) {
+    check(false, "the accessibility daemon starts");
+    return;
+  }
+  Helper h = launch(session, zoom.env_with_rules);
+  h.expect("hello");
+  expect_state(capabilities(h, 1), "unavailable", "zoom_not_exposed",
+               "a desktop read before the drop");
+  world.registry.reset();
+  world.bus
+      .stop(); // the accessibility bus daemon dies: libatspi's connection drops
+  expect_fatal_loss(h, 2, "accessibility bus gone");
+}
+
+// A different owner of org.a11y.Bus than the one libatspi connected through is
+// a restarted accessibility bus: also fatal.
+void bus_owner_loss_is_fatal(const Daemon &session) {
+  SelfAsZoom zoom;
+  A11yWorld world;
+  if (!world.start(session)) {
+    check(false, "the accessibility daemon starts");
+    return;
+  }
+  Helper h = launch(session, zoom.env_with_rules);
+  h.expect("hello");
+  expect_state(capabilities(h, 1), "unavailable", "zoom_not_exposed",
+               "a desktop read before the owner goes");
+  world.status.reset(); // org.a11y.Bus loses its owner; the daemon stays up
+  expect_fatal_loss(h, 2, "org.a11y.Bus owner gone");
 }
 
 } // namespace
@@ -527,15 +686,21 @@ int main(int argc, char **argv) {
   }
   helper_path = argv[1];
   std::signal(SIGPIPE, SIG_IGN);
+  if (!dbus_daemon_in_path()) {
+    std::cerr << "SKIP: dbus-daemon is not installed\n";
+    return 77;
+  }
   const std::vector<void (*)(const Daemon &)> scenarios = {
-      no_accessibility_bus,       disabled_then_setup,  unreadable_and_mistyped,
-      no_libatspi_without_a_rule, unreachable_registry, registry_loss_is_fatal};
+      no_accessibility_bus,         disabled_then_setup,
+      unreadable_and_mistyped,      no_libatspi_without_a_rule,
+      unreachable_registry,         registry_blip_is_not_fatal,
+      bus_connection_drop_is_fatal, bus_owner_loss_is_fatal};
   for (auto scenario : scenarios) {
     Daemon daemon;
-    if (!start_daemon(daemon)) {
-      std::cerr << "SKIP: dbus-daemon is unavailable\n";
-      return 77;
-    }
+    // dbus-daemon is installed, so a daemon that will not start is a failure
+    // that must not hide earlier ones behind a skip.
+    if (!check_started(daemon))
+      continue;
     scenario(daemon);
   }
   std::cout << "zoom_observer_bus: " << checks << " checks, " << failures

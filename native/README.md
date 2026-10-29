@@ -140,8 +140,8 @@ Live speech uses `foresight-whisper-worker`, installed beside the diagnostic Whi
 `zoom_observer_linux` reads Zoom's accessibility tree through libatspi and speaks
 the [observer protocol](../docs/architecture/speaker-observer-protocol.md) on
 stdin/stdout, on top of the protocol core shared with macOS
-(`foresight_zoom_observer_core`). It is built only on Linux and only when `atspi-2`
-and `gio-2.0` development files are found; otherwise CMake prints a status line and
+(`foresight_zoom_observer_core`). It is built only on Linux and only when `atspi-2`,
+`gio-2.0` and `dbus-1` development files are found; otherwise CMake prints a status line and
 skips the target, so the application and recording build and start without it. The
 Linux parser and `Source` always build on Linux and are tested with synthetic
 fixtures in `tests/fixtures/zoom_observer_linux`; the `zoom_observer_protocol`

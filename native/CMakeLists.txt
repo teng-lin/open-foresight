@@ -99,7 +99,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_library(foresight_zoom_linux STATIC zoom_atspi_parser.cpp zoom_atspi_collect.cpp zoom_linux_proc.cpp zoom_linux_source.cpp)
   target_compile_features(foresight_zoom_linux PUBLIC cxx_std_20)
   target_link_libraries(foresight_zoom_linux PUBLIC foresight_zoom_observer_core)
-  pkg_check_modules(FORESIGHT_ATSPI QUIET IMPORTED_TARGET atspi-2 gio-2.0)
+  pkg_check_modules(FORESIGHT_ATSPI QUIET IMPORTED_TARGET atspi-2 gio-2.0 dbus-1)
   option(FORESIGHT_REQUIRE_ATSPI
     "Fail configuration when libatspi/GIO development files are missing instead of skipping zoom_observer_linux" OFF)
   if(FORESIGHT_ATSPI_FOUND)
@@ -111,7 +111,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(zoom_observer_linux PRIVATE foresight_zoom_atspi)
     install(TARGETS zoom_observer_linux RUNTIME DESTINATION bin)
   elseif(FORESIGHT_REQUIRE_ATSPI)
-    message(FATAL_ERROR "FORESIGHT_REQUIRE_ATSPI is ON but atspi-2 and gio-2.0 development files "
+    message(FATAL_ERROR "FORESIGHT_REQUIRE_ATSPI is ON but atspi-2, gio-2.0 and dbus-1 development files "
       "were not found (Debian/Ubuntu libatspi2.0-dev and libglib2.0-dev)")
   else()
     message(STATUS "libatspi/GIO development files not found: zoom_observer_linux is skipped")

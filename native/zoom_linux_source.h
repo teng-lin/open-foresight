@@ -18,6 +18,10 @@ namespace foresight::zoom {
 // Per-read budget and per-call timeout, as for the macOS helper.
 inline constexpr int kLinuxReadBudgetMs = 1500;
 inline constexpr int kLinuxCallTimeoutMs = 250;
+// Exit status when the accessibility registry is lost for good (see BusLost):
+// the helper reports `atspi_bus_lost` in a terminal error frame and exits with
+// it, so the supervisor starts a fresh process.
+inline constexpr int kLinuxExitRegistryLost = 4;
 // Longest accessible string the collector keeps; the parser rejects names over
 // kMaxNameBytes, so one byte more is enough to prove a name oversize.
 inline constexpr size_t kMaxCollectedBytes = kMaxNameBytes + 1;
@@ -64,8 +68,9 @@ public:
   virtual ~LinuxDesktop() = default;
   // Read-only: never activates a service or changes a setting.
   virtual BusStatus bus_status() = 0;
-  // Explicit setup only: enables desktop accessibility support.
-  virtual void enable_accessibility() = 0;
+  // Explicit setup only: enables desktop accessibility support. True when the
+  // request reached the accessibility bus and got a reply (not merely tried).
+  virtual bool enable_accessibility() = 0;
   virtual ProcessScan zoom_processes() = 0;
   // One bounded traversal of the application owning `pid`.
   virtual TreeRead read_tree(int pid, int budget_ms,

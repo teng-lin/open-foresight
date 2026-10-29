@@ -129,6 +129,15 @@ public:
     return next.value_or(json::object());
   }
 
+  // A capabilities reply, or nullopt when the helper sent none in time.
+  std::optional<json> try_capabilities(int id) {
+    send({{"type", "capabilities"}, {"id", id}});
+    auto frame = this->frame(5000);
+    if (!frame || (*frame)["type"] != "capabilities")
+      return std::nullopt;
+    return frame;
+  }
+
   // Sends a clock request and returns its reply; every frame in between must
   // be that reply (no unsolicited frame).
   json expect_clock(int id) {

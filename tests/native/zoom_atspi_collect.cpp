@@ -278,9 +278,14 @@ void budget_between_calls_of_one_node() {
   d2.apps = {app_with({leaf(":1.1/w")})};
   ElementRegistry r2;
   int polls = 0;
-  read_zoom_tree(d2, 1, limits_for(c2, 1000), r2, [&] { return ++polls > 3; });
-  check(c2.reads == 1 && polls < 12,
-        "cancellation is polled between the calls of one node too");
+  // Poll 1 is the node's entry, poll 2 lets the first call run, poll 3 cancels.
+  const TreeRead cancelled_read = read_zoom_tree(
+      d2, 1, limits_for(c2, 1000), r2, [&] { return ++polls > 2; });
+  check(cancelled_read.status == TreeRead::Status::Cancelled &&
+            cancelled_read.snapshot.truncated,
+        "cancellation in the middle of a node is reported");
+  check(c2.clock_ms <= 10,
+        "at most one of the node's six calls runs after the cancel is due");
 }
 
 void call_errors() {
