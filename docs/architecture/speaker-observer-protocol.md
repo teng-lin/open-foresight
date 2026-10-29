@@ -281,14 +281,28 @@ when stdin closes.
   offset from the best of at least one (default three) `clock` exchanges per
   helper; the shift widens each read by half the round trip plus one
   millisecond. A probe during which the capture clock went backward is
-  discarded. The offset is measured once per helper process: both clocks are
-  monotonic in the same domain, so it does not drift.
+  discarded. The offset is not constant: the macOS helper's `monotonic_ms`
+  counts system sleep (`mach_continuous_time`) while native capture timestamps do
+  not, so every sleep moves the offset by its length. The offset is therefore
+  measured again every 30 s (default) while running, and at once when a read
+  ends later than the clock would allow (more than the measurement's uncertainty
+  plus 250 ms after the moment it arrived). A re-measured offset that differs
+  from the one in use by more than both uncertainties plus 250 ms is a shift: the
+  new offset is used, and an `UnavailableEvent` with `retractsReads` and the
+  reason `clock_shift` tells the consumer to forget every read after the last
+  one the old offset was known to fit (a consumer that ignores the flag keeps
+  reads timed up to the sleep's length too late). Attributions already made
+  from such reads are not revisited. A shift smaller than the tolerance, or one
+  that happened since the last recheck and shows in no read, is not seen until
+  the next periodic measurement; the error until then is the shift.
 - **Plausibility.** A read is a protocol violation, and the helper is replaced,
   when its mapped end lies more than the read skew (default 5 s) in the
   service's future, its start more than the skew before the session began, or
   it took longer than the read deadline plus the skew. An `unavailable` frame's
   `since_ms` is checked the same way (mapped time not in the future, not before
-  the session began).
+  the session began). Before such a read is blamed on the helper the clock offset
+  is measured again: a shifted offset (a long sleep) explains the read, which is
+  dropped, and the helper is kept.
 - **Flooding.** More than `max(20, 4000 / poll_ms)` stream frames per second is a
   protocol violation.
 - **Busy.** A request refused with `error` / `busy` (the helper's queue was

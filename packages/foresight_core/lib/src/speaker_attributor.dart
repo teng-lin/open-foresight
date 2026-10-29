@@ -146,6 +146,15 @@ final class _Segment {
   _Break breakAfter = _Break.none;
   String breakReason = '';
 
+  /// Keep only what was read before [us].
+  void clampTo(int us) {
+    lastStartUs = math.min(lastStartUs, us);
+    lastEndUs = math.min(lastEndUs, us);
+    for (final map in [firstEndBy, lastStartBy, lastEndBy]) {
+      map.updateAll((_, value) => math.min(value, us));
+    }
+  }
+
   void absorb(SpeakerObservation read) {
     reads++;
     lastStartUs = read.readStartUs;
@@ -264,6 +273,28 @@ final class ObservationHistory {
   /// last complete read, and the earliest open claim is kept.
   void addUnavailable({required int sinceUs, required String reason}) =>
       _beginUnavailable(sinceUs, reason);
+
+  /// Forget every read at or after [us] and make the time from there blind:
+  /// those reads were timed with a clock offset that proved wrong, and the
+  /// corrected reads that follow carry earlier times than the ones dropped.
+  void retractSince(int us, String reason) {
+    while (_segments.isNotEmpty && _segments.last.firstStartUs >= us) {
+      _segments.removeLast();
+    }
+    if (_segments.isNotEmpty) _segments.last.clampTo(us);
+    _unavailable.removeWhere((interval) => interval.startUs >= us);
+    if (_open != null && !_unavailable.contains(_open)) _open = null;
+    _latestReadStartUs = _latestReadStartUs == null
+        ? null
+        : math.min(_latestReadStartUs!, us);
+    _latestReadEndUs = _latestReadEndUs == null
+        ? null
+        : math.min(_latestReadEndUs!, us);
+    _lastCompleteEndUs = _lastCompleteEndUs == null
+        ? null
+        : math.min(_lastCompleteEndUs!, us);
+    _beginUnavailable(us, reason);
+  }
 
   /// A new helper process (restart or new session) is reporting. Its clock
   /// readings are unrelated to the last helper's ordering, so the ordering
@@ -872,8 +903,18 @@ final class SpeakerAttributionSession {
     switch (event) {
       case ObservationEvent(:final observation, :final epoch):
         if (_enter(epoch)) addObservation(observation);
-      case UnavailableEvent(:final sinceUs, :final reason, :final epoch):
-        if (_enter(epoch)) addUnavailable(sinceUs: sinceUs, reason: reason);
+      case UnavailableEvent(
+        :final sinceUs,
+        :final reason,
+        :final epoch,
+        :final retractsReads,
+      ):
+        if (!_enter(epoch)) return;
+        if (retractsReads) {
+          history.retractSince(sinceUs, reason);
+        } else {
+          addUnavailable(sinceUs: sinceUs, reason: reason);
+        }
       case ObserverStateEvent(:final status, :final atUs, :final epoch):
         if (!_enter(epoch)) return;
         if (status == ObserverStatus.restarting ||

@@ -89,9 +89,16 @@ final class UnavailableEvent extends SpeakerObserverEvent {
     super.epoch, {
     required this.sinceUs,
     required this.reason,
+    this.retractsReads = false,
   });
   final int sinceUs;
   final String reason;
+
+  /// Reads reported at or after [sinceUs] were timed with a clock offset that
+  /// has since proved wrong (the helper's clock moved against the capture
+  /// clock, as across system sleep): consumers must forget them, not merely
+  /// treat the time as blind.
+  final bool retractsReads;
 }
 
 /// Lifecycle change, stamped with the capture clock. [ObserverStatus.restarting],

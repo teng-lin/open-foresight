@@ -22,6 +22,7 @@ SpeakerObserverConfig fastConfig({
   int readDeadlineMs = 100,
   Duration stallSlack = const Duration(seconds: 5),
   int clockProbes = 3,
+  Duration? clockRecheck = const Duration(seconds: 30),
   int maxStderrBytes = 1024,
   int maxLineBytes = 262144,
   Duration spawn = const Duration(milliseconds: 300),
@@ -49,6 +50,7 @@ SpeakerObserverConfig fastConfig({
   backoffInitial: const Duration(milliseconds: 10),
   backoffMax: backoffMax,
   clockProbes: clockProbes,
+  clockRecheck: clockRecheck,
   maxStderrBytes: maxStderrBytes,
   maxLineBytes: maxLineBytes,
   maxFramesPerSecond: maxFramesPerSecond,
@@ -498,6 +500,8 @@ void main() {
       };
       await h.observer.start('s1');
       expect(next, 3);
+      // A read cannot end after the moment it is reported.
+      h.captureNow = 7000000;
       h.helpers.single.send('observation', observationFields('s1'));
       await eventually(() => h.observations.isNotEmpty);
       final observed = h.observations.single.observation;
@@ -505,6 +509,128 @@ void main() {
       // offset = 5 000 400 + 5 - 1 000 000, uncertainty 5 + 1000 us.
       expect(observed.readStartUs, 2000000 + 4000405 - 1005);
       expect(observed.readEndUs, 2010000 + 4000405 + 1005);
+    });
+
+    group('the helper clock moves against the capture clock', () {
+      // The helper's clock counts system sleep and native capture does not, so
+      // after a sleep the offset measured at the start is wrong by its length.
+      Future<List<SpeakerObserverEvent>> sleepScenario(
+        Harness h, {
+        required int sleepMs,
+      }) async {
+        final events = <SpeakerObserverEvent>[];
+        h.observer.events.listen(events.add);
+        await h.observer.start('s1');
+        // Helper 1000 ms is capture 5 s. A read before the sleep:
+        h.captureNow = 7000000;
+        h.helpers.single.send(
+          'observation',
+          observationFields('s1', startMs: 3000),
+        );
+        await eventually(() => h.observations.length == 1);
+        // One second later the helper's clock reads 1 s + sleep further on.
+        h.captureNow = 8000000;
+        h.behaviors.first.clockMs = 4000 + sleepMs;
+        h.helpers.single.send(
+          'observation',
+          observationFields('s1', startMs: 3980 + sleepMs),
+        );
+        return events;
+      }
+
+      test('a shift is found from the first read ahead of the clock; reads '
+          'timed with the old offset are retracted', () async {
+        h = Harness();
+        final session = SpeakerAttributionSession(session: 's1');
+        h.observer.events.listen(session.apply);
+        final events = await sleepScenario(h, sleepMs: 3000);
+        await eventually(() => events.whereType<UnavailableEvent>().isNotEmpty);
+        final retract = events.whereType<UnavailableEvent>().single;
+        expect(retract.retractsReads, true);
+        expect(retract.reason, 'clock_shift');
+        // From the end of the last read that was not ahead of the clock.
+        expect(retract.sinceUs, closeTo(7010000 + 4000405 - 4000000, 5000));
+        expect(
+          h.diagnosticCodes,
+          contains(SpeakerObserverDiagnosticCode.clockShifted),
+        );
+        expect(h.helpers, hasLength(1));
+        // The next read is timed with the new offset and is accepted although
+        // it is earlier than the retracted one.
+        h.captureNow = 8500000;
+        h.helpers.single.send(
+          'observation',
+          observationFields('s1', startMs: 7480),
+        );
+        await eventually(() => h.observations.length == 3);
+        await settle();
+        expect(session.rejectedObservationCount, 0);
+        expect(h.helpers, hasLength(1));
+        expect(h.observer.stats.restarts, 0);
+        final latest = h.observations.last.observation;
+        expect(latest.readStartUs, closeTo(8480000, 5000));
+      });
+
+      test('a sleep longer than the read skew moves the offset, not the '
+          'helper', () async {
+        h = Harness();
+        await sleepScenario(h, sleepMs: 30000);
+        await eventually(
+          () => h.diagnosticCodes.contains(
+            SpeakerObserverDiagnosticCode.clockShifted,
+          ),
+        );
+        h.captureNow = 8500000;
+        h.helpers.single.send(
+          'observation',
+          observationFields('s1', startMs: 34480),
+        );
+        await eventually(() => h.observations.isNotEmpty);
+        await settle();
+        expect(h.helpers, hasLength(1));
+        expect(h.observer.stats.restarts, 0);
+        expect(
+          h.observations.last.observation.readStartUs,
+          closeTo(8480000, 5000),
+        );
+      });
+
+      test('a read that is implausible with an unchanged offset still '
+          'restarts the helper', () async {
+        h = Harness();
+        await h.observer.start('s1');
+        h.helpers.single.send(
+          'observation',
+          observationFields('s1', startMs: 1 << 49),
+        );
+        await eventually(() => h.helpers.length == 2);
+        expect(
+          h.diagnosticCodes,
+          isNot(contains(SpeakerObserverDiagnosticCode.clockShifted)),
+        );
+      });
+
+      test('a periodic recheck finds a small shift no read exposed, and '
+          'leaves a steady clock alone', () async {
+        h = Harness(
+          config: fastConfig(clockRecheck: const Duration(milliseconds: 150)),
+        );
+        final events = <SpeakerObserverEvent>[];
+        h.observer.events.listen(events.add);
+        await h.observer.start('s1');
+        // Within the tolerance: no retraction.
+        h.behaviors.first.clockMs = 1100;
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        expect(events.whereType<UnavailableEvent>(), isEmpty);
+        // Half a second more than the capture clock moved: a shift.
+        h.behaviors.first.clockMs = 1600;
+        await eventually(() => events.whereType<UnavailableEvent>().isNotEmpty);
+        final retract = events.whereType<UnavailableEvent>().first;
+        expect(retract.retractsReads, true);
+        expect(retract.sinceUs, 5000000);
+        expect(h.helpers, hasLength(1));
+        expect(h.observer.stats.restarts, 0);
+      });
     });
 
     test('a clock that runs backward invalidates the probe', () async {

@@ -531,6 +531,46 @@ void main() {
     });
   });
 
+  group('retracting reads timed with a wrong clock offset', () {
+    test('forgets reads from the cut, accepts earlier corrected ones', () {
+      reads(history, 1, 4, speakers: ['a']);
+      reads(history, 4.5, 9, speakers: ['b']);
+      history.retractSince(sec(4.2), 'clock_shift');
+      // Bo's reads were all after the cut; Ada's last read ended before it.
+      expect(decide(history, audio(2, 3)).participantRef, 'a');
+      expectState(
+        decide(history, audio(5, 6)),
+        SpeakerDecisionState.unavailable,
+        'clock_shift',
+      );
+      // A corrected read earlier than the dropped ones is not "old".
+      reads(history, 4.3, 5.3, speakers: ['b']);
+      expect(history.rejectedCount, 0);
+      expect(decide(history, audio(4.6, 5)).participantRef, 'b');
+    });
+
+    test('a segment that straddles the cut is cut short, not extended', () {
+      reads(history, 1, 9, speakers: ['a']);
+      history.retractSince(sec(5), 'clock_shift');
+      expect(decide(history, audio(2, 4)).participantRef, 'a');
+      expectState(
+        decide(history, audio(6, 8)),
+        SpeakerDecisionState.unavailable,
+        'clock_shift',
+      );
+    });
+
+    test('retracting an unavailable interval inside the cut closes nothing '
+        'twice', () {
+      reads(history, 1, 3, speakers: ['a']);
+      history.addUnavailable(sinceUs: sec(5), reason: 'zoom_not_running');
+      history.retractSince(sec(4), 'clock_shift');
+      expect(history.unavailableIntervals.map((i) => i.reason), [
+        'clock_shift',
+      ]);
+    });
+  });
+
   group('lag and timing edge cases', () {
     test('lag inversion considers every later segment, not only the next', () {
       reads(history, 0, 10, speakers: ['a']);

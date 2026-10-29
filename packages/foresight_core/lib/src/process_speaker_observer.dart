@@ -46,6 +46,7 @@ enum SpeakerObserverDiagnosticCode {
   stopRefusedBusy,
   clockMeasured,
   clockRejected,
+  clockShifted,
   busyRetried,
   launchNotFound,
   launchNotExecutable,
@@ -83,6 +84,8 @@ final class SpeakerObserverConfig {
     this.backoffInitial = const Duration(milliseconds: 250),
     this.backoffMax = const Duration(seconds: 5),
     this.clockProbes = 3,
+    this.clockRecheck = const Duration(seconds: 30),
+    this.clockJumpTolerance = const Duration(milliseconds: 250),
     this.readSkew = const Duration(seconds: 5),
     this.maxFramesPerSecond,
     this.maxStderrBytes = 64 * 1024,
@@ -116,6 +119,17 @@ final class SpeakerObserverConfig {
   /// least one, because an unmeasured offset would silently claim exactness.
   final int clockProbes;
 
+  /// How often the helper clock is measured again while running (null: never).
+  /// The offset between the helper's clock and the capture clock is not
+  /// constant: the macOS helper counts system sleep and native capture does
+  /// not, so every sleep moves it.
+  final Duration? clockRecheck;
+
+  /// A re-measured offset that differs from the one in use by more than both
+  /// measurements' uncertainty plus this is a shift: the reads timed since the
+  /// last measurement are retracted and the new offset is used.
+  final Duration clockJumpTolerance;
+
   /// How far a helper read may lie in the observer's future, or before the
   /// session began, before it counts as a protocol violation.
   final Duration readSkew;
@@ -145,6 +159,8 @@ final class SpeakerObserverConfig {
         maxStderrBytes < 0 ||
         (maxFramesPerSecond != null && maxFramesPerSecond! < 1) ||
         (restartRefillAfter != null && restartRefillAfter! <= Duration.zero) ||
+        (clockRecheck != null && clockRecheck! <= Duration.zero) ||
+        clockJumpTolerance < Duration.zero ||
         [
           spawnTimeout,
           handshakeTimeout,
@@ -331,6 +347,12 @@ final class _Connection {
   bool quiet = false;
   int epoch = 0;
   _ClockFix clock = (offsetUs: 0, uncertaintyUs: 0);
+
+  /// Capture time at which [clock] was last confirmed, the end of the latest
+  /// read that was not ahead of the capture clock, and whether a recheck is
+  /// under way.
+  int clockVerifiedUs = 0, lastGoodEndUs = 0;
+  bool rechecking = false;
 
   /// Launch, handshake. [cancel] aborts a launch in flight; [onCreated] runs as
   /// soon as the child exists so the owner can cancel the handshake through
@@ -758,7 +780,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
   int _epochCounter = 0;
   int _generation = 0, _epoch = 0, _restarts = 0, _requestCounter = 0;
   int _sessionStartUs = 0;
-  Timer? _stall, _backoff;
+  Timer? _stall, _backoff, _clockTimer;
   Completer<void>? _backoffWake;
   final Set<Completer<void>> _cancelables = {};
   final Set<Timer> _retryTimers = {};
@@ -783,6 +805,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
   int get debugActiveTimers =>
       (_stall?.isActive == true ? 1 : 0) +
       (_backoff?.isActive == true ? 1 : 0) +
+      (_clockTimer?.isActive == true ? 1 : 0) +
       _retryTimers.where((timer) => timer.isActive).length;
 
   @override
@@ -1130,6 +1153,21 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     if (identical(_conn, connection)) _conn = null;
   }
 
+  /// Stop watching the live helper: stall detection and clock rechecks.
+  void _disarm() {
+    _stall?.cancel();
+    _clockTimer?.cancel();
+  }
+
+  void _armClockRecheck(_Connection connection) {
+    _clockTimer?.cancel();
+    final every = config.clockRecheck;
+    if (every == null) return;
+    _clockTimer = Timer(every, () {
+      unawaited(_recheckClock(connection));
+    });
+  }
+
   void _goLive(_Connection connection) {
     _conn = connection;
     connection.live = true;
@@ -1141,6 +1179,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
       ..start();
     _emitState(ObserverStatus.running);
     _armStall(connection);
+    _armClockRecheck(connection);
     // The helper may have failed between its start reply and now.
     final early = connection.failure;
     if (early != null) _onConnectionFailure(connection, early);
@@ -1151,7 +1190,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     _conn = null;
     _session = null;
     _startOp = null;
-    _stall?.cancel();
+    _disarm();
   }
 
   /// Spawn, handshake, measure the clock and start observing. On any failure the
@@ -1161,6 +1200,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     try {
       _requireCurrent(generation);
       connection.clock = await _measureClock(connection);
+      connection.clockVerifiedUs = connection.lastGoodEndUs = _clockUs();
       _requireCurrent(generation);
       final reply = await _request(
         connection,
@@ -1202,7 +1242,10 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     }
   }
 
-  Future<_ClockFix> _measureClock(_Connection connection) async {
+  Future<_ClockFix> _measureClock(
+    _Connection connection, {
+    bool failOnTimeout = true,
+  }) async {
     _ClockFix? best;
     var bestRtt = 0;
     for (var i = 0; i < config.clockProbes; i++) {
@@ -1214,6 +1257,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
           (id) => ClockRequest(id),
           // Anchor the round trip to the attempt that was answered.
           beforeAttempt: () => before = _clockUs(),
+          failOnTimeout: failOnTimeout,
         ),
       );
       final after = _clockUs();
@@ -1239,6 +1283,61 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     }
     _diagnostic(SpeakerObserverDiagnosticCode.clockMeasured, bestRtt);
     return best;
+  }
+
+  /// Measure the helper clock again while the session runs. Reads timed with
+  /// an offset that proved wrong are retracted from the last confirmation on;
+  /// otherwise the offset is simply confirmed. Returns whether it had shifted.
+  ///
+  /// [goodUntilUs], when known, is the last time the old offset was seen to be
+  /// right (the end of the last read that was not ahead of the capture clock);
+  /// only reads after it are retracted.
+  Future<bool> _recheckClock(_Connection connection, {int? goodUntilUs}) async {
+    bool current() =>
+        identical(connection, _conn) &&
+        connection.live &&
+        connection.failure == null &&
+        _phase == _Phase.running;
+    if (!current() || connection.rechecking) return false;
+    connection.rechecking = true;
+    try {
+      final fix = await _measureClock(connection, failOnTimeout: false);
+      if (!current()) return false;
+      final previous = connection.clock;
+      final limit =
+          previous.uncertaintyUs +
+          fix.uncertaintyUs +
+          config.clockJumpTolerance.inMicroseconds;
+      final shift = fix.offsetUs - previous.offsetUs;
+      final since = goodUntilUs == null
+          ? connection.clockVerifiedUs
+          : math.max(connection.clockVerifiedUs, goodUntilUs);
+      connection.clockVerifiedUs = _clockUs();
+      if (shift.abs() <= limit) return false;
+      _diagnostic(
+        SpeakerObserverDiagnosticCode.clockShifted,
+        shift.abs() ~/ 1000,
+      );
+      connection.clock = fix;
+      connection.lastGoodEndUs = connection.clockVerifiedUs;
+      _emit(
+        UnavailableEvent(
+          connection.epoch,
+          sinceUs: since,
+          reason: 'clock_shift',
+          retractsReads: true,
+        ),
+      );
+      return true;
+    } on SpeakerObserverException catch (error) {
+      if (error.failure == SpeakerObserverFailure.requestTimeout) {
+        _stalled(connection);
+      }
+      return false;
+    } finally {
+      connection.rechecking = false;
+      if (current()) _armClockRecheck(connection);
+    }
   }
 
   void _emit(SpeakerObserverEvent event) {
@@ -1278,6 +1377,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
                     1000) {
           return _implausible(connection);
         }
+        _checkAhead(connection, shifted.readEndUs);
         _lastUnavailableReason = null;
         connection.quiet = false;
         _count(observations: 1);
@@ -1319,9 +1419,37 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     return endUs <= _clockUs() + skew && startUs >= _sessionStartUs - skew;
   }
 
+  /// A read cannot end after the moment its frame arrives. One that does by
+  /// more than the clock's own tolerance means the offset moved (system sleep),
+  /// so it is measured again; the read is kept, and retracted if it was wrong.
+  void _checkAhead(_Connection connection, int readEndUs) {
+    final slack =
+        connection.clock.uncertaintyUs +
+        config.clockJumpTolerance.inMicroseconds;
+    if (readEndUs > _clockUs() + slack) {
+      unawaited(
+        _recheckClock(connection, goodUntilUs: connection.lastGoodEndUs),
+      );
+    } else if (!connection.rechecking) {
+      connection.lastGoodEndUs = math.max(connection.lastGoodEndUs, readEndUs);
+    }
+  }
+
+  /// A read the helper could not have made. Before blaming the helper its
+  /// clock offset is measured again: a shifted offset (system sleep) explains
+  /// the read, which is dropped, and the next ones are timed correctly. With
+  /// the offset unchanged the read is the helper's fault. Reads that arrive
+  /// while the measurement runs are dropped.
   void _implausible(_Connection connection) {
     _diagnostic(SpeakerObserverDiagnosticCode.implausibleRead);
-    connection.protocolFailure();
+    if (connection.rechecking) return;
+    unawaited(
+      _recheckClock(connection).then<void>((shifted) {
+        if (!shifted && connection.live && connection.failure == null) {
+          connection.protocolFailure();
+        }
+      }),
+    );
   }
 
   static SpeakerObservation _qualified(SpeakerObservation o, int epoch) {
@@ -1401,7 +1529,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
       return;
     }
     _phase = _Phase.restarting;
-    _stall?.cancel();
+    _disarm();
     final refill = config.restartRefillAfter;
     if (refill != null && _restarts > 0 && _liveFor.elapsed >= refill) {
       // The helper ran healthily for long enough: isolated crashes hours
@@ -1548,7 +1676,7 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     final session = _session;
     _generation++;
     _phase = _Phase.stopping;
-    _stall?.cancel();
+    _disarm();
     _backoff?.cancel();
     final wake = _backoffWake;
     if (wake != null && !wake.isCompleted) wake.complete();
