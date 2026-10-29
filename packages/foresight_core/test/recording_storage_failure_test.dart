@@ -956,9 +956,31 @@ void main() {
         final id = boundaryStore.meeting('Boundary storage fault');
         await service.application.startRecording(id);
         final owner = service.application.recording!;
+        // The initial poll runs while start is still pending. Publish the
+        // acquired level after start returns, before faulting state writes;
+        // otherwise the first 50 ms poll can hit the fault before detach.
+        owner.drain();
+        expect(owner.captureActive, isTrue);
+        expect(owner.starting, isFalse);
         boundaryStore.db.execute(
           "CREATE TRIGGER fault_boundary BEFORE UPDATE OF state ON meetings BEGIN SELECT RAISE(ABORT,'boundary storage fault'); END",
         );
+        final polls = [
+          for (final route in boundaryPlatform.routes)
+            route.log.where((event) => event == 'poll').length,
+        ];
+        // Cross a real metadata poll with the fault armed. This pins that
+        // capture remains healthy until the desktop boundary is exercised.
+        await eventually(
+          () => boundaryPlatform.routes.indexed.every(
+            (entry) =>
+                entry.$2.log.where((event) => event == 'poll').length >
+                polls[entry.$1],
+          ),
+          label: 'healthy capture poll before desktop departure',
+        );
+        expect(service.application.recording, same(owner));
+        expect(owner.lastError, isEmpty);
         if (disconnect) {
           await desktop.close();
         } else {
