@@ -538,6 +538,7 @@ int main(int argc, char **argv) {
     }
     scenario(daemon);
   }
-  std::cout << checks << " checks, " << failures << " failures\n";
+  std::cout << "zoom_observer_bus: " << checks << " checks, " << failures
+            << " failures\n";
   return failures == 0 ? 0 : 1;
 }

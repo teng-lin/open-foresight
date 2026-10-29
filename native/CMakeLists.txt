@@ -666,11 +666,19 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(zoom_observer_core_test PRIVATE foresight_zoom_observer_core
     nlohmann_json::nlohmann_json)
   add_test(NAME zoom_observer_core COMMAND zoom_observer_core_test)
-  set_tests_properties(zoom_observer_core PROPERTIES TIMEOUT 60)
+  set_tests_properties(zoom_observer_core PROPERTIES TIMEOUT 60
+    PASS_REGULAR_EXPRESSION "zoom_observer_core: [0-9]+ checks, 0 failures")
   add_executable(zoom_linux_core_test ../tests/native/zoom_linux_core.cpp)
   target_link_libraries(zoom_linux_core_test PRIVATE foresight_zoom_linux)
   add_test(NAME zoom_linux_core COMMAND zoom_linux_core_test)
-  set_tests_properties(zoom_atspi_parser zoom_atspi_collect zoom_linux_proc zoom_linux_source zoom_linux_core PROPERTIES TIMEOUT 120)
+  # Like the macOS zoom tests, each must print its final "N checks, 0 failures"
+  # line: a binary that exits 0 without it (a killed process, a swallowed exit) is
+  # not a pass.
+  foreach(_zoom_test IN ITEMS zoom_atspi_parser zoom_atspi_collect zoom_linux_proc
+      zoom_linux_source zoom_linux_core)
+    set_tests_properties(${_zoom_test} PROPERTIES TIMEOUT 120
+      PASS_REGULAR_EXPRESSION "${_zoom_test}: [0-9]+ checks, 0 failures")
+  endforeach()
   # A skipped helper must be visible in CTest output, not silent: this reports
   # "Skipped" (exit 77) when the helper was not built and passes when it was.
   if(TARGET zoom_observer_linux)
@@ -690,7 +698,8 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(zoom_observer_linux_protocol_test PRIVATE nlohmann_json::nlohmann_json)
     add_test(NAME zoom_observer_protocol COMMAND zoom_observer_linux_protocol_test
       "$<TARGET_FILE:zoom_observer_linux>" "${CMAKE_CURRENT_SOURCE_DIR}/zoom_atspi_desktop.cpp")
-    set_tests_properties(zoom_observer_protocol PROPERTIES TIMEOUT 120)
+    set_tests_properties(zoom_observer_protocol PROPERTIES TIMEOUT 120
+      PASS_REGULAR_EXPRESSION "zoom_observer_protocol: [0-9]+ checks, 0 failures")
     # Needs dbus-daemon; exits 77 (reported as skipped) without it.
     add_executable(zoom_observer_bus_test ../tests/native/zoom_observer_bus.cpp)
     target_compile_features(zoom_observer_bus_test PRIVATE cxx_std_20)
@@ -698,7 +707,8 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
       nlohmann_json::nlohmann_json Threads::Threads)
     add_test(NAME zoom_observer_bus COMMAND zoom_observer_bus_test
       "$<TARGET_FILE:zoom_observer_bus_helper>")
-    set_tests_properties(zoom_observer_bus PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+    set_tests_properties(zoom_observer_bus PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77
+      PASS_REGULAR_EXPRESSION "zoom_observer_bus: [0-9]+ checks, 0 failures")
   endif()
 endif()
 

@@ -267,6 +267,7 @@ int main(int argc, char **argv) {
   test_sigterm();
   test_stdout_closed_exits_3();
   test_source_is_passive(argv[2]);
-  std::cout << checks << " checks, " << failures << " failures\n";
+  std::cout << "zoom_observer_protocol: " << checks << " checks, " << failures
+            << " failures\n";
   return failures == 0 ? 0 : 1;
 }

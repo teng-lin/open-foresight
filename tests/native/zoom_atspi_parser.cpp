@@ -16,8 +16,10 @@ using namespace foresight::zoom;
 namespace {
 
 int failures = 0;
+int checks = 0;
 
 void check(bool value, const std::string &what) {
+  ++checks;
   if (!value) {
     std::cerr << "FAIL: " << what << '\n';
     ++failures;
@@ -247,11 +249,11 @@ int main(int argc, char **argv) {
     found.insert(entry.path().stem().string());
   }
   check(found == expected, "the fixture set is exactly the expected list");
-  const std::size_t fixtures = found.size();
   bounds(directory);
   deep_input(directory);
   keys();
   shipped_rules();
-  std::cout << fixtures << " fixtures, " << failures << " failures\n";
+  std::cout << "zoom_atspi_parser: " << checks << " checks, " << failures
+            << " failures\n";
   return failures == 0 ? 0 : 1;
 }

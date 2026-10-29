@@ -26,9 +26,11 @@ using std::chrono::milliseconds;
 namespace {
 
 int failures = 0;
+int checks = 0;
 
 #define CHECK(condition, message)                                              \
   do {                                                                         \
+    ++checks;                                                                  \
     if (!(condition)) {                                                        \
       ++failures;                                                              \
       std::cerr << "FAIL: " << (message) << "  [" #condition "]\n";            \
@@ -535,6 +537,7 @@ int main() {
   check_no_speaker_signal_is_never_silence();
   check_cancellation();
   check_broken_stdout();
-  std::cout << failures << " failures\n";
+  std::cout << "zoom_linux_core: " << checks << " checks, " << failures
+            << " failures\n";
   return failures == 0 ? 0 : 1;
 }

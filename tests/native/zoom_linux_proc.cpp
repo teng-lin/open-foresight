@@ -12,8 +12,10 @@ using namespace foresight::zoom;
 namespace {
 
 int failures = 0;
+int checks = 0;
 
 void check(bool value, const std::string &what) {
+  ++checks;
   if (!value) {
     std::cerr << "FAIL: " << what << '\n';
     ++failures;
@@ -146,6 +148,7 @@ int main() {
   std::string cleanup = "rm -rf '" + dir + "'";
   if (system(cleanup.c_str()) != 0)
     std::cerr << "cleanup failed\n";
-  std::cout << failures << " failures\n";
+  std::cout << "zoom_linux_proc: " << checks << " checks, " << failures
+            << " failures\n";
   return failures == 0 ? 0 : 1;
 }

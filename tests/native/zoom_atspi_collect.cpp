@@ -10,8 +10,10 @@ using namespace foresight::zoom;
 namespace {
 
 int failures = 0;
+int checks = 0;
 
 void check(bool value, const std::string &what) {
+  ++checks;
   if (!value) {
     std::cerr << "FAIL: " << what << '\n';
     ++failures;
@@ -475,6 +477,7 @@ int main() {
   root_child_count_failure();
   missing_identity_and_several_applications();
   registry_policy();
-  std::cout << failures << " failures\n";
+  std::cout << "zoom_atspi_collect: " << checks << " checks, " << failures
+            << " failures\n";
   return failures == 0 ? 0 : 1;
 }
