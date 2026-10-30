@@ -609,6 +609,30 @@ void main() {
         );
       });
 
+      test(
+        'a capture clock that stops moving cannot defer a stall forever',
+        () async {
+          h = Harness(
+            config: fastConfig(stallSlack: const Duration(milliseconds: 200)),
+          );
+          await h.observer.start('s1');
+          h.captureNow = 7000000;
+          h.helpers.single.send(
+            'observation',
+            observationFields('s1', startMs: 3000),
+          );
+          await eventually(() => h.observations.length == 1);
+          // It moves a little after the frame and then stands still: the helper
+          // is silent and the timeout is never reached on that clock.
+          h.captureNow = 7100000;
+          await eventually(() => h.helpers.length == 2);
+          expect(
+            h.states.any((s) => s.failure == SpeakerObserverFailure.stalled),
+            true,
+          );
+        },
+      );
+
       test('a sleep longer than the stall timeout is not a stall', () async {
         // Timers keep counting while the machine sleeps; the capture clock does
         // not. Stall timeout here: 100 + 100 + 200 = 400 ms.
@@ -649,6 +673,8 @@ void main() {
       });
 
       for (final sleepMs in [3000, 30000]) {
+        // The 3000 ms case passed before the fix as well and guards against a
+        // regression; the 30000 ms case is the one that failed.
         test('a $sleepMs ms sleep keeps the reads made before it', () async {
           h = Harness();
           final session = SpeakerAttributionSession(session: 's1');

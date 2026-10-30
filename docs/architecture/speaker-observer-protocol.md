@@ -300,7 +300,16 @@ when stdin closes.
   that fires after the capture clock moved less than the timeout is re-armed for
   the rest of it, and a frame the helper sent (even one dropped as implausible)
   proves it alive. Reads that arrive while the session is stopping or
-  restarting are not judged. Attributions already made
+  restarting are not judged. The capture clock is the native capture monotonic
+  clock, which runs whether or not audio is flowing; a clock that has not moved
+  at all, went backward, or stops moving (waited on at most three times) does not
+  defer a stall.
+  Known limits: a blind period that began more than the sleep's length before
+  the last good read is mapped with the new offset and is early by the sleep's
+  length; a request in flight across a sleep (a probe or a clock exchange) times
+  out on a timer that counted the sleep and can cost one restart; reads that
+  arrive during a recheck do not advance the last-good mark and may be retracted
+  although correct. Attributions already made
   from such reads are not revisited. A shift smaller than the tolerance, or one
   that happened since the last recheck and shows in no read, is not seen until
   the next periodic measurement; the error until then is the shift.

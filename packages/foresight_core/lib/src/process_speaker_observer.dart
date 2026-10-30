@@ -1372,7 +1372,9 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
 
   /// Capture time of a moment the helper reports as a helper time that may lie
   /// before the latest shift: the newest offset under which the result is not
-  /// earlier than the offset's own start.
+  /// earlier than the offset's own start. Known limit: when the moment lies
+  /// further before the shift than the sleep was long, both offsets fit and the
+  /// newer one is chosen, which is wrong by the length of the sleep.
   int _mapPast(_Connection connection, int helperUs) {
     for (final era in connection.clockEras.reversed) {
       final mapped = helperUs + era.fix.offsetUs - era.fix.uncertaintyUs;
@@ -1525,19 +1527,31 @@ final class ProcessMeetingSpeakerObserver implements MeetingSpeakerObserver {
     _scheduleStall(connection, _clockUs(), config.stallTimeout);
   }
 
-  void _scheduleStall(_Connection connection, int armedUs, Duration wait) {
+  /// A sleep makes a due timer fire once with the capture clock short of the
+  /// timeout; the wait is repeated a bounded number of times so a capture clock
+  /// that stops moving cannot defer a hung helper's stall forever.
+  static const int _maxStallReschedules = 3;
+
+  void _scheduleStall(
+    _Connection connection,
+    int armedUs,
+    Duration wait, [
+    int reschedules = 0,
+  ]) {
     _stall = Timer(wait, () {
       // Dart timers keep counting while the machine sleeps, and the capture
       // clock does not: a timer that fires after a sleep is due although the
       // helper had almost no time to speak. Wait for the rest of the timeout
-      // on the capture clock before calling it a stall.
+      // on the capture clock before calling it a stall. A clock that has not
+      // moved at all (or went backward) proves nothing and is not waited on.
       final moved = _clockUs() - armedUs;
       final limit = config.stallTimeout.inMicroseconds;
-      if (moved > 0 && moved < limit) {
+      if (moved > 0 && moved < limit && reschedules < _maxStallReschedules) {
         return _scheduleStall(
           connection,
           armedUs,
           Duration(microseconds: limit - moved),
+          reschedules + 1,
         );
       }
       if (connection.quiet) {
