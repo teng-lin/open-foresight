@@ -115,7 +115,10 @@ void check_conversion_does_not_grow_the_heap() {
   size_t before = heap_in_use();
   for (int i = 0; i < 200000; ++i)
     text_attr_from_object(string);
-  size_t growth = heap_in_use() - before;
+  // Signed: the allocator may return memory, and an unsigned difference
+  // would turn a shrink into a huge growth.
+  long long growth =
+      static_cast<long long>(heap_in_use()) - static_cast<long long>(before);
   CHECK(growth < 4 * 1024 * 1024,
         "200000 conversions grew the heap by " + std::to_string(growth));
   CFRelease(string);

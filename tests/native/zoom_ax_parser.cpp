@@ -397,7 +397,10 @@ void check_parse_does_not_grow_the_heap() {
     foresight::zoom::parse_snapshot(snapshot);
     foresight::zoom::comparison_key("Zo\xc3\xab Example");
   }
-  size_t growth = heap_in_use() - before;
+  // Signed: the allocator may return memory, and an unsigned difference
+  // would turn a shrink into a huge growth.
+  long long growth =
+      static_cast<long long>(heap_in_use()) - static_cast<long long>(before);
   CHECK(growth < 4 * 1024 * 1024,
         "4000 parses grew the heap by " + std::to_string(growth) + " bytes");
 }
