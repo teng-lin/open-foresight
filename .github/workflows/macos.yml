@@ -28,7 +28,7 @@ jobs:
       FORESIGHT_MACOS_UI_TEST: '1'
       FORESIGHT_REQUIRE_NATIVE_UI_TEST: '1'
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
@@ -76,7 +76,7 @@ jobs:
         } 2>&1 | tee "test-results/macos/${MACOS_CHECK_STAGE}.log"
     - name: Retain every macOS lane's raw evidence
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: macos-${{ matrix.stage }}-evidence-${{ inputs.request_id || inputs.source || github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
         overwrite: true
@@ -108,7 +108,7 @@ jobs:
       FORESIGHT_MACOS_UI_TEST: '1'
       FORESIGHT_REQUIRE_NATIVE_UI_TEST: '1'
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
@@ -186,7 +186,7 @@ jobs:
           --output test-results/macos-release-runtime.json
     - name: Restore checksum-pinned acceptance models
       if: ${{ !cancelled() && steps.macos-assembly.outcome == 'success' }}
-      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: build/acceptance-models
         key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
@@ -236,7 +236,7 @@ jobs:
           --output test-results/macos-bundle.json
     - name: Retain development package evidence
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: macos-development-evidence
         overwrite: true
@@ -264,7 +264,7 @@ jobs:
           echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
         fi
     - id: macos-candidate
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       if: needs.macos-checks.result == 'success' && github.ref == 'refs/heads/main' && inputs.tier == 'release' && !inputs.preview
       with:
         name: ci-macos-app-${{ inputs.source }}
@@ -280,7 +280,7 @@ jobs:
         SOURCE: ${{ inputs.source || github.sha }}
         ARTIFACT_ID: ${{ steps.macos-candidate.outputs.artifact-id }}
       run: python tools/ci_artifacts.py publish-receipt --component macos-app --identity "$SOURCE" --prefix build/candidate-upload --artifact-id "$ARTIFACT_ID" --output build/candidate-receipt
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       if: needs.macos-checks.result == 'success' && inputs.tier == 'release' && github.ref == 'refs/heads/main' && !inputs.preview
       with:
         name: receipt-ci-macos-app-${{ inputs.source || github.sha }}
@@ -288,7 +288,7 @@ jobs:
         path: build/candidate-receipt/
         retention-days: 90
         if-no-files-found: error
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       if: needs.macos-checks.result == 'success' && inputs.preview
       with:
         name: preview-macos-application
@@ -345,7 +345,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.sha }}
@@ -353,7 +353,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends bubblewrap poppler-utils unrtf apparmor
-    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: ${{ runner.temp }}/foresight-document-flutter
         key: flutter-linux-document-host-3.35.7-v2
@@ -374,7 +374,7 @@ jobs:
       run: bash tools/ci_document_sandbox.sh
     - name: Retain document sandbox evidence
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: linux-document-sandbox-evidence
         overwrite: true
@@ -400,12 +400,12 @@ jobs:
       packaging: ${{ steps.changes.outputs.packaging }}
       dmg: ${{ steps.changes.outputs.dmg }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.sha }}
         fetch-depth: 0
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
       with:
         python-version: '3.13'
     - name: Require a reviewed main source for distribution overrides
@@ -481,7 +481,7 @@ jobs:
         EVENT: ${{ github.event_name }}
       run: python3 tools/ci_acceptance_plan.py --activate --selection-report ci-selection.json --base "$BASE" --event "$EVENT" --output test-results/acceptance-selection.json
     - name: Retain platform selection
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-selection-platform
         overwrite: true
@@ -490,7 +490,7 @@ jobs:
     - name: Retain acceptance dependency observations
       if: always()
       continue-on-error: true
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: acceptance-selection-observation
         overwrite: true
@@ -503,7 +503,7 @@ jobs:
     timeout-minutes: 5
     runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.sha }}
@@ -523,12 +523,12 @@ jobs:
       version: ${{ steps.number.outputs.version }}
       build_number: ${{ steps.number.outputs.build_number }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.sha }}
         fetch-depth: 0
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
       with:
         python-version: '3.13'
     - name: Allocate one build number for both platforms
@@ -591,15 +591,15 @@ jobs:
       run: |
         df -h / /mnt
         docker system df
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         fetch-depth: 0
         ref: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
       with:
         python-version: '3.13'
-    - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+    - uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5
       with:
         daemon-config: '{"features":{"containerd-snapshotter":true}}'
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
@@ -631,7 +631,7 @@ jobs:
     - name: Retain the source-scoped in-run fork SDK
       if: steps.sdk.outputs.in_run == 'true'
       id: fork-sdk
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: shadow-sdk-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
         path: build/shadow-sdk/in-run/
@@ -688,7 +688,7 @@ jobs:
         } >> "$GITHUB_OUTPUT"
     - name: Retain the exact in-run bundle without candidate naming
       id: bundle
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ${{ inputs.tier == 'release' && format('ci-linux-app-{0}', inputs.source) || inputs.preview && format('preview-linux-app-{0}-{1}', github.run_id, github.run_attempt) || format('linux-bundle-{0}-{1}', github.run_id, github.run_attempt) }}
         path: build/linux-shadow/bundle-receipt/
@@ -703,7 +703,7 @@ jobs:
         SOURCE: ${{ inputs.source }}
         ARTIFACT_ID: ${{ steps.bundle.outputs.artifact-id }}
       run: python tools/ci_artifacts.py publish-receipt --component linux-app --identity "$SOURCE" --prefix build/linux-shadow/bundle-receipt --artifact-id "$ARTIFACT_ID" --output build/linux-shadow/candidate-receipt
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       if: inputs.tier == 'release'
       with:
         name: receipt-ci-linux-app-${{ inputs.source }}
@@ -713,7 +713,7 @@ jobs:
         if-no-files-found: error
     - name: Retain the exact source and build tree for the test runner
       id: handoff
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: linux-src-build-${{ github.run_id }}-${{ github.run_attempt }}
         path: build/linux-shadow/handoff/
@@ -746,19 +746,19 @@ jobs:
       run: |
         df -h / /mnt
         docker system df
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         fetch-depth: 0
         ref: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
       with:
         python-version: '3.13'
     - name: Install the pinned host Docker fixture tools
       run: python -m pip install --require-hashes -r requirements-dev.lock
     - name: Allow isolated document namespaces in shadow test containers
       run: bash tools/ci_package_sandbox.sh
-    - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+    - uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5
       with:
         daemon-config: '{"features":{"containerd-snapshotter":true}}'
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
@@ -838,7 +838,7 @@ jobs:
       run: python tools/ci_linux_acceptance.py --record-input --gate linux-test --source "$SOURCE" --output test-results/consumption/linux-test/consumption.json --handoff build/linux-shadow/handoff --handoff-manifest-sha256 "$HANDOFF_MANIFEST_SHA256" --handoff-producer-job "$HANDOFF_PRODUCER_JOB"
     - name: Retain the actual linux-test release consumption receipt
       if: inputs.tier == 'release'
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-release-input-linux-test-${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
         overwrite: true
@@ -847,7 +847,7 @@ jobs:
         retention-days: 90
     - name: Retain independent shadow test results and coverage
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ubuntu-linux-shadow-evidence
         path: build/linux-shadow/evidence/
@@ -872,11 +872,11 @@ jobs:
       actions: read
       packages: write
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
       with:
         python-version: '3.13'
     - name: Verify current main before publishing the document toolchain cache
@@ -896,7 +896,7 @@ jobs:
           echo 'Main advanced; skip only the document toolchain cache work.' >&2
           echo 'current=false' >> "$GITHUB_OUTPUT"
         fi
-    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       id: document-flutter
       if: steps.document-current.outputs.current == 'true'
       with:
@@ -930,12 +930,12 @@ jobs:
           echo 'Main advanced; skip only the document toolchain cache work.' >&2
           echo 'current=false' >> "$GITHUB_OUTPUT"
         fi
-    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       if: steps.document-current.outputs.current == 'true' && steps.document-flutter.outputs.cache-hit != 'true' && steps.document-save-current.outputs.current == 'true'
       with:
         path: ${{ runner.temp }}/foresight-document-flutter
         key: flutter-linux-document-host-3.35.7-v1
-    - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+    - uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5
       with:
         daemon-config: '{"features":{"containerd-snapshotter":true}}'
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
@@ -958,7 +958,7 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         SDK_IMAGE: ${{ steps.sdk.outputs.image }}
       run: bash tools/publish_linux_ci_caches.sh
-    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       id: models
       with:
         path: build/acceptance-models
@@ -966,7 +966,7 @@ jobs:
     - name: Prepare only missing checksum-pinned external models
       if: steps.models.outputs.cache-hit != 'true'
       run: python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output test-results/model-download
-    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       if: steps.models.outputs.cache-hit != 'true'
       with:
         path: build/acceptance-models
@@ -982,7 +982,7 @@ jobs:
       actions: read
       packages: read
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         fetch-depth: 0
@@ -1004,7 +1004,7 @@ jobs:
         producer-sdk-digest: ${{ needs.linux-build.outputs.producer_sdk_digest }}
         own-pr: ${{ github.event.pull_request.number || 0 }}
         label: ${{ inputs.label }}
-    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: build/acceptance-models
         key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
@@ -1027,7 +1027,7 @@ jobs:
       run: python tools/ci_linux_acceptance.py --record-input --gate acceptance-cpu --source "$SOURCE" --output test-results/consumption/acceptance-cpu/consumption.json
     - name: Retain the actual acceptance-cpu release consumption receipt
       if: inputs.tier == 'release'
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-release-input-acceptance-cpu-${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
         overwrite: true
@@ -1036,7 +1036,7 @@ jobs:
         retention-days: 90
     - name: Retain independent cpu acceptance evidence
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: acceptance-cpu-evidence
         overwrite: true
@@ -1059,7 +1059,7 @@ jobs:
       actions: read
       packages: read
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         fetch-depth: 0
@@ -1093,7 +1093,7 @@ jobs:
         python tools/ci_linux_handoff.py qualify --directory build/audio-handoff --revision "$SOURCE" \
           --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --attempt "$PRODUCER_ATTEMPT" \
           --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST"
-    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: build/acceptance-models
         key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
@@ -1118,7 +1118,7 @@ jobs:
       run: python tools/ci_linux_acceptance.py --record-input --gate acceptance-audio --source "$SOURCE" --output test-results/consumption/acceptance-audio/consumption.json
     - name: Retain the actual acceptance-audio release consumption receipt
       if: inputs.tier == 'release'
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-release-input-acceptance-audio-${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
         overwrite: true
@@ -1127,7 +1127,7 @@ jobs:
         retention-days: 90
     - name: Retain independent audio acceptance evidence
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: acceptance-audio-evidence
         overwrite: true
@@ -1150,7 +1150,7 @@ jobs:
       actions: read
       packages: read
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         fetch-depth: 0
@@ -1191,7 +1191,7 @@ jobs:
       run: python tools/ci_linux_acceptance.py --record-input --gate acceptance-deb --source "$SOURCE" --output test-results/consumption/acceptance-deb/consumption.json
     - name: Retain the actual acceptance-deb release consumption receipt
       if: inputs.tier == 'release'
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-release-input-acceptance-deb-${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
         overwrite: true
@@ -1200,7 +1200,7 @@ jobs:
         retention-days: 90
     - name: Retain independent deb acceptance evidence
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: acceptance-deb-evidence
         overwrite: true
@@ -1218,7 +1218,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.sha }}
@@ -1242,7 +1242,7 @@ jobs:
     - packaging
     runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.sha }}
