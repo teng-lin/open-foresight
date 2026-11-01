@@ -1,1 +1,1 @@
-clang-format==22.1.8
+clang-format==23.1.3

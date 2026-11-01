@@ -1,16 +1,16 @@
-grpcio==1.78.0
-grpcio-tools==1.78.0
-protobuf==6.33.5
-pytest==9.0.2
+grpcio==1.85.0
+grpcio-tools==1.85.0
+protobuf==7.36.2
+pytest==9.2.0
 pytest-cov==7.1.0
 # Bounded whole-file test distribution; coverage remains combined across workers.
 pytest-xdist==3.8.0
-numpy==2.5.1
-sentencepiece==0.2.1
+numpy==2.5.4
+sentencepiece==0.2.2
 
 PyYAML==6.0.3
-ruff==0.17.1
-mypy==2.4.0
-types-protobuf==6.32.1.20260221
+ruff==0.17.3
+mypy==2.4.1
+types-protobuf==7.35.1.20260906
 # CommonMark tokenization for offline documentation links; never fetches links.
 markdown-it-py==4.2.0
