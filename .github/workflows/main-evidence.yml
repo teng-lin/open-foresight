@@ -37,7 +37,7 @@ jobs:
     outputs:
       activate: ${{ steps.activation.outputs.active }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -50,7 +50,7 @@ jobs:
         run: python3 tools/ci_main_evidence.py --source "$SOURCE" --qualification-output rollout/qualification.json
       - name: Retain actual completed observer parity qualification
         if: steps.observation.outputs.qualified == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ci-rollout-qualification
           path: rollout/qualification.json
@@ -63,7 +63,7 @@ jobs:
           SOURCE: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: python3 tools/ci_main_coordinator.py status --source "$SOURCE" --output main-evidence/activation.json
       - name: Retain observation and reconciliation heartbeat
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ci-main-observation-${{ github.event.workflow_run.head_sha || github.sha }}
           path: main-evidence/receipt.json
@@ -85,7 +85,7 @@ jobs:
       pull-requests: read
       issues: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -95,7 +95,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 tools/ci_main_coordinator.py reconcile --source "$GITHUB_SHA"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ci-main-validation-${{ steps.result.outputs.source }}
           path: main-evidence/receipt.json
@@ -113,7 +113,7 @@ jobs:
       contents: read
       actions: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -121,7 +121,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 tools/ci_main_sweep.py exercise --source "$GITHUB_SHA" --output main-evidence/exercise.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ci-main-exercise-${{ github.sha }}
           path: main-evidence/exercise.json

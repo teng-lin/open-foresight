@@ -53,10 +53,10 @@ jobs:
       package_version: ${{ steps.plan.outputs.package_version }}
       validation: ${{ steps.plan.outputs.validation }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.13'
       - name: Skip unchanged successful previews and reserve build identity
@@ -119,13 +119,13 @@ jobs:
           - format: arch
             image: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
       - name: Allow isolated document namespaces in package-test containers
         run: bash tools/ci_package_sandbox.sh
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.13'
       - name: Restore the exact verified in-run preview bundle
@@ -150,7 +150,7 @@ jobs:
           export SOURCE_DATE_EPOCH
           docker run --rm -d --name "$PACKAGE_CONTAINER" --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt apparmor=foresight-ci-document-sandbox -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH "$IMAGE" sleep infinity
           docker exec "$PACKAGE_CONTAINER" bash packaging/ci/package-and-test.sh "$FORMAT" "$VERSION" 1 build
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: preview-installer-linux-${{ matrix.format }}
@@ -174,7 +174,7 @@ jobs:
           mkdir -p build
           sudo chown -R "$(id -u):$(id -g)" dist/packages build
           python tools/preview_packages.py receipt --directory dist/packages --format "$FORMAT" --source "$SOURCE"
-      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         if: needs.plan.outputs.validation == 'full'
         with:
           path: build/acceptance-models
@@ -199,7 +199,7 @@ jobs:
           python tools/ci_linux_sdk_reference.py restore --source "$SOURCE" --reference artifacts/sdk-reference.json --directory build/cloud-sdk
           task_sdk=$(python -c 'import json; print(json.load(open("build/cloud-sdk/image.json"))["image"])')
           docker run --rm -v "$PWD:/work" -w /work "$task_sdk" python3 tools/verify_preview_cloud.py --bundle build/cloud-package/opt/open-foresight --output reports/cloud.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: preview-evidence-linux-${{ matrix.format }}
@@ -216,11 +216,11 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.13'
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -239,7 +239,7 @@ jobs:
         run: |
           python tools/create_dmg.py --app 'staging/Open Foresight.app' --manifest 'artifacts/Open Foresight.manifest.json' --name "Open-Foresight-$VERSION-$LABEL-macos-arm64.dmg" --output dist
           python tools/preview_packages.py receipt --directory dist --format dmg --source "$SOURCE"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: preview-installer-macos
@@ -247,7 +247,7 @@ jobs:
           path: dist/
           if-no-files-found: ignore
           retention-days: 90
-      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         if: needs.plan.outputs.validation == 'full'
         with:
           path: build/acceptance-models
@@ -262,7 +262,7 @@ jobs:
         run: |
           task_dmg=(dist/*.dmg)
           python tools/test_release_dmg.py --dmg "${task_dmg[0]}" --destination "$RUNNER_TEMP/preview-install/Open Foresight.app" --validation "$VALIDATION" --models build/acceptance-models --output reports
-      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         if: needs.plan.outputs.validation == 'full'
         with:
           path: ${{ runner.temp }}/flutter
@@ -276,7 +276,7 @@ jobs:
           test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
           export PATH="$RUNNER_TEMP/flutter/bin:$PATH"
           python tools/verify_preview_cloud.py --bundle 'staging/Open Foresight.app' --output reports/cloud.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: preview-evidence-macos
@@ -290,11 +290,11 @@ jobs:
     needs: [plan, build, linux, macos]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.13'
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -319,7 +319,7 @@ jobs:
           SOURCE: ${{ needs.plan.outputs.source }}
           VALIDATION: ${{ needs.plan.outputs.validation }}
         run: python tools/preview_packages.py manifest --directory packages --version "$VERSION" --build-number "$BUILD_NUMBER" --label "$LABEL" --source "$SOURCE" --validation "$VALIDATION"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         id: download
         with:
           name: Open-Foresight-${{ needs.plan.outputs.version }}-${{ needs.plan.outputs.label }}-${{ needs.plan.outputs.source }}
@@ -354,7 +354,7 @@ jobs:
       artifact_id: ${{ steps.audit.outputs.artifact_id }}
       artifact_digest: ${{ steps.audit.outputs.artifact_digest }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -382,11 +382,11 @@ jobs:
         env:
           PLAN_RESULT: ${{ needs.weekly-audit-plan.result }}
         run: test "$PLAN_RESULT" = success
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           ref: ${{ needs.weekly-audit-plan.outputs.source }}
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.13'
       - name: Restore only original green preview bytes and their recorded stamp
@@ -399,7 +399,7 @@ jobs:
           ARTIFACT_ID: ${{ needs.weekly-audit-plan.outputs.artifact_id }}
           ARTIFACT_DIGEST: ${{ needs.weekly-audit-plan.outputs.artifact_digest }}
         run: python tools/ci_preview_audit.py restore --source "$SOURCE" --producer-run "$PRODUCER_RUN" --attempt "$PRODUCER_ATTEMPT" --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST"
-      - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+      - uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5
         with:
           daemon-config: '{"features":{"containerd-snapshotter":true}}'
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
@@ -416,7 +416,7 @@ jobs:
           SOURCE: ${{ needs.weekly-audit-plan.outputs.source }}
         run: |
           python tools/ci_linux_sdk_reference.py restore --source "$SOURCE" --directory build/audit-sdk
-      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: build/acceptance-models
           key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
@@ -455,7 +455,7 @@ jobs:
         run: python tools/ci_preview_audit.py record --source "$SOURCE"
       - name: Upload completed weekly external audit receipt
         if: steps.completed-audit.outcome == 'success'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: weekly-external-audit-completion-${{ github.run_id }}-${{ github.run_attempt }}
           overwrite: true
@@ -464,7 +464,7 @@ jobs:
           retention-days: 30
       - name: Retain weekly external drift evidence separately from publication
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: weekly-external-audit-evidence
           overwrite: true
@@ -487,7 +487,7 @@ jobs:
       actions: read
       issues: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Track the newest actual weekly audit independently of nightly success
@@ -500,7 +500,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Require every selected suite in this run
@@ -519,7 +519,7 @@ jobs:
         run: python3 -m tools.ci_rollout --source "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --producer-job nightly-checks --selection-report build/qualification/selection/ci-selection.json --output build/qualification/qualification.json
       - name: Retain original scheduled candidate qualification
         if: github.event_name == 'schedule' && !inputs.exercise_failure_path && needs.plan.outputs.build == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ci-rollout-qualification
           path: build/qualification/qualification.json
@@ -537,7 +537,7 @@ jobs:
       issues: write
       pull-requests: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Track nightly failures and close recovered issues
