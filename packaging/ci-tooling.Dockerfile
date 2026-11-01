@@ -2,7 +2,7 @@
 # Secret-free OS tooling is independent of application dependency objects.
 ARG SDK_IMAGE
 FROM ${SDK_IMAGE} AS ci-tooling
-ARG UBUNTU_SNAPSHOT=20261001T000000Z
+ARG UBUNTU_SNAPSHOT=20261101T000000Z
 ARG CI_TOOLING_ID
 ARG SDK_IMAGE_ID
 LABEL org.openforesight.ci-tooling="${CI_TOOLING_ID}" \

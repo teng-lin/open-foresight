@@ -3,7 +3,7 @@
 # /src/dist/open-foresight. This recipe has no application or SDK build step.
 ARG SDK_IMAGE
 FROM ${SDK_IMAGE} AS acceptance-dependencies
-ARG UBUNTU_SNAPSHOT=20261001T000000Z
+ARG UBUNTU_SNAPSHOT=20261101T000000Z
 # Snapshot outages must not turn an incomplete update into misleading missing
 # packages. Retain downloaded indexes/packages between bounded retries.
 RUN for task_attempt in 1 2 3; do \

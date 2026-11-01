@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 ARG CORE_IMAGE
 FROM ${CORE_IMAGE} AS litert-extensions
-ARG UBUNTU_SNAPSHOT=20261001T000000Z
+ARG UBUNTU_SNAPSHOT=20261101T000000Z
 ENV FORESIGHT_UBUNTU_SNAPSHOT=${UBUNTU_SNAPSHOT}
 LABEL org.openforesight.ubuntu-snapshot="${UBUNTU_SNAPSHOT}"
 RUN apt-get --snapshot "$UBUNTU_SNAPSHOT" update && apt-get --snapshot "$UBUNTU_SNAPSHOT" install -y --no-install-recommends git-lfs libc++-dev libc++abi-dev zip && \
