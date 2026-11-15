@@ -11,12 +11,12 @@ jobs:
     timeout-minutes: 15
     continue-on-error: true
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Report lockfile vulnerabilities without blocking publication
         continue-on-error: true
-        uses: google/osv-scanner-action/osv-scanner-action@9a96bc4d2b09685b6142bcfe25a3dc17cb2d7347
+        uses: google/osv-scanner-action/osv-scanner-action@d3c1414ded37de590f207572e37a7d180f1d0ef7
         with:
           scan-args: |-
             --lockfile=requirements.txt:requirements-dev.lock
